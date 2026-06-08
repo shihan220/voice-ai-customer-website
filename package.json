@@ -4,11 +4,11 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "dev": "vite",
-    "dev:backend": "tsx watch server/index.ts",
+    "build": "vite build --config frontend/vite.config.ts",
+    "dev": "vite --config frontend/vite.config.ts",
+    "dev:backend": "tsx watch backend/index.ts",
     "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev -- --host 127.0.0.1 --port 5173 --strictPort\"",
-    "db:import:voices": "tsx server/scripts/import-voices.ts"
+    "db:import:voices": "tsx backend/scripts/import-voices.ts"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
