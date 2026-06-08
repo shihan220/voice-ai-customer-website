@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -16,6 +16,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
+import {
+  SUPABASE_LEADS_TABLE,
+  SUPABASE_PUBLISHABLE_KEY,
+  SUPABASE_URL,
+} from '../config/supabase';
 
 export type LeadDialogMode = 'sample' | 'pilot';
 
@@ -42,6 +47,18 @@ type PilotFormState = {
   phone: string;
 };
 
+type SupabaseLeadInsert = {
+  business_context?: string | null;
+  company_name?: string | null;
+  expected_monthly_volume?: string | null;
+  full_name: string;
+  primary_use_case?: string | null;
+  referrer?: string | null;
+  source_url?: string | null;
+  user_agent?: string | null;
+  work_email: string;
+};
+
 const sampleDefaults: SampleFormState = {
   company: '',
   email: '',
@@ -59,72 +76,145 @@ const pilotDefaults: PilotFormState = {
   phone: '',
 };
 
-function appendLeadRecord(type: LeadDialogMode, payload: Record<string, string>) {
-  const storageKey = 'bangla-voice-ai-leads';
-  const record = {
-    id: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${type}-${Date.now()}`,
-    payload,
-    savedAt: new Date().toISOString(),
-    type,
-  };
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-  const existing = JSON.parse(window.localStorage.getItem(storageKey) ?? '[]') as typeof record[];
-  window.localStorage.setItem(storageKey, JSON.stringify([record, ...existing].slice(0, 50)));
+function isSupabaseConfigured() {
+  return SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY && !SUPABASE_PUBLISHABLE_KEY.includes('PASTE_MY_');
+}
+
+function normalizeOptionalValue(value: string) {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+async function insertLead(payload: SupabaseLeadInsert) {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase publishable key is not configured yet.');
+  }
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_LEADS_TABLE}`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || `Supabase request failed with status ${response.status}.`);
+  }
 }
 
 export function LeadCaptureDialog({ mode, open, onOpenChange }: LeadCaptureDialogProps) {
   const [sampleForm, setSampleForm] = useState<SampleFormState>(sampleDefaults);
   const [pilotForm, setPilotForm] = useState<PilotFormState>(pilotDefaults);
-  const [submitState, setSubmitState] = useState<'idle' | 'saved' | 'error'>('idle');
+  const [submitState, setSubmitState] = useState<'idle' | 'saved' | 'submitting'>('idle');
+  const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
     if (!open) {
       setSubmitState('idle');
+      setErrorMessage('');
       setSampleForm(sampleDefaults);
       setPilotForm(pilotDefaults);
     }
   }, [open]);
 
-  if (!mode) return null;
-
   const isSample = mode === 'sample';
 
-  const dialogCopy = isSample
-    ? {
+  const dialogCopy = useMemo(() => {
+    if (isSample) {
+      return {
         badge: 'Sample Request',
-        cta: 'Save sample brief',
-        description: 'This form works now by saving the brief locally. The sample API can be plugged into this flow later.',
+        cta: submitState === 'submitting' ? 'Saving...' : 'Save sample brief',
+        description: 'Share your script and use case. We will save the request and follow up from the lead queue.',
         title: 'Prepare your Bangla voice sample request.',
-      }
-    : {
-        badge: 'Pilot Request',
-        cta: 'Save pilot request',
-        description: 'This captures pilot leads in the browser right now so the website feels operational before backend routing is connected.',
-        title: 'Book the 7-day Bangla AI agent pilot.',
       };
+    }
 
-  const handleSave = () => {
+    return {
+      badge: 'Pilot Request',
+      cta: submitState === 'submitting' ? 'Saving...' : 'Save pilot request',
+      description: 'Share your pilot requirements. We will save the request and follow up from the lead queue.',
+      title: 'Book the 7-day Bangla AI agent pilot.',
+    };
+  }, [isSample, submitState]);
+
+  if (!mode) return null;
+
+  const currentEmail = isSample ? sampleForm.email : pilotForm.email;
+
+  const validate = () => {
+    if (isSample) {
+      if (!sampleForm.fullName.trim() || !sampleForm.email.trim() || !sampleForm.script.trim() || !sampleForm.useCase.trim()) {
+        return 'Fill the required fields before saving this request.';
+      }
+    } else if (!pilotForm.fullName.trim() || !pilotForm.email.trim() || !pilotForm.company.trim() || !pilotForm.goal.trim()) {
+      return 'Fill the required fields before saving this request.';
+    }
+
+    if (!emailPattern.test(currentEmail.trim())) {
+      return 'Enter a valid work email address.';
+    }
+
+    return null;
+  };
+
+  const buildPayload = (): SupabaseLeadInsert => {
+    const metadata = {
+      referrer: typeof document !== 'undefined' ? normalizeOptionalValue(document.referrer) : null,
+      source_url: typeof window !== 'undefined' ? normalizeOptionalValue(window.location.href) : null,
+      user_agent: typeof navigator !== 'undefined' ? normalizeOptionalValue(navigator.userAgent) : null,
+    };
+
+    if (isSample) {
+      return {
+        full_name: sampleForm.fullName.trim(),
+        company_name: normalizeOptionalValue(sampleForm.company),
+        work_email: sampleForm.email.trim(),
+        primary_use_case: normalizeOptionalValue(sampleForm.useCase),
+        expected_monthly_volume: null,
+        business_context: normalizeOptionalValue(sampleForm.script),
+        ...metadata,
+      };
+    }
+
+    return {
+      full_name: pilotForm.fullName.trim(),
+      company_name: normalizeOptionalValue(pilotForm.company),
+      work_email: pilotForm.email.trim(),
+      primary_use_case: 'b2b_agent_pilot',
+      expected_monthly_volume: normalizeOptionalValue(pilotForm.monthlyVolume),
+      business_context: normalizeOptionalValue(pilotForm.goal),
+      ...metadata,
+    };
+  };
+
+  const handleSave = async () => {
+    const validationError = validate();
+
+    if (validationError) {
+      setErrorMessage(validationError);
+      return;
+    }
+
+    setSubmitState('submitting');
+    setErrorMessage('');
+
     try {
-      if (isSample) {
-        if (!sampleForm.fullName || !sampleForm.email || !sampleForm.script || !sampleForm.useCase) {
-          setSubmitState('error');
-          return;
-        }
-
-        appendLeadRecord('sample', sampleForm);
-        setSubmitState('saved');
-        return;
-      }
-
-      if (!pilotForm.fullName || !pilotForm.email || !pilotForm.company || !pilotForm.goal) {
-        setSubmitState('error');
-        return;
-      }
-
-      appendLeadRecord('pilot', pilotForm);
+      await insertLead(buildPayload());
       setSubmitState('saved');
-    } catch {
-      setSubmitState('error');
+    } catch (error) {
+      setSubmitState('idle');
+      setErrorMessage(
+        error instanceof Error && error.message
+          ? `Submission failed. ${error.message}`
+          : 'Submission failed. Please try again.',
+      );
     }
   };
 
@@ -158,11 +248,9 @@ export function LeadCaptureDialog({ mode, open, onOpenChange }: LeadCaptureDialo
               className="rounded-2xl border p-5"
               style={{ backgroundColor: '#EEEBE4', borderColor: '#D2CCBE' }}
             >
-              <p className="mb-2 text-xl font-bold text-[#373A40]">Saved successfully.</p>
+              <p className="mb-2 text-xl font-bold text-[#373A40]">Registration saved.</p>
               <p className="text-sm leading-6 text-[#373A40]/75 lg:text-[15px]">
-                {isSample
-                  ? 'The sample request brief is stored locally and ready for API hookup when you define that endpoint.'
-                  : 'The pilot request is stored locally so the site can operate like a live lead-capture experience right now.'}
+                We will follow up by email.
               </p>
             </div>
 
@@ -257,17 +345,18 @@ export function LeadCaptureDialog({ mode, open, onOpenChange }: LeadCaptureDialo
               </>
             )}
 
-            {submitState === 'error' ? (
+            {errorMessage ? (
               <p className="mt-4 text-sm font-medium text-[#995842]">
-                Fill the required fields before saving this request.
+                {errorMessage}
               </p>
             ) : null}
 
             <DialogFooter className="mt-6 sm:justify-start">
               <button
                 type="button"
-                onClick={handleSave}
-                className="rounded-xl px-6 py-3 text-sm font-semibold"
+                onClick={() => void handleSave()}
+                disabled={submitState === 'submitting'}
+                className="rounded-xl px-6 py-3 text-sm font-semibold disabled:opacity-70"
                 style={{ backgroundColor: '#AE6C4A', color: '#EEEBE4' }}
               >
                 {dialogCopy.cta}
@@ -275,7 +364,8 @@ export function LeadCaptureDialog({ mode, open, onOpenChange }: LeadCaptureDialo
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
-                className="rounded-xl border px-6 py-3 text-sm font-semibold"
+                disabled={submitState === 'submitting'}
+                className="rounded-xl border px-6 py-3 text-sm font-semibold disabled:opacity-70"
                 style={{ borderColor: '#D2CCBE', color: '#373A40' }}
               >
                 Cancel
