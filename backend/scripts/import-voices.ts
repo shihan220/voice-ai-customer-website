@@ -16,10 +16,6 @@ type SourceVoice = {
 
 const sqliteDb = process.env.SOURCE_SQLITE_DB ?? '/Users/mohammadshihan/bangla-speech-ai/db.sqlite3';
 
-if (!existsSync(sqliteDb)) {
-  throw new Error(`SQLite source database not found: ${sqliteDb}`);
-}
-
 const sqliteQuery = `
   SELECT id, name, script_text, audio_file, duration, wave_seed, "order", is_active
   FROM core_voicecard
@@ -27,6 +23,12 @@ const sqliteQuery = `
 `;
 
 function readSourceVoices() {
+  if (!existsSync(sqliteDb)) {
+    throw new Error(
+      `SQLite source database not found: ${sqliteDb}. If you only need default website records, run "npm run db:seed:voices" instead.`,
+    );
+  }
+
   const output = execFileSync('sqlite3', ['-json', sqliteDb, sqliteQuery], {
     encoding: 'utf8',
   });
