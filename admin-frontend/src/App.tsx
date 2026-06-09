@@ -1354,9 +1354,8 @@ function SendSamplePage({ search }: { search: string }) {
           apiRequest<EmailStatus>('/api/admin/email-status'),
         ]);
 
-        const audioReadyCards = voiceCardsPayload.voiceCards.filter((card) => Boolean(card.audioUrl));
         setRequests(requestsPayload.requests);
-        setVoiceCards(audioReadyCards);
+        setVoiceCards(voiceCardsPayload.voiceCards);
         setEmailStatus(emailStatusPayload);
 
         const initialRequestId =
@@ -1367,7 +1366,7 @@ function SendSamplePage({ search }: { search: string }) {
               : '';
 
         const initialRequest = requestsPayload.requests.find((request) => String(request.id) === initialRequestId);
-        const initialVoiceCard = audioReadyCards[0];
+        const initialVoiceCard = voiceCardsPayload.voiceCards[0];
 
         setForm((current) => ({
           ...current,
@@ -1397,6 +1396,16 @@ function SendSamplePage({ search }: { search: string }) {
       }));
     }
   }, [form.requestId, requests]);
+
+  const selectedVoiceCard = useMemo(
+    () => voiceCards.find((card) => String(card.id) === form.voiceCardId) ?? null,
+    [form.voiceCardId, voiceCards],
+  );
+  const selectedVoiceHasAudio = Boolean(selectedVoiceCard?.audioUrl && selectedVoiceCard?.audioFile);
+  const deliveryModeMessage =
+    form.deliveryMode === 'attachment'
+      ? 'The selected public voice card audio will be attached automatically.'
+      : 'The selected public voice card audio link will be included in the email.';
 
   const handleSend = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1436,12 +1445,15 @@ function SendSamplePage({ search }: { search: string }) {
       {emailStatus && !emailStatus.configured ? <InlineMessage tone="error">{emailStatus.message}</InlineMessage> : null}
       {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
       {message ? <InlineMessage tone="success">{message}</InlineMessage> : null}
+      {selectedVoiceCard && !selectedVoiceHasAudio ? (
+        <InlineMessage tone="error">This voice card has no audio file. Add audio from Public Voice Cards first.</InlineMessage>
+      ) : null}
 
       <Panel title="Compose client sample email" subtitle="Attachment and public-link delivery are both supported">
         {requests.length === 0 ? (
           <EmptyState label="You need at least one sample request before sending email." />
         ) : voiceCards.length === 0 ? (
-          <EmptyState label="You need at least one public voice card with audio before sending email." />
+          <EmptyState label="You need at least one public voice card before sending email." />
         ) : (
           <form className="grid gap-4 lg:grid-cols-2" onSubmit={handleSend}>
             <FieldLabel label="Sample request">
@@ -1464,7 +1476,7 @@ function SendSamplePage({ search }: { search: string }) {
               >
                 {voiceCards.map((card) => (
                   <option key={card.id} value={String(card.id)}>
-                    {card.name}
+                    {card.name}{card.audioUrl ? '' : ' (No audio)'}
                   </option>
                 ))}
               </SelectInput>
@@ -1490,6 +1502,50 @@ function SendSamplePage({ search }: { search: string }) {
               </SelectInput>
             </FieldLabel>
 
+            {selectedVoiceCard ? (
+              <div className="lg:col-span-2">
+                <PanelInset title="Selected voice card preview">
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-[#2f343b]">{selectedVoiceCard.name}</div>
+                        <div className="mt-1 text-xs text-[#7c7168]">
+                          {selectedVoiceCard.audioFile ?? 'No audio file linked'}
+                        </div>
+                        {selectedVoiceCard.audioUrl ? (
+                          <div className="mt-1 text-xs text-[#7c7168]">{selectedVoiceCard.audioUrl}</div>
+                        ) : null}
+                      </div>
+                      <span className="inline-flex rounded-full border border-[#e3d7c8] bg-[#f8f2ea] px-3 py-1 text-xs font-semibold text-[#7a5f4f]">
+                        {form.deliveryMode === 'attachment' ? 'This audio will be attached' : 'This audio link will be included'}
+                      </span>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="rounded-2xl border border-[#eadfce] bg-white/88 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#a96544]">Bangla caption</div>
+                        <p className="mt-2 text-sm leading-7 text-[#2f343b]">{selectedVoiceCard.scriptText}</p>
+                      </div>
+                      <div className="rounded-2xl border border-[#eadfce] bg-white/88 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#a96544]">English meaning</div>
+                        <p className="mt-2 text-sm leading-7 text-[#2f343b]">
+                          {selectedVoiceCard.englishMeaning ?? 'No English meaning set for this voice card.'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-[#eadfce] bg-white/88 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#a96544]">Delivery mode status</div>
+                      <p className="mt-2 text-sm leading-7 text-[#2f343b]">{deliveryModeMessage}</p>
+                      {selectedVoiceCard.audioUrl ? (
+                        <audio className="mt-4 w-full" controls preload="none" src={selectedVoiceCard.audioUrl} />
+                      ) : null}
+                    </div>
+                  </div>
+                </PanelInset>
+              </div>
+            ) : null}
+
             <div className="lg:col-span-2">
               <FieldLabel label="Email subject">
                 <TextInput
@@ -1510,7 +1566,10 @@ function SendSamplePage({ search }: { search: string }) {
             </div>
 
             <div className="lg:col-span-2">
-              <PrimaryButton disabled={sending || Boolean(emailStatus && !emailStatus.configured)} type="submit">
+              <PrimaryButton
+                disabled={sending || Boolean(emailStatus && !emailStatus.configured) || !selectedVoiceHasAudio}
+                type="submit"
+              >
                 {sending ? 'Sending...' : 'Send sample'}
               </PrimaryButton>
             </div>

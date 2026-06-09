@@ -1152,6 +1152,17 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
       return;
     }
 
+    const audioAbsolutePath = path.join(mediaRoot, voiceCard.audio_file);
+
+    try {
+      await fs.access(audioAbsolutePath);
+    } catch {
+      res.status(400).json({
+        error: 'The selected public voice card audio file could not be found. Add or replace the audio in Public Voice Cards first.',
+      });
+      return;
+    }
+
     const logResult = await pool.query<SampleEmailLogRecord>(
       `
         INSERT INTO sample_email_logs (
@@ -1208,7 +1219,7 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
           ? [
               {
                 filename: path.basename(voiceCard.audio_file),
-                path: path.join(mediaRoot, voiceCard.audio_file),
+                path: audioAbsolutePath,
               },
             ]
           : [],
