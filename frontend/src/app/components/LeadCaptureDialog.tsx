@@ -16,11 +16,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
-import {
-  SUPABASE_LEADS_TABLE,
-  SUPABASE_PUBLISHABLE_KEY,
-  SUPABASE_URL,
-} from '../config/supabase';
 
 export type LeadDialogMode = 'sample' | 'pilot';
 
@@ -47,16 +42,17 @@ type PilotFormState = {
   phone: string;
 };
 
-type SupabaseLeadInsert = {
-  business_context?: string | null;
-  company_name?: string | null;
-  expected_monthly_volume?: string | null;
-  full_name: string;
-  primary_use_case?: string | null;
+type SampleRequestInsert = {
+  clientName: string;
+  companyName?: string | null;
+  email: string;
+  expectedMonthlyVolume?: string | null;
+  messageDetails?: string | null;
+  phoneNumber?: string | null;
   referrer?: string | null;
-  source_url?: string | null;
-  user_agent?: string | null;
-  work_email: string;
+  selectedService?: string | null;
+  sourceUrl?: string | null;
+  userAgent?: string | null;
 };
 
 const sampleDefaults: SampleFormState = {
@@ -78,34 +74,23 @@ const pilotDefaults: PilotFormState = {
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function isSupabaseConfigured() {
-  return SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY && !SUPABASE_PUBLISHABLE_KEY.includes('PASTE_MY_');
-}
-
 function normalizeOptionalValue(value: string) {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 }
 
-async function insertLead(payload: SupabaseLeadInsert) {
-  if (!isSupabaseConfigured()) {
-    throw new Error('Supabase publishable key is not configured yet.');
-  }
-
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_LEADS_TABLE}`, {
+async function insertLead(payload: SampleRequestInsert) {
+  const response = await fetch('/api/sample-requests', {
     method: 'POST',
     headers: {
-      apikey: SUPABASE_PUBLISHABLE_KEY,
-      Authorization: `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
       'Content-Type': 'application/json',
-      Prefer: 'return=minimal',
     },
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(errorText || `Supabase request failed with status ${response.status}.`);
+    throw new Error(errorText || `Request failed with status ${response.status}.`);
   }
 }
 
@@ -164,32 +149,33 @@ export function LeadCaptureDialog({ mode, open, onOpenChange }: LeadCaptureDialo
     return null;
   };
 
-  const buildPayload = (): SupabaseLeadInsert => {
+  const buildPayload = (): SampleRequestInsert => {
     const metadata = {
       referrer: typeof document !== 'undefined' ? normalizeOptionalValue(document.referrer) : null,
-      source_url: typeof window !== 'undefined' ? normalizeOptionalValue(window.location.href) : null,
-      user_agent: typeof navigator !== 'undefined' ? normalizeOptionalValue(navigator.userAgent) : null,
+      sourceUrl: typeof window !== 'undefined' ? normalizeOptionalValue(window.location.href) : null,
+      userAgent: typeof navigator !== 'undefined' ? normalizeOptionalValue(navigator.userAgent) : null,
     };
 
     if (isSample) {
       return {
-        full_name: sampleForm.fullName.trim(),
-        company_name: normalizeOptionalValue(sampleForm.company),
-        work_email: sampleForm.email.trim(),
-        primary_use_case: normalizeOptionalValue(sampleForm.useCase),
-        expected_monthly_volume: null,
-        business_context: normalizeOptionalValue(sampleForm.script),
+        clientName: sampleForm.fullName.trim(),
+        companyName: normalizeOptionalValue(sampleForm.company),
+        email: sampleForm.email.trim(),
+        expectedMonthlyVolume: null,
+        messageDetails: normalizeOptionalValue(sampleForm.script),
+        selectedService: normalizeOptionalValue(sampleForm.useCase),
         ...metadata,
       };
     }
 
     return {
-      full_name: pilotForm.fullName.trim(),
-      company_name: normalizeOptionalValue(pilotForm.company),
-      work_email: pilotForm.email.trim(),
-      primary_use_case: 'b2b_agent_pilot',
-      expected_monthly_volume: normalizeOptionalValue(pilotForm.monthlyVolume),
-      business_context: normalizeOptionalValue(pilotForm.goal),
+      clientName: pilotForm.fullName.trim(),
+      companyName: normalizeOptionalValue(pilotForm.company),
+      email: pilotForm.email.trim(),
+      expectedMonthlyVolume: normalizeOptionalValue(pilotForm.monthlyVolume),
+      messageDetails: normalizeOptionalValue(pilotForm.goal),
+      phoneNumber: normalizeOptionalValue(pilotForm.phone),
+      selectedService: 'b2b_agent_pilot',
       ...metadata,
     };
   };

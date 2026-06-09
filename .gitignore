@@ -4,3 +4,5 @@ frontend/dist/
 .env
 .DS_Store
 *.swp
+backend/media/voices/inbox/*
+!backend/media/voices/inbox/.gitkeep
