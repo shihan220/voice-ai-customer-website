@@ -888,6 +888,7 @@ function VoiceCardsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingAudio, setUploadingAudio] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const loadVoiceCards = async () => {
     setLoading(true);
@@ -1048,6 +1049,42 @@ function VoiceCardsPage() {
       setError(error instanceof Error ? error.message : 'Failed to upload public audio.');
     } finally {
       setUploadingAudio(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (draft.id === null) {
+      setSelectedId(null);
+      setDraft(createEmptyVoiceCardDraft());
+      return;
+    }
+
+    if (!window.confirm(`Delete "${draft.name}" from the public voice cards?`)) {
+      return;
+    }
+
+    setDeleting(true);
+    setError('');
+    setMessage('');
+
+    try {
+      await apiRequest<{ deletedId: number; message: string }>(`/api/admin/voice-cards/${draft.id}`, {
+        method: 'DELETE',
+      });
+
+      const deletedId = draft.id;
+      const remainingCards = voiceCards.filter((card) => card.id !== deletedId);
+      const nextSelectedCard = remainingCards[0] ?? null;
+
+      setVoiceCards(remainingCards);
+      setSelectedId(nextSelectedCard?.id ?? null);
+      setDraft(nextSelectedCard ? toVoiceCardDraft(nextSelectedCard) : createEmptyVoiceCardDraft());
+      setAudioFile(null);
+      setMessage('Public voice card deleted.');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to delete the public voice card.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -1225,6 +1262,9 @@ function VoiceCardsPage() {
               >
                 Reset
               </SecondaryButton>
+              <DangerButton disabled={deleting} onClick={handleDelete} type="button">
+                {deleting ? 'Deleting...' : 'Delete'}
+              </DangerButton>
             </div>
           </div>
         </Panel>
@@ -1599,6 +1639,18 @@ function SecondaryButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
       {...props}
       className={cx(
         'inline-flex items-center rounded-full border border-[#d8cbbe] bg-white/88 px-5 py-3 text-sm font-semibold text-[#5e534b] transition hover:border-[#cdb6a1] hover:text-[#a96544] disabled:cursor-not-allowed disabled:opacity-65',
+        props.className,
+      )}
+    />
+  );
+}
+
+function DangerButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      {...props}
+      className={cx(
+        'inline-flex items-center rounded-full border border-[#efc2bc] bg-[#fff2f0] px-5 py-3 text-sm font-semibold text-[#9d564c] transition hover:border-[#e4a69e] hover:bg-[#ffe9e6] disabled:cursor-not-allowed disabled:opacity-65',
         props.className,
       )}
     />

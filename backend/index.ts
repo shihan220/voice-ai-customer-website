@@ -976,6 +976,53 @@ app.post('/api/admin/voice-cards/:id/audio', requireAdmin, async (req, res) => {
   }
 });
 
+app.delete('/api/admin/voice-cards/:id', requireAdmin, async (req, res) => {
+  try {
+    const voiceCardId = Number(req.params.id);
+
+    if (!Number.isFinite(voiceCardId)) {
+      res.status(400).json({ error: 'Invalid voice card id.' });
+      return;
+    }
+
+    const existing = await fetchVoiceCardById(voiceCardId);
+
+    if (!existing) {
+      res.status(404).json({ error: 'Voice card not found.' });
+      return;
+    }
+
+    await pool.query(
+      `
+        DELETE FROM voice_cards
+        WHERE id = $1
+      `,
+      [voiceCardId],
+    );
+
+    if (existing.audio_file && existing.audio_file.startsWith('voices/public/')) {
+      const duplicateAudioResult = await pool.query<{ count: string }>(
+        `
+          SELECT COUNT(*)::text AS count
+          FROM voice_cards
+          WHERE audio_file = $1
+        `,
+        [existing.audio_file],
+      );
+
+      if (Number(duplicateAudioResult.rows[0]?.count ?? 0) === 0) {
+        await fs.unlink(path.join(mediaRoot, existing.audio_file)).catch(() => undefined);
+      }
+    }
+
+    res.json({ deletedId: voiceCardId, message: 'Voice card deleted successfully.' });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to delete the voice card.',
+    });
+  }
+});
+
 app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
   let logId: number | null = null;
 
