@@ -151,8 +151,36 @@ function getSmtpConfig() {
     host,
     pass,
     port: portNumber,
+    requireTls: portNumber === 587,
     secure: portNumber === 465,
     user,
+  };
+}
+
+function getSmtpStatus() {
+  const requiredEntries = [
+    ['SMTP_HOST', normalizeText(process.env.SMTP_HOST)],
+    ['SMTP_PORT', normalizeText(process.env.SMTP_PORT)],
+    ['SMTP_USER', normalizeText(process.env.SMTP_USER)],
+    ['SMTP_PASS', normalizeText(process.env.SMTP_PASS)],
+    ['SMTP_FROM', normalizeText(process.env.SMTP_FROM)],
+  ] as const;
+
+  const missing = requiredEntries.filter(([, value]) => !value).map(([key]) => key);
+  const config = getSmtpConfig();
+
+  return {
+    configured: missing.length === 0 && Boolean(config),
+    from: config?.from ?? null,
+    host: config?.host ?? null,
+    message:
+      missing.length > 0
+        ? `SMTP is not configured. Set ${missing.join(', ')}.`
+        : config
+          ? 'SMTP is configured.'
+          : 'SMTP is not configured. Check SMTP_PORT and other SMTP variables.',
+    missing,
+    port: config?.port ?? null,
   };
 }
 
@@ -544,6 +572,19 @@ app.post('/api/admin/logout', (req, res) => {
   });
 });
 
+app.get('/api/admin/email-status', requireAdmin, (_req, res) => {
+  const smtpStatus = getSmtpStatus();
+
+  res.json({
+    configured: smtpStatus.configured,
+    from: smtpStatus.from,
+    host: smtpStatus.host,
+    message: smtpStatus.message,
+    missing: smtpStatus.missing,
+    port: smtpStatus.port,
+  });
+});
+
 app.get('/api/admin/dashboard', requireAdmin, async (_req, res) => {
   try {
     const [countsResult, recentRequestsResult, recentEmailsResult] = await Promise.all([
@@ -750,6 +791,38 @@ app.patch('/api/admin/sample-requests/:id', requireAdmin, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to update the sample request.',
+    });
+  }
+});
+
+app.delete('/api/admin/sample-requests/:id', requireAdmin, async (req, res) => {
+  try {
+    const requestId = Number(req.params.id);
+
+    if (!Number.isFinite(requestId)) {
+      res.status(400).json({ error: 'Invalid request id.' });
+      return;
+    }
+
+    const existing = await fetchSampleRequestById(requestId);
+
+    if (!existing) {
+      res.status(404).json({ error: 'Sample request not found.' });
+      return;
+    }
+
+    await pool.query(
+      `
+        DELETE FROM sample_requests
+        WHERE id = $1
+      `,
+      [requestId],
+    );
+
+    res.json({ deletedId: requestId, message: 'Sample request deleted successfully.' });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to delete the sample request.',
     });
   }
 });
@@ -1027,11 +1100,12 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
   let logId: number | null = null;
 
   try {
+    const smtpStatus = getSmtpStatus();
     const smtpConfig = getSmtpConfig();
 
-    if (!smtpConfig) {
+    if (!smtpStatus.configured || !smtpConfig) {
       res.status(503).json({
-        error: 'SMTP is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM.',
+        error: smtpStatus.message,
       });
       return;
     }
@@ -1103,16 +1177,30 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
         pass: smtpConfig.pass,
         user: smtpConfig.user,
       },
+      connectionTimeout: 15000,
+      greetingTimeout: 15000,
       host: smtpConfig.host,
       port: smtpConfig.port,
+      requireTLS: smtpConfig.requireTls,
       secure: smtpConfig.secure,
+      socketTimeout: 20000,
     });
 
     const audioPublicUrl = new URL(`/media/${voiceCard.audio_file}`, getBaseUrl(req)).toString();
-    const linkBlock =
-      deliveryMode === 'link'
-        ? `\n\nAudio sample:\n${audioPublicUrl}`
-        : '';
+    const englishMeaningBlock = voiceCard.english_meaning
+      ? `\nEnglish meaning:\n${voiceCard.english_meaning}`
+      : '';
+    const emailBody = [
+      message,
+      '',
+      `Voice card: ${voiceCard.name}`,
+      `Bangla caption: ${voiceCard.script_text}`,
+      englishMeaningBlock ? englishMeaningBlock.trim() : '',
+      `Audio link: ${audioPublicUrl}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
 
     await transporter.sendMail({
       attachments:
@@ -1125,8 +1213,18 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
             ]
           : [],
       from: smtpConfig.from,
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #2f343b;">
+          <p>${message.replace(/\n/g, '<br />')}</p>
+          <hr style="border: 0; border-top: 1px solid #e5d9cc; margin: 20px 0;" />
+          <p><strong>Voice card:</strong> ${voiceCard.name}</p>
+          <p><strong>Bangla caption:</strong><br />${voiceCard.script_text}</p>
+          ${voiceCard.english_meaning ? `<p><strong>English meaning:</strong><br />${voiceCard.english_meaning}</p>` : ''}
+          <p><strong>Audio link:</strong><br /><a href="${audioPublicUrl}">${audioPublicUrl}</a></p>
+        </div>
+      `.trim(),
       subject,
-      text: `${message}${linkBlock}`.trim(),
+      text: emailBody,
       to: recipientEmail,
     });
 

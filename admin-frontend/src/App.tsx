@@ -65,6 +65,15 @@ type EmailLog = {
   voiceSampleId: number | null;
 };
 
+type EmailStatus = {
+  configured: boolean;
+  from: string | null;
+  host: string | null;
+  message: string;
+  missing: string[];
+  port: number | null;
+};
+
 type DashboardPayload = {
   recentEmails: EmailLog[];
   recentRequests: SampleRequest[];
@@ -612,6 +621,7 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState('');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [deletingRequest, setDeletingRequest] = useState(false);
   const [form, setForm] = useState({
     clientName: '',
     companyName: '',
@@ -710,6 +720,43 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to save request changes.');
       setSaveState('idle');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!selectedRequestId) {
+      return;
+    }
+
+    const currentRequest = requests.find((request) => request.id === selectedRequestId);
+
+    if (!window.confirm(`Delete sample request for "${currentRequest?.clientName ?? 'this client'}"?`)) {
+      return;
+    }
+
+    setDeletingRequest(true);
+    setError('');
+
+    try {
+      await apiRequest<{ deletedId: number; message: string }>(`/api/admin/sample-requests/${selectedRequestId}`, {
+        method: 'DELETE',
+      });
+
+      const remainingRequests = requests.filter((request) => request.id !== selectedRequestId);
+      const nextSelectedRequest = remainingRequests[0] ?? null;
+
+      setRequests(remainingRequests);
+      setSelectedRequestId(nextSelectedRequest?.id ?? null);
+      setDetail(
+        nextSelectedRequest && detail && detail.request.id === nextSelectedRequest.id
+          ? detail
+          : null,
+      );
+      setSaveState('idle');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to delete the sample request.');
+    } finally {
+      setDeletingRequest(false);
     }
   };
 
@@ -849,6 +896,9 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
                 >
                   Open send sample
                 </SecondaryButton>
+                <DangerButton disabled={deletingRequest} onClick={handleDelete} type="button">
+                  {deletingRequest ? 'Deleting...' : 'Delete request'}
+                </DangerButton>
               </div>
 
               <PanelInset title="Email history">
@@ -1276,6 +1326,7 @@ function VoiceCardsPage() {
 function SendSamplePage({ search }: { search: string }) {
   const [requests, setRequests] = useState<SampleRequest[]>([]);
   const [voiceCards, setVoiceCards] = useState<PublicVoiceCard[]>([]);
+  const [emailStatus, setEmailStatus] = useState<EmailStatus | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -1297,14 +1348,16 @@ function SendSamplePage({ search }: { search: string }) {
   useEffect(() => {
     const load = async () => {
       try {
-        const [requestsPayload, voiceCardsPayload] = await Promise.all([
+        const [requestsPayload, voiceCardsPayload, emailStatusPayload] = await Promise.all([
           apiRequest<{ requests: SampleRequest[] }>('/api/admin/sample-requests'),
           apiRequest<{ voiceCards: PublicVoiceCard[] }>('/api/admin/voice-cards'),
+          apiRequest<EmailStatus>('/api/admin/email-status'),
         ]);
 
         const audioReadyCards = voiceCardsPayload.voiceCards.filter((card) => Boolean(card.audioUrl));
         setRequests(requestsPayload.requests);
         setVoiceCards(audioReadyCards);
+        setEmailStatus(emailStatusPayload);
 
         const initialRequestId =
           queryRequestId && requestsPayload.requests.some((request) => request.id === queryRequestId)
@@ -1380,6 +1433,7 @@ function SendSamplePage({ search }: { search: string }) {
         description="Choose a request, select a public voice card, and deliver the website audio through SMTP."
       />
 
+      {emailStatus && !emailStatus.configured ? <InlineMessage tone="error">{emailStatus.message}</InlineMessage> : null}
       {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
       {message ? <InlineMessage tone="success">{message}</InlineMessage> : null}
 
@@ -1456,7 +1510,7 @@ function SendSamplePage({ search }: { search: string }) {
             </div>
 
             <div className="lg:col-span-2">
-              <PrimaryButton disabled={sending} type="submit">
+              <PrimaryButton disabled={sending || Boolean(emailStatus && !emailStatus.configured)} type="submit">
                 {sending ? 'Sending...' : 'Send sample'}
               </PrimaryButton>
             </div>
