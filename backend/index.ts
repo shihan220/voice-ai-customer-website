@@ -55,7 +55,6 @@ const allowedMimeTypes = new Set([
 
 const allowedExtensions = new Set(['.mp3', '.wav', '.m4a', '.webm', '.mp4']);
 const validRequestStatuses = new Set<SampleRequestStatus>(['new', 'reviewing', 'sample_ready', 'sent', 'archived']);
-const validTranscriptStatuses = new Set(['pending', 'completed', 'failed', 'skipped']);
 const validDeliveryModes = new Set(['attachment', 'link']);
 
 app.use(cors({ origin: true, credentials: true }));
@@ -112,18 +111,6 @@ function toOptionalNumber(value: unknown) {
   }
 
   return null;
-}
-
-function toBoolean(value: unknown) {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  if (typeof value === 'string') {
-    return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
-  }
-
-  return false;
 }
 
 function isValidEmail(email: string) {
@@ -213,9 +200,6 @@ function toVoiceSampleResponse(row: VoiceSampleRecord) {
     requestId: row.request_id === null ? null : Number(row.request_id),
     storedFilename: row.stored_filename,
     title: row.title,
-    transcriptError: row.transcript_error,
-    transcriptStatus: row.transcript_status,
-    transcriptText: row.transcript_text,
     updatedAt: row.updated_at,
   };
 }
@@ -226,7 +210,6 @@ function toEmailLogResponse(row: SampleEmailLogRecord) {
     deliveryMode: row.delivery_mode,
     errorMessage: row.error_message,
     id: Number(row.id),
-    includeTranscript: row.include_transcript,
     message: row.message,
     recipientEmail: row.recipient_email,
     requestId: row.request_id === null ? null : Number(row.request_id),
@@ -301,48 +284,6 @@ async function runUpload(req: Request, res: Response) {
       resolve();
     });
   });
-}
-
-async function transcribeAudioFile(filePath: string, originalFilename: string) {
-  const apiKey = normalizeText(process.env.OPENAI_API_KEY);
-
-  if (!apiKey) {
-    return {
-      transcriptError: null,
-      transcriptStatus: 'skipped' as const,
-      transcriptText: null,
-    };
-  }
-
-  const fileBuffer = await fs.readFile(filePath);
-  const fileBlob = new Blob([fileBuffer]);
-  const formData = new FormData();
-  formData.append('file', fileBlob, originalFilename);
-  formData.append('model', 'gpt-4o-mini-transcribe');
-  formData.append('language', 'bn');
-  formData.append('response_format', 'json');
-
-  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: formData,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-
-    throw new Error(errorText || `Transcription request failed with status ${response.status}.`);
-  }
-
-  const payload = (await response.json()) as { text?: string };
-
-  return {
-    transcriptError: null,
-    transcriptStatus: 'completed' as const,
-    transcriptText: normalizeText(payload.text),
-  };
 }
 
 async function fetchSampleRequestById(id: number) {
@@ -762,8 +703,6 @@ app.get('/api/admin/voice-samples', requireAdmin, async (_req, res) => {
 });
 
 app.post('/api/admin/voice-samples', requireAdmin, async (req, res) => {
-  let storedRelativePath: string | null = null;
-
   try {
     await runUpload(req, res);
 
@@ -774,7 +713,6 @@ app.post('/api/admin/voice-samples', requireAdmin, async (req, res) => {
 
     const title = requireText(req.body.title, 'Sample title is required.');
     const requestId = toOptionalNumber(req.body.requestId);
-    const shouldTranscribe = toBoolean(req.body.shouldTranscribe);
 
     if (requestId) {
       const linkedRequest = await fetchSampleRequestById(requestId);
@@ -786,7 +724,7 @@ app.post('/api/admin/voice-samples', requireAdmin, async (req, res) => {
       }
     }
 
-    storedRelativePath = path.posix.join('voices', 'inbox', req.file.filename);
+    const storedRelativePath = path.posix.join('voices', 'inbox', req.file.filename);
 
     const insertResult = await pool.query<VoiceSampleRecord>(
       `
@@ -797,10 +735,9 @@ app.post('/api/admin/voice-samples', requireAdmin, async (req, res) => {
           stored_filename,
           media_path,
           mime_type,
-          file_size_bytes,
-          transcript_status
+          file_size_bytes
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *
       `,
       [
@@ -811,52 +748,10 @@ app.post('/api/admin/voice-samples', requireAdmin, async (req, res) => {
         storedRelativePath,
         req.file.mimetype,
         req.file.size,
-        shouldTranscribe ? 'pending' : 'skipped',
       ],
     );
 
-    let savedSample = insertResult.rows[0];
-
-    if (shouldTranscribe) {
-      try {
-        const transcript = await transcribeAudioFile(req.file.path, req.file.originalname);
-
-        const updateResult = await pool.query<VoiceSampleRecord>(
-          `
-            UPDATE voice_samples
-            SET transcript_text = $2,
-                transcript_status = $3,
-                transcript_error = $4,
-                updated_at = NOW()
-            WHERE id = $1
-            RETURNING *
-          `,
-          [
-            savedSample.id,
-            transcript.transcriptText,
-            transcript.transcriptStatus,
-            transcript.transcriptError,
-          ],
-        );
-
-        savedSample = updateResult.rows[0];
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Transcription failed.';
-        const updateResult = await pool.query<VoiceSampleRecord>(
-          `
-            UPDATE voice_samples
-            SET transcript_status = 'failed',
-                transcript_error = $2,
-                updated_at = NOW()
-            WHERE id = $1
-            RETURNING *
-          `,
-          [savedSample.id, errorMessage],
-        );
-
-        savedSample = updateResult.rows[0];
-      }
-    }
+    const savedSample = insertResult.rows[0];
 
     if (savedSample.request_id) {
       await markRequestStatus(savedSample.request_id, 'sample_ready');
@@ -900,15 +795,6 @@ app.patch('/api/admin/voice-samples/:id', requireAdmin, async (req, res) => {
         ? null
         : toOptionalNumber(req.body.requestId)
       : existing.request_id;
-    const requestedTranscriptStatus = normalizeText(req.body.transcriptStatus);
-    const nextTranscriptText = Object.prototype.hasOwnProperty.call(req.body, 'transcriptText')
-      ? normalizeText(req.body.transcriptText)
-      : existing.transcript_text;
-
-    if (requestedTranscriptStatus && !validTranscriptStatuses.has(requestedTranscriptStatus)) {
-      res.status(400).json({ error: 'Invalid transcript status.' });
-      return;
-    }
 
     if (nextRequestIdValue) {
       const linkedRequest = await fetchSampleRequestById(nextRequestIdValue);
@@ -925,9 +811,6 @@ app.patch('/api/admin/voice-samples/:id', requireAdmin, async (req, res) => {
         SET
           title = $2,
           request_id = $3,
-          transcript_text = $4,
-          transcript_status = $5,
-          transcript_error = $6,
           updated_at = NOW()
         WHERE id = $1
         RETURNING *
@@ -936,11 +819,6 @@ app.patch('/api/admin/voice-samples/:id', requireAdmin, async (req, res) => {
         sampleId,
         normalizeText(req.body.title) ?? existing.title,
         nextRequestIdValue,
-        nextTranscriptText,
-        requestedTranscriptStatus ?? (nextTranscriptText ? 'completed' : existing.transcript_status),
-        Object.prototype.hasOwnProperty.call(req.body, 'transcriptError')
-          ? normalizeText(req.body.transcriptError)
-          : existing.transcript_error,
       ],
     );
 
@@ -976,7 +854,6 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
     const recipientEmail = requireText(req.body.recipientEmail, 'Recipient email is required.');
     const subject = requireText(req.body.subject, 'Email subject is required.');
     const message = requireText(req.body.message, 'Email message is required.');
-    const includeTranscript = toBoolean(req.body.includeTranscript);
     const deliveryMode = normalizeText(req.body.deliveryMode) ?? 'link';
 
     if (!requestId || !voiceSampleId) {
@@ -1017,14 +894,13 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
           recipient_email,
           subject,
           message,
-          include_transcript,
           delivery_mode,
           status
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *
       `,
-      [requestId, voiceSampleId, recipientEmail, subject, message, includeTranscript, deliveryMode, 'pending'],
+      [requestId, voiceSampleId, recipientEmail, subject, message, deliveryMode, 'pending'],
     );
 
     logId = logResult.rows[0].id;
@@ -1040,10 +916,6 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
     });
 
     const audioPublicUrl = new URL(`/media/${voiceSample.media_path}`, getBaseUrl(req)).toString();
-    const transcriptBlock =
-      includeTranscript && voiceSample.transcript_text
-        ? `\n\nTranscript:\n${voiceSample.transcript_text}`
-        : '';
     const linkBlock =
       deliveryMode === 'link'
         ? `\n\nAudio sample:\n${audioPublicUrl}`
@@ -1061,7 +933,7 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
           : [],
       from: smtpConfig.from,
       subject,
-      text: `${message}${transcriptBlock}${linkBlock}`.trim(),
+      text: `${message}${linkBlock}`.trim(),
       to: recipientEmail,
     });
 
@@ -1107,7 +979,12 @@ app.get('/admin/login', async (_req, res) => {
   await serveAdminShell(res);
 });
 
-app.get(['/admin/dashboard', '/admin/sample-requests', '/admin/voice-samples', '/admin/send-sample'], requireAdmin, async (_req, res) => {
+app.get(['/admin/dashboard', '/admin/sample-requests', '/admin/voice-samples', '/admin/send-sample'], async (req, res) => {
+  if (!req.session.adminUser) {
+    res.redirect('/admin/login');
+    return;
+  }
+
   await serveAdminShell(res);
 });
 

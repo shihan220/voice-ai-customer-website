@@ -44,16 +44,19 @@ CREATE TABLE IF NOT EXISTS voice_samples (
   media_path TEXT NOT NULL,
   mime_type TEXT NOT NULL,
   file_size_bytes BIGINT NOT NULL,
-  transcript_text TEXT,
-  transcript_status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (transcript_status IN ('pending', 'completed', 'failed', 'skipped')),
-  transcript_error TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_voice_samples_request_id_created_at
   ON voice_samples (request_id, created_at DESC);
+
+ALTER TABLE voice_samples
+  DROP COLUMN IF EXISTS transcript_bn,
+  DROP COLUMN IF EXISTS transcript_en,
+  DROP COLUMN IF EXISTS transcript_status,
+  DROP COLUMN IF EXISTS transcript_error,
+  DROP COLUMN IF EXISTS transcribed_at;
 
 CREATE TABLE IF NOT EXISTS sample_email_logs (
   id BIGSERIAL PRIMARY KEY,
@@ -62,7 +65,6 @@ CREATE TABLE IF NOT EXISTS sample_email_logs (
   recipient_email TEXT NOT NULL,
   subject TEXT NOT NULL,
   message TEXT NOT NULL,
-  include_transcript BOOLEAN NOT NULL DEFAULT FALSE,
   delivery_mode TEXT NOT NULL DEFAULT 'link'
     CHECK (delivery_mode IN ('attachment', 'link')),
   status TEXT NOT NULL DEFAULT 'pending'
@@ -74,3 +76,6 @@ CREATE TABLE IF NOT EXISTS sample_email_logs (
 
 CREATE INDEX IF NOT EXISTS idx_sample_email_logs_request_id_created_at
   ON sample_email_logs (request_id, created_at DESC);
+
+ALTER TABLE sample_email_logs
+  DROP COLUMN IF EXISTS include_transcript;

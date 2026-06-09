@@ -1,6 +1,10 @@
+import 'dotenv/config';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+
+const backendPort = process.env.PORT ?? '5174';
+const backendUrl = `http://127.0.0.1:${backendPort}`;
 
 export default defineConfig({
   root: __dirname,
@@ -12,8 +16,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:5174',
-      '/media': 'http://127.0.0.1:5174',
+      '/api': backendUrl,
+      '/media': backendUrl,
     },
   },
 });

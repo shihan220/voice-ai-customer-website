@@ -16,7 +16,6 @@ type AdminSession = {
 };
 
 type SampleRequestStatus = 'new' | 'reviewing' | 'sample_ready' | 'sent' | 'archived';
-type TranscriptStatus = 'pending' | 'completed' | 'failed' | 'skipped';
 type DeliveryMode = 'attachment' | 'link';
 
 type SampleRequest = {
@@ -48,9 +47,6 @@ type VoiceSample = {
   requestId: number | null;
   storedFilename: string;
   title: string;
-  transcriptError: string | null;
-  transcriptStatus: TranscriptStatus;
-  transcriptText: string | null;
   updatedAt: string;
 };
 
@@ -60,7 +56,6 @@ type EmailLog = {
   deliveryMode: DeliveryMode;
   errorMessage: string | null;
   id: number;
-  includeTranscript: boolean;
   message: string;
   recipientEmail: string;
   requestId: number | null;
@@ -101,8 +96,6 @@ const protectedRoutes = new Set([
 ]);
 
 const requestStatuses: SampleRequestStatus[] = ['new', 'reviewing', 'sample_ready', 'sent', 'archived'];
-const transcriptStatuses: TranscriptStatus[] = ['pending', 'completed', 'failed', 'skipped'];
-
 function readLocation(): AppLocation {
   return {
     pathname: window.location.pathname,
@@ -339,7 +332,7 @@ function LoginPage({
             Admin Access
           </div>
           <h1 className="mt-6 max-w-md text-4xl font-bold leading-tight text-[#2f343b]">
-            Manage requests, voice samples, transcripts, and outbound sample emails.
+            Manage requests, voice samples, and outbound sample emails.
           </h1>
           <p className="mt-4 max-w-lg text-sm leading-7 text-[#64584f] sm:text-base">
             This workspace is connected to the existing PostgreSQL data and the same media pipeline used by the public
@@ -828,7 +821,7 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
                       <div key={sample.id} className="rounded-2xl border border-[#eadfce] bg-[#fcfaf6] p-3">
                         <div className="font-semibold text-[#2f343b]">{sample.title}</div>
                         <div className="mt-1 text-xs text-[#7c7168]">
-                          {sample.originalFilename} • {sample.transcriptStatus}
+                          {sample.originalFilename} • {formatDate(sample.createdAt)}
                         </div>
                       </div>
                     ))}
@@ -868,11 +861,12 @@ function VoiceSamplesPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [savingSampleId, setSavingSampleId] = useState<number | null>(null);
   const [uploadMessage, setUploadMessage] = useState('');
+  const [uploadMessageTone, setUploadMessageTone] = useState<'success' | 'error'>('success');
   const [uploadForm, setUploadForm] = useState({
     file: null as File | null,
     requestId: '',
-    shouldTranscribe: true,
     title: '',
   });
 
@@ -913,21 +907,22 @@ function VoiceSamplesPage() {
     event.preventDefault();
 
     if (!uploadForm.file) {
+      setUploadMessageTone('error');
       setUploadMessage('Choose an audio file before uploading.');
       return;
     }
 
     setUploading(true);
     setUploadMessage('');
+    setUploadMessageTone('success');
 
     try {
       const formData = new FormData();
       formData.append('audio', uploadForm.file);
       formData.append('title', uploadForm.title);
       formData.append('requestId', uploadForm.requestId);
-      formData.append('shouldTranscribe', String(uploadForm.shouldTranscribe));
 
-      await apiRequest('/api/admin/voice-samples', {
+      const payload = await apiRequest<{ sample: VoiceSample }>('/api/admin/voice-samples', {
         body: formData,
         method: 'POST',
       });
@@ -935,12 +930,13 @@ function VoiceSamplesPage() {
       setUploadForm({
         file: null,
         requestId: '',
-        shouldTranscribe: true,
         title: '',
       });
       setUploadMessage('Voice sample uploaded successfully.');
+      setUploadMessageTone('success');
       void loadData();
     } catch (error) {
+      setUploadMessageTone('error');
       setUploadMessage(error instanceof Error ? error.message : 'Upload failed.');
     } finally {
       setUploading(false);
@@ -955,15 +951,13 @@ function VoiceSamplesPage() {
     }
 
     setError('');
+    setSavingSampleId(sampleId);
 
     try {
       const payload = await apiRequest<{ sample: VoiceSample }>(`/api/admin/voice-samples/${sampleId}`, {
         body: JSON.stringify({
           requestId: draft.requestId ?? '',
           title: draft.title,
-          transcriptError: draft.transcriptError,
-          transcriptStatus: draft.transcriptStatus,
-          transcriptText: draft.transcriptText ?? '',
         }),
         method: 'PATCH',
       });
@@ -975,6 +969,8 @@ function VoiceSamplesPage() {
       }));
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to update the voice sample.');
+    } finally {
+      setSavingSampleId(null);
     }
   };
 
@@ -983,7 +979,7 @@ function VoiceSamplesPage() {
       <PageHeading
         eyebrow="Audio"
         title="Voice samples"
-        description="Upload client-ready audio, keep transcripts editable, and link samples to incoming requests."
+        description="Upload client-ready audio, keep titles organized, and link samples to incoming requests."
       />
 
       {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
@@ -1024,19 +1020,7 @@ function VoiceSamplesPage() {
               />
             </FieldLabel>
 
-            <label className="flex items-center gap-3 rounded-2xl border border-[#eadfce] bg-[#fbf7f1] px-4 py-3 text-sm text-[#5d534b]">
-              <input
-                checked={uploadForm.shouldTranscribe}
-                className="h-4 w-4 accent-[#ae6c4a]"
-                onChange={(event) =>
-                  setUploadForm((current) => ({ ...current, shouldTranscribe: event.target.checked }))
-                }
-                type="checkbox"
-              />
-              Transcribe once after upload using the configured API key
-            </label>
-
-            {uploadMessage ? <InlineMessage tone={uploadMessage.includes('successfully') ? 'success' : 'error'}>{uploadMessage}</InlineMessage> : null}
+            {uploadMessage ? <InlineMessage tone={uploadMessageTone}>{uploadMessage}</InlineMessage> : null}
 
             <PrimaryButton className="w-full justify-center" disabled={uploading} type="submit">
               {uploading ? 'Uploading...' : 'Upload sample'}
@@ -1044,7 +1028,7 @@ function VoiceSamplesPage() {
           </form>
         </Panel>
 
-        <Panel title="Saved samples" subtitle="Edit transcript text before sending a client email">
+        <Panel title="Saved samples" subtitle="Edit sample titles and linked requests before sending a client email">
           {loading ? (
             <PageLoading label="Loading samples..." />
           ) : samples.length === 0 ? (
@@ -1063,7 +1047,9 @@ function VoiceSamplesPage() {
                           {sample.clientName ?? 'Unlinked'} • {formatFileSize(sample.fileSizeBytes)} • {formatDate(sample.createdAt)}
                         </div>
                       </div>
-                      <StatusBadge status={draft.transcriptStatus} />
+                      <span className="inline-flex rounded-full border border-[#e3d7c8] bg-[#f8f2ea] px-3 py-1 text-xs font-semibold text-[#7a5f4f]">
+                        {draft.requestId ? 'Linked' : 'Unlinked'}
+                      </span>
                     </div>
 
                     <audio className="mt-4 w-full" controls preload="none" src={sample.audioUrl} />
@@ -1106,49 +1092,13 @@ function VoiceSamplesPage() {
                       </FieldLabel>
                     </div>
 
-                    <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_180px]">
-                      <FieldLabel label="Transcript">
-                        <TextAreaInput
-                          onChange={(event) =>
-                            setDrafts((current) => ({
-                              ...current,
-                              [sample.id]: {
-                                ...draft,
-                                transcriptText: event.target.value,
-                              },
-                            }))
-                          }
-                          rows={6}
-                          value={draft.transcriptText ?? ''}
-                        />
-                      </FieldLabel>
-                      <FieldLabel label="Transcript status">
-                        <SelectInput
-                          onChange={(event) =>
-                            setDrafts((current) => ({
-                              ...current,
-                              [sample.id]: {
-                                ...draft,
-                                transcriptStatus: event.target.value as TranscriptStatus,
-                              },
-                            }))
-                          }
-                          value={draft.transcriptStatus}
-                        >
-                          {transcriptStatuses.map((status) => (
-                            <option key={status} value={status}>
-                              {statusLabel(status)}
-                            </option>
-                          ))}
-                        </SelectInput>
-                      </FieldLabel>
-                    </div>
-
-                    {draft.transcriptError ? <InlineMessage tone="error">{draft.transcriptError}</InlineMessage> : null}
-
-                    <div className="mt-4">
-                      <PrimaryButton onClick={() => void handleSampleSave(sample.id)} type="button">
-                        Save sample
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <PrimaryButton
+                        disabled={savingSampleId === sample.id}
+                        onClick={() => void handleSampleSave(sample.id)}
+                        type="button"
+                      >
+                        {savingSampleId === sample.id ? 'Saving...' : 'Save sample'}
                       </PrimaryButton>
                     </div>
                   </div>
@@ -1176,9 +1126,8 @@ function SendSamplePage({ search }: { search: string }) {
 
   const [form, setForm] = useState({
     deliveryMode: 'link' as DeliveryMode,
-    includeTranscript: true,
     message:
-      'Thanks for your interest in Bangla Voice AI. I have attached your requested sample and a transcript below.',
+      'Thanks for your interest in Bangla Voice AI. I have attached your requested sample below.',
     recipientEmail: '',
     requestId: '',
     subject: 'Your Bangla AI voice sample',
@@ -1256,7 +1205,6 @@ function SendSamplePage({ search }: { search: string }) {
       const payload = await apiRequest<{ message: string }>('/api/admin/send-sample', {
         body: JSON.stringify({
           deliveryMode: form.deliveryMode,
-          includeTranscript: form.includeTranscript,
           message: form.message,
           recipientEmail: form.recipientEmail,
           requestId: Number(form.requestId),
@@ -1279,7 +1227,7 @@ function SendSamplePage({ search }: { search: string }) {
       <PageHeading
         eyebrow="Delivery"
         title="Send sample"
-        description="Choose a request, select a voice sample, and deliver the transcript and audio through SMTP."
+        description="Choose a request, select a voice sample, and deliver the audio through SMTP."
       />
 
       {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
@@ -1355,20 +1303,6 @@ function SendSamplePage({ search }: { search: string }) {
                   value={form.message}
                 />
               </FieldLabel>
-            </div>
-
-            <div className="lg:col-span-2">
-              <label className="flex items-center gap-3 rounded-2xl border border-[#eadfce] bg-[#fbf7f1] px-4 py-3 text-sm text-[#5d534b]">
-                <input
-                  checked={form.includeTranscript}
-                  className="h-4 w-4 accent-[#ae6c4a]"
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, includeTranscript: event.target.checked }))
-                  }
-                  type="checkbox"
-                />
-                Include the saved Bangla transcript in the email body
-              </label>
             </div>
 
             <div className="lg:col-span-2">

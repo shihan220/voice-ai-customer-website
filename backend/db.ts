@@ -22,7 +22,6 @@ export type VoiceCardRecord = {
 };
 
 export type SampleRequestStatus = 'new' | 'reviewing' | 'sample_ready' | 'sent' | 'archived';
-export type TranscriptStatus = 'pending' | 'completed' | 'failed' | 'skipped';
 export type EmailLogStatus = 'pending' | 'sent' | 'failed';
 
 export type SampleRequestRecord = {
@@ -51,9 +50,6 @@ export type VoiceSampleRecord = {
   media_path: string;
   mime_type: string;
   file_size_bytes: number;
-  transcript_text: string | null;
-  transcript_status: TranscriptStatus;
-  transcript_error: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -65,7 +61,6 @@ export type SampleEmailLogRecord = {
   recipient_email: string;
   subject: string;
   message: string;
-  include_transcript: boolean;
   delivery_mode: 'attachment' | 'link';
   status: EmailLogStatus;
   error_message: string | null;
@@ -129,10 +124,6 @@ export async function ensureSchema() {
       media_path TEXT NOT NULL,
       mime_type TEXT NOT NULL,
       file_size_bytes BIGINT NOT NULL,
-      transcript_text TEXT,
-      transcript_status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (transcript_status IN ('pending', 'completed', 'failed', 'skipped')),
-      transcript_error TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -144,6 +135,15 @@ export async function ensureSchema() {
   `);
 
   await pool.query(`
+    ALTER TABLE voice_samples
+      DROP COLUMN IF EXISTS transcript_bn,
+      DROP COLUMN IF EXISTS transcript_en,
+      DROP COLUMN IF EXISTS transcript_status,
+      DROP COLUMN IF EXISTS transcript_error,
+      DROP COLUMN IF EXISTS transcribed_at;
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS sample_email_logs (
       id BIGSERIAL PRIMARY KEY,
       request_id BIGINT REFERENCES sample_requests (id) ON DELETE SET NULL,
@@ -151,7 +151,6 @@ export async function ensureSchema() {
       recipient_email TEXT NOT NULL,
       subject TEXT NOT NULL,
       message TEXT NOT NULL,
-      include_transcript BOOLEAN NOT NULL DEFAULT FALSE,
       delivery_mode TEXT NOT NULL DEFAULT 'link'
         CHECK (delivery_mode IN ('attachment', 'link')),
       status TEXT NOT NULL DEFAULT 'pending'
@@ -165,5 +164,10 @@ export async function ensureSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_sample_email_logs_request_id_created_at
       ON sample_email_logs (request_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    ALTER TABLE sample_email_logs
+      DROP COLUMN IF EXISTS include_transcript;
   `);
 }
