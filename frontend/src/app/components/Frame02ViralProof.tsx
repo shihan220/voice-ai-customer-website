@@ -11,6 +11,20 @@ type VoiceCard = {
   order: number;
 };
 
+type VoiceApiResponseCard = {
+  audioFile?: string | null;
+  audioUrl?: string | null;
+  duration?: number | string | null;
+  id?: number | string | null;
+  isActive?: boolean | null;
+  name?: string | null;
+  order?: number | string | null;
+  scriptText?: string | null;
+  script_text?: string | null;
+  waveSeed?: number | string | null;
+  wave_seed?: number | string | null;
+};
+
 const fallbackVoices: VoiceCard[] = [
   {
     id: 1,
@@ -74,8 +88,49 @@ function buildWaveform(seed: number, index: number) {
   });
 }
 
+function normalizeVoiceCard(voice: VoiceApiResponseCard): VoiceCard | null {
+  const id = Number(voice.id);
+  const duration = Number(voice.duration ?? 0);
+  const order = Number(voice.order ?? 0);
+  const waveSeed = Number(voice.waveSeed ?? voice.wave_seed ?? 42);
+  const name = typeof voice.name === 'string' ? voice.name.trim() : '';
+  const scriptTextCandidate = voice.scriptText ?? voice.script_text;
+  const scriptText = typeof scriptTextCandidate === 'string' ? scriptTextCandidate.trim() : '';
+
+  if (!Number.isFinite(id) || !name || !scriptText) {
+    return null;
+  }
+
+  return {
+    id,
+    name,
+    scriptText,
+    audioUrl: typeof voice.audioUrl === 'string' && voice.audioUrl.trim() ? voice.audioUrl : null,
+    duration: Number.isFinite(duration) && duration > 0 ? duration : 2,
+    waveSeed: Number.isFinite(waveSeed) ? waveSeed : 42,
+    order: Number.isFinite(order) ? order : 0,
+  };
+}
+
+function normalizeVoiceCards(input: unknown): VoiceCard[] {
+  if (!Array.isArray(input)) return [];
+
+  const voices = input
+    .map((voice) => normalizeVoiceCard(voice as VoiceApiResponseCard))
+    .filter((voice): voice is VoiceCard => Boolean(voice))
+    .sort((left, right) => left.order - right.order || left.id - right.id);
+
+  const seenIds = new Set<number>();
+  return voices.filter((voice) => {
+    if (seenIds.has(voice.id)) return false;
+    seenIds.add(voice.id);
+    return true;
+  });
+}
+
 export function Frame02ViralProof() {
   const [voices, setVoices] = useState<VoiceCard[]>(fallbackVoices);
+  const [voiceSource, setVoiceSource] = useState<'api' | 'fallback'>('fallback');
   const [activeVoiceId, setActiveVoiceId] = useState<number | null>(null);
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [isCarouselPaused, setIsCarouselPaused] = useState(false);
@@ -90,16 +145,23 @@ export function Frame02ViralProof() {
         if (!response.ok) {
           throw new Error(`Voice API returned ${response.status}`);
         }
-        return response.json() as Promise<{ voices?: VoiceCard[] }>;
+        return response.json() as Promise<{ voices?: VoiceApiResponseCard[] }>;
       })
       .then((data) => {
-        if (isMounted && data.voices?.length) {
-          setVoices(data.voices);
+        const normalizedVoices = normalizeVoiceCards(data.voices);
+
+        if (isMounted && normalizedVoices.length) {
+          setVoices(normalizedVoices);
+          setVoiceSource('api');
+        } else if (isMounted) {
+          setVoices(fallbackVoices);
+          setVoiceSource('fallback');
         }
       })
       .catch(() => {
         if (isMounted) {
           setVoices(fallbackVoices);
+          setVoiceSource('fallback');
         }
       });
 
@@ -116,6 +178,10 @@ export function Frame02ViralProof() {
   }, []);
 
   const visibleVoices = useMemo(() => voices.slice(0, 5), [voices]);
+  const apiAudioReadyCount = useMemo(
+    () => visibleVoices.filter((voice) => Boolean(voice.audioUrl)).length,
+    [visibleVoices],
+  );
 
   const goToSlide = useCallback((targetIndex: number, behavior: ScrollBehavior = 'smooth') => {
     if (!visibleVoices.length) return;
@@ -291,7 +357,27 @@ export function Frame02ViralProof() {
 
         <div className="min-w-0">
           <div className="mb-10 min-w-0 overflow-hidden">
-            <div className="mb-4 flex justify-end gap-2">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div
+                className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.12em]"
+                style={{
+                  backgroundColor: voiceSource === 'api' ? '#E3DFD4' : '#F6F2EA',
+                  borderColor: '#D2CCBE',
+                  color: voiceSource === 'api' ? '#AE6C4A' : '#373A40',
+                }}
+              >
+                <span>{voiceSource === 'api' ? 'Live API feed' : 'Fallback samples'}</span>
+                <span style={{ opacity: 0.45 }}>•</span>
+                <span>{visibleVoices.length} cards</span>
+                {voiceSource === 'api' ? (
+                  <>
+                    <span style={{ opacity: 0.45 }}>•</span>
+                    <span>{apiAudioReadyCount} audio ready</span>
+                  </>
+                ) : null}
+              </div>
+
+              <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => goToSlide(carouselIndex - 1)}
@@ -310,6 +396,7 @@ export function Frame02ViralProof() {
               >
                 <ChevronRight className="h-5 w-5" />
               </button>
+              </div>
             </div>
 
             <div
