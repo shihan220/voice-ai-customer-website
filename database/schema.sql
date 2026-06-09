@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS voice_cards (
   id INTEGER PRIMARY KEY,
   name VARCHAR(100) NOT NULL,
   script_text TEXT NOT NULL,
+  english_meaning TEXT,
   audio_file VARCHAR(255),
   duration DOUBLE PRECISION NOT NULL DEFAULT 4.0,
   wave_seed INTEGER NOT NULL DEFAULT 42,
@@ -13,6 +14,9 @@ CREATE TABLE IF NOT EXISTS voice_cards (
 
 CREATE INDEX IF NOT EXISTS idx_voice_cards_active_order
   ON voice_cards (is_active, display_order, id);
+
+ALTER TABLE voice_cards
+  ADD COLUMN IF NOT EXISTS english_meaning TEXT;
 
 CREATE TABLE IF NOT EXISTS sample_requests (
   id BIGSERIAL PRIMARY KEY,
@@ -62,6 +66,7 @@ CREATE TABLE IF NOT EXISTS sample_email_logs (
   id BIGSERIAL PRIMARY KEY,
   request_id BIGINT REFERENCES sample_requests (id) ON DELETE SET NULL,
   voice_sample_id BIGINT REFERENCES voice_samples (id) ON DELETE SET NULL,
+  voice_card_id INTEGER REFERENCES voice_cards (id) ON DELETE SET NULL,
   recipient_email TEXT NOT NULL,
   subject TEXT NOT NULL,
   message TEXT NOT NULL,
@@ -76,6 +81,9 @@ CREATE TABLE IF NOT EXISTS sample_email_logs (
 
 CREATE INDEX IF NOT EXISTS idx_sample_email_logs_request_id_created_at
   ON sample_email_logs (request_id, created_at DESC);
+
+ALTER TABLE sample_email_logs
+  ADD COLUMN IF NOT EXISTS voice_card_id INTEGER REFERENCES voice_cards (id) ON DELETE SET NULL;
 
 ALTER TABLE sample_email_logs
   DROP COLUMN IF EXISTS include_transcript;

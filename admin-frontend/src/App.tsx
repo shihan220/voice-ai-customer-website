@@ -35,19 +35,17 @@ type SampleRequest = {
   userAgent: string | null;
 };
 
-type VoiceSample = {
-  audioUrl: string;
-  clientName?: string | null;
-  createdAt: string;
-  fileSizeBytes: number;
+type PublicVoiceCard = {
+  audioFile: string | null;
+  audioUrl: string | null;
+  duration: number;
+  englishMeaning: string | null;
   id: number;
-  mediaPath: string;
-  mimeType: string;
-  originalFilename: string;
-  requestId: number | null;
-  storedFilename: string;
-  title: string;
-  updatedAt: string;
+  isActive: boolean;
+  name: string;
+  order: number;
+  scriptText: string;
+  waveSeed: number;
 };
 
 type EmailLog = {
@@ -63,6 +61,7 @@ type EmailLog = {
   sentAt: string | null;
   status: 'pending' | 'sent' | 'failed';
   subject: string;
+  voiceCardId: number | null;
   voiceSampleId: number | null;
 };
 
@@ -80,7 +79,6 @@ type DashboardPayload = {
 type SampleRequestDetailPayload = {
   emailLogs: EmailLog[];
   request: SampleRequest;
-  voiceSamples: VoiceSample[];
 };
 
 type AppLocation = {
@@ -88,14 +86,28 @@ type AppLocation = {
   search: string;
 };
 
+type VoiceCardDraft = {
+  audioFile: string;
+  audioUrl: string | null;
+  duration: string;
+  englishMeaning: string;
+  id: number | null;
+  isActive: boolean;
+  name: string;
+  order: string;
+  scriptText: string;
+  waveSeed: string;
+};
+
 const protectedRoutes = new Set([
   '/admin/dashboard',
   '/admin/sample-requests',
-  '/admin/voice-samples',
+  '/admin/voice-cards',
   '/admin/send-sample',
 ]);
 
 const requestStatuses: SampleRequestStatus[] = ['new', 'reviewing', 'sample_ready', 'sent', 'archived'];
+
 function readLocation(): AppLocation {
   return {
     pathname: window.location.pathname,
@@ -153,20 +165,42 @@ function formatDate(value: string | null) {
   }).format(new Date(value));
 }
 
-function formatFileSize(bytes: number) {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
-
 function statusLabel(value: string) {
   return value.replace(/_/g, ' ');
 }
 
 function cx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ');
+}
+
+function createEmptyVoiceCardDraft(seed?: { order?: number; waveSeed?: number }): VoiceCardDraft {
+  return {
+    audioFile: '',
+    audioUrl: null,
+    duration: '8.00',
+    englishMeaning: '',
+    id: null,
+    isActive: true,
+    name: '',
+    order: String(seed?.order ?? 0),
+    scriptText: '',
+    waveSeed: String(seed?.waveSeed ?? 42),
+  };
+}
+
+function toVoiceCardDraft(card: PublicVoiceCard): VoiceCardDraft {
+  return {
+    audioFile: card.audioFile ?? '',
+    audioUrl: card.audioUrl,
+    duration: String(card.duration),
+    englishMeaning: card.englishMeaning ?? '',
+    id: card.id,
+    isActive: card.isActive,
+    name: card.name,
+    order: String(card.order),
+    scriptText: card.scriptText,
+    waveSeed: String(card.waveSeed),
+  };
 }
 
 function App() {
@@ -226,6 +260,11 @@ function App() {
       return;
     }
 
+    if (currentPath === '/admin/voice-samples') {
+      navigate('/admin/voice-cards', true);
+      return;
+    }
+
     if (!session.authenticated && isProtectedRoute) {
       navigate('/admin/login', true);
       return;
@@ -272,7 +311,7 @@ function App() {
     >
       {currentPath === '/admin/dashboard' ? <DashboardPage /> : null}
       {currentPath === '/admin/sample-requests' ? <SampleRequestsPage onNavigate={navigate} /> : null}
-      {currentPath === '/admin/voice-samples' ? <VoiceSamplesPage /> : null}
+      {currentPath === '/admin/voice-cards' ? <VoiceCardsPage /> : null}
       {currentPath === '/admin/send-sample' ? <SendSamplePage search={location.search} /> : null}
       {!protectedRoutes.has(currentPath) ? <DashboardPage /> : null}
     </AdminShell>
@@ -311,12 +350,12 @@ function LoginPage({
     setMessage('');
 
     try {
-      const session = await apiRequest<AdminSession>('/api/admin/login', {
+      const nextSession = await apiRequest<AdminSession>('/api/admin/login', {
         body: JSON.stringify({ email, password }),
         method: 'POST',
       });
 
-      onLoggedIn(session);
+      onLoggedIn(nextSession);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Login failed.');
     } finally {
@@ -332,7 +371,7 @@ function LoginPage({
             Admin Access
           </div>
           <h1 className="mt-6 max-w-md text-4xl font-bold leading-tight text-[#2f343b]">
-            Manage requests, voice samples, and outbound sample emails.
+            Manage requests, public voice cards, and outbound sample emails.
           </h1>
           <p className="mt-4 max-w-lg text-sm leading-7 text-[#64584f] sm:text-base">
             This workspace is connected to the existing PostgreSQL data and the same media pipeline used by the public
@@ -340,7 +379,7 @@ function LoginPage({
           </p>
           <div className="mt-10 grid gap-4 sm:grid-cols-3">
             <InfoChip label="Protected routes" value="/admin/*" />
-            <InfoChip label="Media flow" value="/media/voices/..." />
+            <InfoChip label="Public voices" value="voice_cards" />
             <InfoChip label="Email flow" value="SMTP + logs" />
           </div>
         </section>
@@ -402,7 +441,7 @@ function AdminShell({
   const links = [
     { href: '/admin/dashboard', label: 'Dashboard' },
     { href: '/admin/sample-requests', label: 'Sample Requests' },
-    { href: '/admin/voice-samples', label: 'Voice Samples' },
+    { href: '/admin/voice-cards', label: 'Public Voice Cards' },
     { href: '/admin/send-sample', label: 'Send Sample' },
   ];
 
@@ -488,7 +527,7 @@ function DashboardPage() {
       <PageHeading
         eyebrow="Overview"
         title="Admin dashboard"
-        description="Track incoming requests, ready samples, and sent client emails without touching the public site."
+        description="Track incoming requests, website voice cards, and sent client emails without touching the public frontend design."
       />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -550,7 +589,7 @@ function DashboardPage() {
                     <StatusBadge status={email.status} />
                   </div>
                   <div className="mt-3 flex flex-wrap gap-3 text-xs text-[#7a6f66]">
-                    <span>{email.sampleTitle ?? 'Sample not linked'}</span>
+                    <span>{email.sampleTitle ?? 'Voice card not linked'}</span>
                     <span>{email.deliveryMode}</span>
                     <span>{formatDate(email.sentAt ?? email.createdAt)}</span>
                   </div>
@@ -812,23 +851,6 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
                 </SecondaryButton>
               </div>
 
-              <PanelInset title="Linked voice samples">
-                {detail.voiceSamples.length === 0 ? (
-                  <EmptyState label="No voice sample is linked to this request yet." compact />
-                ) : (
-                  <div className="space-y-3">
-                    {detail.voiceSamples.map((sample) => (
-                      <div key={sample.id} className="rounded-2xl border border-[#eadfce] bg-[#fcfaf6] p-3">
-                        <div className="font-semibold text-[#2f343b]">{sample.title}</div>
-                        <div className="mt-1 text-xs text-[#7c7168]">
-                          {sample.originalFilename} • {formatDate(sample.createdAt)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </PanelInset>
-
               <PanelInset title="Email history">
                 {detail.emailLogs.length === 0 ? (
                   <EmptyState label="No email has been sent for this request yet." compact />
@@ -840,7 +862,9 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
                           <div className="font-semibold text-[#2f343b]">{email.subject}</div>
                           <StatusBadge status={email.status} />
                         </div>
-                        <div className="mt-1 text-xs text-[#7c7168]">{formatDate(email.sentAt ?? email.createdAt)}</div>
+                        <div className="mt-1 text-xs text-[#7c7168]">
+                          {email.sampleTitle ?? 'Voice card not linked'} • {formatDate(email.sentAt ?? email.createdAt)}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -854,258 +878,355 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
   );
 }
 
-function VoiceSamplesPage() {
-  const [requests, setRequests] = useState<SampleRequest[]>([]);
-  const [samples, setSamples] = useState<VoiceSample[]>([]);
-  const [drafts, setDrafts] = useState<Record<number, VoiceSample>>({});
+function VoiceCardsPage() {
+  const [voiceCards, setVoiceCards] = useState<PublicVoiceCard[]>([]);
+  const [selectedId, setSelectedId] = useState<number | 'new' | null>(null);
+  const [draft, setDraft] = useState<VoiceCardDraft>(createEmptyVoiceCardDraft());
+  const [audioFile, setAudioFile] = useState<File | null>(null);
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [savingSampleId, setSavingSampleId] = useState<number | null>(null);
-  const [uploadMessage, setUploadMessage] = useState('');
-  const [uploadMessageTone, setUploadMessageTone] = useState<'success' | 'error'>('success');
-  const [uploadForm, setUploadForm] = useState({
-    file: null as File | null,
-    requestId: '',
-    title: '',
-  });
+  const [saving, setSaving] = useState(false);
+  const [uploadingAudio, setUploadingAudio] = useState(false);
 
-  const loadData = async () => {
+  const loadVoiceCards = async () => {
     setLoading(true);
     setError('');
 
     try {
-      const [requestsPayload, samplesPayload] = await Promise.all([
-        apiRequest<{ requests: SampleRequest[] }>('/api/admin/sample-requests'),
-        apiRequest<{ samples: VoiceSample[] }>('/api/admin/voice-samples'),
-      ]);
+      const payload = await apiRequest<{ voiceCards: PublicVoiceCard[] }>('/api/admin/voice-cards');
+      setVoiceCards(payload.voiceCards);
 
-      setRequests(requestsPayload.requests);
-      setSamples(samplesPayload.samples);
-      setDrafts(
-        Object.fromEntries(
-          samplesPayload.samples.map((sample) => [
-            sample.id,
-            {
-              ...sample,
-            },
-          ]),
-        ),
-      );
+      if (selectedId === 'new') {
+        setLoading(false);
+        return;
+      }
+
+      const firstCard = payload.voiceCards[0] ?? null;
+      const nextSelectedId =
+        selectedId && payload.voiceCards.some((card) => card.id === selectedId)
+          ? selectedId
+          : firstCard?.id ?? null;
+
+      setSelectedId(nextSelectedId);
+      setDraft(nextSelectedId ? toVoiceCardDraft(payload.voiceCards.find((card) => card.id === nextSelectedId) ?? firstCard!) : createEmptyVoiceCardDraft());
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to load voice samples.');
+      setError(error instanceof Error ? error.message : 'Failed to load public voice cards.');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    void loadData();
+    void loadVoiceCards();
   }, []);
 
-  const handleUpload = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    if (!uploadForm.file) {
-      setUploadMessageTone('error');
-      setUploadMessage('Choose an audio file before uploading.');
+  useEffect(() => {
+    if (!voiceCards.length && selectedId !== 'new') {
+      setDraft(createEmptyVoiceCardDraft());
       return;
     }
 
-    setUploading(true);
-    setUploadMessage('');
-    setUploadMessageTone('success');
+    if (selectedId === 'new') {
+      return;
+    }
+
+    const selectedCard = voiceCards.find((card) => card.id === selectedId) ?? voiceCards[0];
+    if (selectedCard) {
+      setDraft(toVoiceCardDraft(selectedCard));
+      setSelectedId(selectedCard.id);
+    }
+  }, [selectedId, voiceCards]);
+
+  const audioReadyCount = useMemo(() => voiceCards.filter((card) => Boolean(card.audioUrl)).length, [voiceCards]);
+
+  const startCreate = () => {
+    const nextOrder = voiceCards.length ? Math.max(...voiceCards.map((card) => card.order)) + 1 : 0;
+    const nextWaveSeed = voiceCards.length ? Math.max(...voiceCards.map((card) => card.waveSeed)) + 1 : 42;
+    setSelectedId('new');
+    setDraft(createEmptyVoiceCardDraft({ order: nextOrder, waveSeed: nextWaveSeed }));
+    setAudioFile(null);
+    setError('');
+    setMessage('');
+  };
+
+  const handleSelectCard = (card: PublicVoiceCard) => {
+    setSelectedId(card.id);
+    setDraft(toVoiceCardDraft(card));
+    setAudioFile(null);
+    setError('');
+    setMessage('');
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError('');
+    setMessage('');
+
+    const payload = {
+      duration: Number(draft.duration),
+      englishMeaning: draft.englishMeaning,
+      isActive: draft.isActive,
+      name: draft.name,
+      order: Number(draft.order),
+      scriptText: draft.scriptText,
+      waveSeed: Number(draft.waveSeed),
+    };
+
+    try {
+      if (selectedId === 'new' || draft.id === null) {
+        const response = await apiRequest<{ voiceCard: PublicVoiceCard }>('/api/admin/voice-cards', {
+          body: JSON.stringify(payload),
+          method: 'POST',
+        });
+
+        const nextCard = response.voiceCard;
+        setVoiceCards((current) => [...current, nextCard].sort((a, b) => a.order - b.order || a.id - b.id));
+        setSelectedId(nextCard.id);
+        setDraft(toVoiceCardDraft(nextCard));
+        setMessage('Public voice card created.');
+      } else {
+        const response = await apiRequest<{ voiceCard: PublicVoiceCard }>(`/api/admin/voice-cards/${draft.id}`, {
+          body: JSON.stringify(payload),
+          method: 'PATCH',
+        });
+
+        const nextCard = response.voiceCard;
+        setVoiceCards((current) =>
+          current
+            .map((card) => (card.id === nextCard.id ? nextCard : card))
+            .sort((a, b) => a.order - b.order || a.id - b.id),
+        );
+        setDraft(toVoiceCardDraft(nextCard));
+        setMessage('Public voice card saved.');
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to save the public voice card.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAudioUpload = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!draft.id) {
+      setError('Save the voice card first, then upload the public audio file.');
+      return;
+    }
+
+    if (!audioFile) {
+      setError('Choose an audio file before uploading.');
+      return;
+    }
+
+    setUploadingAudio(true);
+    setError('');
+    setMessage('');
 
     try {
       const formData = new FormData();
-      formData.append('audio', uploadForm.file);
-      formData.append('title', uploadForm.title);
-      formData.append('requestId', uploadForm.requestId);
+      formData.append('audio', audioFile);
+      formData.append('name', draft.name);
+      formData.append('filenameStem', draft.name);
 
-      const payload = await apiRequest<{ sample: VoiceSample }>('/api/admin/voice-samples', {
+      const response = await apiRequest<{ voiceCard: PublicVoiceCard }>(`/api/admin/voice-cards/${draft.id}/audio`, {
         body: formData,
         method: 'POST',
       });
 
-      setUploadForm({
-        file: null,
-        requestId: '',
-        title: '',
-      });
-      setUploadMessage('Voice sample uploaded successfully.');
-      setUploadMessageTone('success');
-      void loadData();
+      const nextCard = response.voiceCard;
+      setVoiceCards((current) =>
+        current
+          .map((card) => (card.id === nextCard.id ? nextCard : card))
+          .sort((a, b) => a.order - b.order || a.id - b.id),
+      );
+      setDraft(toVoiceCardDraft(nextCard));
+      setAudioFile(null);
+      setMessage('Public audio file updated.');
     } catch (error) {
-      setUploadMessageTone('error');
-      setUploadMessage(error instanceof Error ? error.message : 'Upload failed.');
+      setError(error instanceof Error ? error.message : 'Failed to upload public audio.');
     } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleSampleSave = async (sampleId: number) => {
-    const draft = drafts[sampleId];
-
-    if (!draft) {
-      return;
-    }
-
-    setError('');
-    setSavingSampleId(sampleId);
-
-    try {
-      const payload = await apiRequest<{ sample: VoiceSample }>(`/api/admin/voice-samples/${sampleId}`, {
-        body: JSON.stringify({
-          requestId: draft.requestId ?? '',
-          title: draft.title,
-        }),
-        method: 'PATCH',
-      });
-
-      setSamples((current) => current.map((sample) => (sample.id === sampleId ? payload.sample : sample)));
-      setDrafts((current) => ({
-        ...current,
-        [sampleId]: payload.sample,
-      }));
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to update the voice sample.');
-    } finally {
-      setSavingSampleId(null);
+      setUploadingAudio(false);
     }
   };
 
   return (
     <section className="space-y-6">
       <PageHeading
-        eyebrow="Audio"
-        title="Voice samples"
-        description="Upload client-ready audio, keep titles organized, and link samples to incoming requests."
+        eyebrow="Website voices"
+        title="Public voice cards"
+        description="Manage the live website voice cards directly from PostgreSQL. Changes here flow straight into /api/voices."
       />
 
       {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+      {message ? <InlineMessage tone="success">{message}</InlineMessage> : null}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-        <Panel title="Upload voice sample" subtitle="Supported formats: mp3, wav, m4a, webm, mp4 up to 25MB">
-          <form className="space-y-4" onSubmit={handleUpload}>
-            <FieldLabel label="Sample title">
-              <TextInput
-                onChange={(event) => setUploadForm((current) => ({ ...current, title: event.target.value }))}
-                placeholder="Demo sample for ACME campaign"
-                required
-                value={uploadForm.title}
-              />
-            </FieldLabel>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="inline-flex rounded-full border border-[#e3d7c8] bg-[#f8f2ea] px-3 py-1 text-xs font-semibold text-[#7a5f4f]">
+          {voiceCards.length} cards
+        </div>
+        <div className="inline-flex rounded-full border border-[#e3d7c8] bg-[#f8f2ea] px-3 py-1 text-xs font-semibold text-[#7a5f4f]">
+          {audioReadyCount} audio ready
+        </div>
+        <PrimaryButton onClick={startCreate} type="button">
+          Add voice card
+        </PrimaryButton>
+      </div>
 
-            <FieldLabel label="Link to request">
-              <SelectInput
-                onChange={(event) => setUploadForm((current) => ({ ...current, requestId: event.target.value }))}
-                value={uploadForm.requestId}
-              >
-                <option value="">No request linked</option>
-                {requests.map((request) => (
-                  <option key={request.id} value={String(request.id)}>
-                    {request.clientName} • {request.email}
-                  </option>
-                ))}
-              </SelectInput>
-            </FieldLabel>
-
-            <FieldLabel label="Audio file">
-              <TextInput
-                accept=".mp3,.wav,.m4a,.webm,.mp4,audio/*,video/mp4"
-                onChange={(event) =>
-                  setUploadForm((current) => ({ ...current, file: event.target.files?.[0] ?? null }))
-                }
-                type="file"
-              />
-            </FieldLabel>
-
-            {uploadMessage ? <InlineMessage tone={uploadMessageTone}>{uploadMessage}</InlineMessage> : null}
-
-            <PrimaryButton className="w-full justify-center" disabled={uploading} type="submit">
-              {uploading ? 'Uploading...' : 'Upload sample'}
-            </PrimaryButton>
-          </form>
-        </Panel>
-
-        <Panel title="Saved samples" subtitle="Edit sample titles and linked requests before sending a client email">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,440px)]">
+        <Panel title="Website voice card list" subtitle="Order, status, and audio readiness for every public card">
           {loading ? (
-            <PageLoading label="Loading samples..." />
-          ) : samples.length === 0 ? (
-            <EmptyState label="No voice samples have been uploaded yet." />
+            <PageLoading label="Loading public voice cards..." />
+          ) : voiceCards.length === 0 ? (
+            <EmptyState label="No public voice cards are configured yet." />
           ) : (
-            <div className="space-y-4">
-              {samples.map((sample) => {
-                const draft = drafts[sample.id] ?? sample;
-
-                return (
-                  <div key={sample.id} className="rounded-[24px] border border-[#eadfce] bg-white/92 p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-[#2f343b]">{sample.title}</div>
-                        <div className="mt-1 text-xs text-[#7b7068]">
-                          {sample.clientName ?? 'Unlinked'} • {formatFileSize(sample.fileSizeBytes)} • {formatDate(sample.createdAt)}
-                        </div>
+            <div className="space-y-3">
+              {voiceCards.map((card) => (
+                <button
+                  key={card.id}
+                  className={cx(
+                    'w-full rounded-2xl border p-4 text-left transition',
+                    selectedId === card.id
+                      ? 'border-[#ae6c4a] bg-[#fff7f1] shadow-[0_14px_40px_rgba(174,108,74,0.14)]'
+                      : 'border-[#eadfce] bg-white/90 hover:border-[#d9c2ad]',
+                  )}
+                  onClick={() => handleSelectCard(card)}
+                  type="button"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#a96544]">
+                        Order {card.order}
                       </div>
+                      <div className="mt-1 font-semibold text-[#2f343b]">{card.name}</div>
+                      <div className="mt-1 text-sm text-[#6e6259]">{card.scriptText}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <StatusBadge status={card.isActive ? 'active' : 'inactive'} />
                       <span className="inline-flex rounded-full border border-[#e3d7c8] bg-[#f8f2ea] px-3 py-1 text-xs font-semibold text-[#7a5f4f]">
-                        {draft.requestId ? 'Linked' : 'Unlinked'}
+                        {card.audioUrl ? 'Audio ready' : 'No audio'}
                       </span>
                     </div>
-
-                    <audio className="mt-4 w-full" controls preload="none" src={sample.audioUrl} />
-
-                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                      <FieldLabel label="Title">
-                        <TextInput
-                          onChange={(event) =>
-                            setDrafts((current) => ({
-                              ...current,
-                              [sample.id]: {
-                                ...draft,
-                                title: event.target.value,
-                              },
-                            }))
-                          }
-                          value={draft.title}
-                        />
-                      </FieldLabel>
-                      <FieldLabel label="Linked request">
-                        <SelectInput
-                          onChange={(event) =>
-                            setDrafts((current) => ({
-                              ...current,
-                              [sample.id]: {
-                                ...draft,
-                                requestId: event.target.value ? Number(event.target.value) : null,
-                              },
-                            }))
-                          }
-                          value={draft.requestId ? String(draft.requestId) : ''}
-                        >
-                          <option value="">No request linked</option>
-                          {requests.map((request) => (
-                            <option key={request.id} value={String(request.id)}>
-                              {request.clientName}
-                            </option>
-                          ))}
-                        </SelectInput>
-                      </FieldLabel>
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      <PrimaryButton
-                        disabled={savingSampleId === sample.id}
-                        onClick={() => void handleSampleSave(sample.id)}
-                        type="button"
-                      >
-                        {savingSampleId === sample.id ? 'Saving...' : 'Save sample'}
-                      </PrimaryButton>
-                    </div>
                   </div>
-                );
-              })}
+                </button>
+              ))}
             </div>
           )}
+        </Panel>
+
+        <Panel
+          title={selectedId === 'new' || draft.id === null ? 'Create public voice card' : 'Edit public voice card'}
+          subtitle="Update the live voice card metadata and replace its public audio file when needed"
+        >
+          <div className="space-y-4">
+            <FieldLabel label="Display name">
+              <TextInput
+                onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+                placeholder="AI Self Service Agent"
+                value={draft.name}
+              />
+            </FieldLabel>
+
+            <FieldLabel label="Bangla script/caption">
+              <TextAreaInput
+                onChange={(event) => setDraft((current) => ({ ...current, scriptText: event.target.value }))}
+                rows={4}
+                value={draft.scriptText}
+              />
+            </FieldLabel>
+
+            <FieldLabel label="English meaning">
+              <TextAreaInput
+                onChange={(event) => setDraft((current) => ({ ...current, englishMeaning: event.target.value }))}
+                rows={3}
+                value={draft.englishMeaning}
+              />
+            </FieldLabel>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <FieldLabel label="Duration (seconds)">
+                <TextInput
+                  onChange={(event) => setDraft((current) => ({ ...current, duration: event.target.value }))}
+                  step="0.01"
+                  type="number"
+                  value={draft.duration}
+                />
+              </FieldLabel>
+
+              <FieldLabel label="Display order">
+                <TextInput
+                  onChange={(event) => setDraft((current) => ({ ...current, order: event.target.value }))}
+                  min="0"
+                  step="1"
+                  type="number"
+                  value={draft.order}
+                />
+              </FieldLabel>
+
+              <FieldLabel label="Wave seed">
+                <TextInput
+                  onChange={(event) => setDraft((current) => ({ ...current, waveSeed: event.target.value }))}
+                  step="1"
+                  type="number"
+                  value={draft.waveSeed}
+                />
+              </FieldLabel>
+            </div>
+
+            <label className="flex items-center gap-3 rounded-2xl border border-[#e3d7c8] bg-[#fbf7f1] px-4 py-3 text-sm font-semibold text-[#5a514a]">
+              <input
+                checked={draft.isActive}
+                className="h-4 w-4 accent-[#ae6c4a]"
+                onChange={(event) => setDraft((current) => ({ ...current, isActive: event.target.checked }))}
+                type="checkbox"
+              />
+              Active on public website
+            </label>
+
+            <div className="rounded-[24px] border border-[#eadfce] bg-[#fcfaf6] p-4">
+              <div className="text-sm font-semibold text-[#2f343b]">Current public audio</div>
+              <div className="mt-1 text-xs text-[#7c7168]">{draft.audioFile || 'No public audio file linked yet.'}</div>
+              {draft.audioUrl ? <audio className="mt-4 w-full" controls preload="none" src={draft.audioUrl} /> : null}
+
+              <form className="mt-4 space-y-3" onSubmit={handleAudioUpload}>
+                <FieldLabel label="Replace audio file">
+                  <TextInput
+                    accept=".mp3,.wav,.m4a,.webm,.mp4,audio/*,video/mp4"
+                    onChange={(event) => setAudioFile(event.target.files?.[0] ?? null)}
+                    type="file"
+                  />
+                </FieldLabel>
+
+                <PrimaryButton disabled={uploadingAudio || draft.id === null} type="submit">
+                  {uploadingAudio ? 'Uploading...' : 'Upload public audio'}
+                </PrimaryButton>
+              </form>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <PrimaryButton disabled={saving} onClick={handleSave} type="button">
+                {saving ? 'Saving...' : draft.id === null ? 'Create voice card' : 'Save changes'}
+              </PrimaryButton>
+              <SecondaryButton
+                onClick={() => {
+                  if (draft.id === null) {
+                    setDraft(createEmptyVoiceCardDraft());
+                    setSelectedId(null);
+                    return;
+                  }
+
+                  const currentCard = voiceCards.find((card) => card.id === draft.id);
+                  if (currentCard) {
+                    setDraft(toVoiceCardDraft(currentCard));
+                  }
+                }}
+                type="button"
+              >
+                Reset
+              </SecondaryButton>
+            </div>
+          </div>
         </Panel>
       </div>
     </section>
@@ -1114,7 +1235,7 @@ function VoiceSamplesPage() {
 
 function SendSamplePage({ search }: { search: string }) {
   const [requests, setRequests] = useState<SampleRequest[]>([]);
-  const [samples, setSamples] = useState<VoiceSample[]>([]);
+  const [voiceCards, setVoiceCards] = useState<PublicVoiceCard[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -1126,24 +1247,24 @@ function SendSamplePage({ search }: { search: string }) {
 
   const [form, setForm] = useState({
     deliveryMode: 'link' as DeliveryMode,
-    message:
-      'Thanks for your interest in Bangla Voice AI. I have attached your requested sample below.',
+    message: 'Thanks for your interest in Bangla Voice AI. I have attached your requested sample below.',
     recipientEmail: '',
     requestId: '',
     subject: 'Your Bangla AI voice sample',
-    voiceSampleId: '',
+    voiceCardId: '',
   });
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [requestsPayload, samplesPayload] = await Promise.all([
+        const [requestsPayload, voiceCardsPayload] = await Promise.all([
           apiRequest<{ requests: SampleRequest[] }>('/api/admin/sample-requests'),
-          apiRequest<{ samples: VoiceSample[] }>('/api/admin/voice-samples'),
+          apiRequest<{ voiceCards: PublicVoiceCard[] }>('/api/admin/voice-cards'),
         ]);
 
+        const audioReadyCards = voiceCardsPayload.voiceCards.filter((card) => Boolean(card.audioUrl));
         setRequests(requestsPayload.requests);
-        setSamples(samplesPayload.samples);
+        setVoiceCards(audioReadyCards);
 
         const initialRequestId =
           queryRequestId && requestsPayload.requests.some((request) => request.id === queryRequestId)
@@ -1153,14 +1274,13 @@ function SendSamplePage({ search }: { search: string }) {
               : '';
 
         const initialRequest = requestsPayload.requests.find((request) => String(request.id) === initialRequestId);
-        const matchingSample =
-          samplesPayload.samples.find((sample) => sample.requestId === initialRequest?.id) ?? samplesPayload.samples[0];
+        const initialVoiceCard = audioReadyCards[0];
 
         setForm((current) => ({
           ...current,
           recipientEmail: initialRequest?.email ?? current.recipientEmail,
           requestId: initialRequestId,
-          voiceSampleId: matchingSample ? String(matchingSample.id) : '',
+          voiceCardId: initialVoiceCard ? String(initialVoiceCard.id) : '',
         }));
       } catch (error) {
         setError(error instanceof Error ? error.message : 'Failed to load send-sample data.');
@@ -1185,16 +1305,6 @@ function SendSamplePage({ search }: { search: string }) {
     }
   }, [form.requestId, requests]);
 
-  const filteredSamples = useMemo(() => {
-    if (!form.requestId) {
-      return samples;
-    }
-
-    const requestId = Number(form.requestId);
-    const linkedSamples = samples.filter((sample) => sample.requestId === requestId);
-    return linkedSamples.length > 0 ? linkedSamples : samples;
-  }, [form.requestId, samples]);
-
   const handleSend = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSending(true);
@@ -1209,7 +1319,7 @@ function SendSamplePage({ search }: { search: string }) {
           recipientEmail: form.recipientEmail,
           requestId: Number(form.requestId),
           subject: form.subject,
-          voiceSampleId: Number(form.voiceSampleId),
+          voiceCardId: Number(form.voiceCardId),
         }),
         method: 'POST',
       });
@@ -1227,7 +1337,7 @@ function SendSamplePage({ search }: { search: string }) {
       <PageHeading
         eyebrow="Delivery"
         title="Send sample"
-        description="Choose a request, select a voice sample, and deliver the audio through SMTP."
+        description="Choose a request, select a public voice card, and deliver the website audio through SMTP."
       />
 
       {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
@@ -1236,8 +1346,8 @@ function SendSamplePage({ search }: { search: string }) {
       <Panel title="Compose client sample email" subtitle="Attachment and public-link delivery are both supported">
         {requests.length === 0 ? (
           <EmptyState label="You need at least one sample request before sending email." />
-        ) : samples.length === 0 ? (
-          <EmptyState label="You need at least one uploaded voice sample before sending email." />
+        ) : voiceCards.length === 0 ? (
+          <EmptyState label="You need at least one public voice card with audio before sending email." />
         ) : (
           <form className="grid gap-4 lg:grid-cols-2" onSubmit={handleSend}>
             <FieldLabel label="Sample request">
@@ -1253,14 +1363,14 @@ function SendSamplePage({ search }: { search: string }) {
               </SelectInput>
             </FieldLabel>
 
-            <FieldLabel label="Voice sample">
+            <FieldLabel label="Public voice card">
               <SelectInput
-                onChange={(event) => setForm((current) => ({ ...current, voiceSampleId: event.target.value }))}
-                value={form.voiceSampleId}
+                onChange={(event) => setForm((current) => ({ ...current, voiceCardId: event.target.value }))}
+                value={form.voiceCardId}
               >
-                {filteredSamples.map((sample) => (
-                  <option key={sample.id} value={String(sample.id)}>
-                    {sample.title}
+                {voiceCards.map((card) => (
+                  <option key={card.id} value={String(card.id)}>
+                    {card.name}
                   </option>
                 ))}
               </SelectInput>
@@ -1497,11 +1607,11 @@ function SecondaryButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
 
 function StatusBadge({ status }: { status: string }) {
   const tone =
-    status === 'sent'
+    status === 'sent' || status === 'active'
       ? 'border-[#cfe5d8] bg-[#eef9f2] text-[#2f6b4f]'
       : status === 'sample_ready' || status === 'completed'
         ? 'border-[#d9d7f8] bg-[#f2f0ff] text-[#5646b0]'
-        : status === 'failed'
+        : status === 'failed' || status === 'inactive'
           ? 'border-[#efc2bc] bg-[#fff2f0] text-[#9d564c]'
           : 'border-[#e3d7c8] bg-[#f8f2ea] text-[#7a5f4f]';
 

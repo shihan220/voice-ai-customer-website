@@ -5,6 +5,7 @@ type VoiceCard = {
   id: number;
   name: string;
   scriptText: string;
+  englishMeaning: string | null;
   audioUrl: string | null;
   duration: number;
   waveSeed: number;
@@ -15,6 +16,8 @@ type VoiceApiResponseCard = {
   audioFile?: string | null;
   audioUrl?: string | null;
   duration?: number | string | null;
+  englishMeaning?: string | null;
+  english_meaning?: string | null;
   id?: number | string | null;
   isActive?: boolean | null;
   name?: string | null;
@@ -28,58 +31,105 @@ type VoiceApiResponseCard = {
 const fallbackVoices: VoiceCard[] = [
   {
     id: 1,
-    name: 'Introductory business voice',
-    scriptText: 'নমস্কার, আমি কী পিলার এআই থেকে বলছি।',
+    name: 'AI Self Service Agent',
+    scriptText: 'আমি আপনার এআই সেলফ-সার্ভিস এজেন্ট, কীভাবে সাহায্য করতে পারি?',
+    englishMeaning: 'An AI self-service agent for handling routine customer requests.',
     audioUrl: null,
-    duration: 2,
+    duration: 9.72,
     waveSeed: 42,
     order: 0,
   },
   {
     id: 2,
-    name: 'Time-sensitive operational status',
-    scriptText: 'আপনার ডেলিভারি আজ বিকেলের মধ্যে পৌঁছে যাবে।',
+    name: 'Business Consultant',
+    scriptText: 'আমি আপনার ব্যবসার প্রয়োজন বুঝে সঠিক সমাধান সাজিয়ে দিতে পারি।',
+    englishMeaning: 'A consultant voice for business guidance and solution discovery.',
     audioUrl: null,
-    duration: 20,
+    duration: 10.07,
     waveSeed: 43,
     order: 1,
   },
   {
     id: 3,
-    name: 'Transactional reassurance',
-    scriptText: 'আপনার পেমেন্ট সফল হয়েছে, ধন্যবাদ।',
+    name: 'Office Receptionist',
+    scriptText: 'অফিস রিসেপশনে স্বাগতম, আপনার কলটি সঠিক বিভাগে যুক্ত করছি।',
+    englishMeaning: 'A front-desk style voice for greeting and call routing.',
     audioUrl: null,
-    duration: 2,
+    duration: 8.16,
     waveSeed: 44,
     order: 2,
   },
   {
     id: 4,
-    name: 'Conversion-oriented customer prompt',
-    scriptText: 'আপনি চাইলে এখনই একটি ডেমো কল বুক করতে পারেন।',
+    name: 'Appointment Taker',
+    scriptText: 'আপনার সুবিধামতো সময় অনুযায়ী আমি অ্যাপয়েন্টমেন্ট বুক করে দিতে পারি।',
+    englishMeaning: 'A scheduling voice for collecting availability and booking appointments.',
     audioUrl: null,
-    duration: 2,
+    duration: 9.56,
     waveSeed: 45,
     order: 3,
   },
   {
     id: 5,
-    name: 'Trust-critical warning language',
-    scriptText: 'নিরাপত্তার জন্য ওটিপি বা পাসওয়ার্ড কাউকে শেয়ার করবেন না।',
+    name: 'Healthcare Assistant',
+    scriptText: 'স্বাস্থ্যসেবা সংক্রান্ত তথ্য, সময়সূচি ও সহায়তায় আমি আপনার পাশে আছি।',
+    englishMeaning: 'A care-support voice for patient information and appointment guidance.',
     audioUrl: null,
-    duration: 2,
+    duration: 9.12,
     waveSeed: 46,
     order: 4,
   },
+  {
+    id: 6,
+    name: 'Ecommerce Support',
+    scriptText: 'অর্ডার, ডেলিভারি ও রিটার্ন সংক্রান্ত সহায়তা আমি এখনই দিতে পারি।',
+    englishMeaning: 'A support voice for ecommerce order, delivery, and return workflows.',
+    audioUrl: null,
+    duration: 8.67,
+    waveSeed: 47,
+    order: 5,
+  },
+  {
+    id: 7,
+    name: 'Banking Fintech Support',
+    scriptText: 'ব্যাংকিং ও ফিনটেক সেবার আপডেট এবং সহায়তা দ্রুত জানাতে পারি।',
+    englishMeaning: 'A financial-support voice for banking and fintech service communication.',
+    audioUrl: null,
+    duration: 8.88,
+    waveSeed: 48,
+    order: 6,
+  },
+  {
+    id: 8,
+    name: 'Real Estate Lead Qualifier',
+    scriptText: 'প্রপার্টি আগ্রহ, বাজেট ও লোকেশন বুঝে আমি লিড কোয়ালিফাই করি।',
+    englishMeaning: 'A lead-qualification voice for real estate inquiry screening.',
+    audioUrl: null,
+    duration: 8.22,
+    waveSeed: 49,
+    order: 7,
+  },
+  {
+    id: 9,
+    name: 'Education Admission Counsellor',
+    scriptText: 'ভর্তি, কোর্স ও আবেদন প্রক্রিয়া নিয়ে আমি পরিষ্কার দিকনির্দেশনা দিতে পারি।',
+    englishMeaning: 'A counsellor voice for admissions, courses, and application support.',
+    audioUrl: null,
+    duration: 9.32,
+    waveSeed: 50,
+    order: 8,
+  },
+  {
+    id: 10,
+    name: 'Restaurant Hospitality Reservation',
+    scriptText: 'রেস্টুরেন্ট ও হসপিটালিটি রিজার্ভেশন দ্রুত নিশ্চিত করতে আমি সাহায্য করি।',
+    englishMeaning: 'A reservation voice for restaurant and hospitality booking flows.',
+    audioUrl: null,
+    duration: 8.79,
+    waveSeed: 51,
+    order: 9,
+  },
 ];
-
-const voiceTranslations: Record<string, string> = {
-  'Introductory business voice': 'Hello, this is Key Pillar AI speaking.',
-  'Time-sensitive operational status': 'Your delivery will arrive by this afternoon.',
-  'Transactional reassurance': 'Your payment was successful, thank you.',
-  'Conversion-oriented customer prompt': 'You can book a demo call right now if you want.',
-  'Trust-critical warning language': 'For security, do not share OTPs or passwords with anyone.',
-};
 
 function buildWaveform(seed: number, index: number) {
   return Array.from({ length: 16 }, (_, barIndex) => {
@@ -96,6 +146,8 @@ function normalizeVoiceCard(voice: VoiceApiResponseCard): VoiceCard | null {
   const name = typeof voice.name === 'string' ? voice.name.trim() : '';
   const scriptTextCandidate = voice.scriptText ?? voice.script_text;
   const scriptText = typeof scriptTextCandidate === 'string' ? scriptTextCandidate.trim() : '';
+  const englishMeaningCandidate = voice.englishMeaning ?? voice.english_meaning;
+  const englishMeaning = typeof englishMeaningCandidate === 'string' ? englishMeaningCandidate.trim() : '';
 
   if (!Number.isFinite(id) || !name || !scriptText) {
     return null;
@@ -105,6 +157,7 @@ function normalizeVoiceCard(voice: VoiceApiResponseCard): VoiceCard | null {
     id,
     name,
     scriptText,
+    englishMeaning: englishMeaning || null,
     audioUrl: typeof voice.audioUrl === 'string' && voice.audioUrl.trim() ? voice.audioUrl : null,
     duration: Number.isFinite(duration) && duration > 0 ? duration : 2,
     waveSeed: Number.isFinite(waveSeed) ? waveSeed : 42,
@@ -177,7 +230,7 @@ export function Frame02ViralProof() {
     };
   }, []);
 
-  const visibleVoices = useMemo(() => voices.slice(0, 5), [voices]);
+  const visibleVoices = useMemo(() => voices, [voices]);
   const apiAudioReadyCount = useMemo(
     () => visibleVoices.filter((voice) => Boolean(voice.audioUrl)).length,
     [visibleVoices],
@@ -413,7 +466,7 @@ export function Frame02ViralProof() {
             >
               {visibleVoices.map((voice, clipIndex) => {
                 const isActive = activeVoiceId === voice.id;
-                const translation = voiceTranslations[voice.name] ?? 'Clean Bangla delivery for customer-facing voice workflows.';
+                const translation = voice.englishMeaning ?? 'Clean Bangla delivery for customer-facing voice workflows.';
 
                 return (
                   <div
@@ -524,7 +577,7 @@ export function Frame02ViralProof() {
 
           <div className="grid gap-4 md:grid-cols-3 mb-8">
             {[
-              <>Play 5 clips. Ask: <span className="font-semibold">which one is AI?</span></>,
+              <>Play {visibleVoices.length} clips. Ask: <span className="font-semibold">which one is AI?</span></>,
               <>Reveal: <span className="font-semibold">all generated.</span></>,
               <>CTA: Comment <span className="font-semibold">SCRIPT</span> for a free 30-sec sample.</>,
             ].map((item, index) => (

@@ -36,6 +36,7 @@ const projectRoot = path.resolve(backendRoot, '..');
 const mediaRoot = path.resolve(process.env.VOICE_MEDIA_ROOT ?? path.join(backendRoot, 'media'));
 const voiceMediaDirectory = path.join(mediaRoot, 'voices');
 const voiceInboxDirectory = path.join(voiceMediaDirectory, 'inbox');
+const voicePublicDirectory = path.join(voiceMediaDirectory, 'public');
 const adminDistRoot = path.join(projectRoot, 'admin-frontend', 'dist');
 const adminSessionSecret = process.env.ADMIN_SESSION_SECRET ?? randomUUID();
 const adminSessionCookieName = 'bangla_voice_admin';
@@ -160,6 +161,7 @@ function toVoiceResponse(row: VoiceCardRecord) {
     audioFile: row.audio_file,
     audioUrl: row.audio_file ? `/media/${row.audio_file}` : null,
     duration: Number(row.duration),
+    englishMeaning: row.english_meaning,
     id: row.id,
     isActive: row.is_active,
     name: row.name,
@@ -216,6 +218,7 @@ function toEmailLogResponse(row: SampleEmailLogRecord) {
     sentAt: row.sent_at,
     status: row.status,
     subject: row.subject,
+    voiceCardId: row.voice_card_id === null ? null : Number(row.voice_card_id),
     voiceSampleId: row.voice_sample_id === null ? null : Number(row.voice_sample_id),
   };
 }
@@ -246,6 +249,17 @@ function sanitizeExtension(filename: string) {
   return allowedExtensions.has(extension) ? extension : '';
 }
 
+function slugifyStem(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-')
+    .slice(0, 80);
+}
+
 const voiceUploadStorage = multer.diskStorage({
   destination: (_req, _file, callback) => {
     callback(null, voiceInboxDirectory);
@@ -273,9 +287,55 @@ const voiceUpload = multer({
   storage: voiceUploadStorage,
 });
 
+const publicVoiceUploadStorage = multer.diskStorage({
+  destination: (_req, _file, callback) => {
+    callback(null, voicePublicDirectory);
+  },
+  filename: (req, file, callback) => {
+    const extension = sanitizeExtension(file.originalname);
+    const nameSource =
+      normalizeText(req.body.name) ??
+      normalizeText(req.body.filenameStem) ??
+      path.basename(file.originalname, path.extname(file.originalname));
+    const safeStem = slugifyStem(nameSource ?? '') || `voice-card-${req.params.id ?? Date.now()}`;
+    callback(null, `${safeStem}-${Date.now()}${extension}`);
+  },
+});
+
+const publicVoiceUpload = multer({
+  fileFilter: (_req, file, callback) => {
+    const extension = sanitizeExtension(file.originalname);
+    const mimeType = file.mimetype.toLowerCase();
+
+    if (!extension || !allowedMimeTypes.has(mimeType)) {
+      callback(new Error('Unsupported audio format. Use mp3, wav, m4a, webm, or mp4.'));
+      return;
+    }
+
+    callback(null, true);
+  },
+  limits: {
+    fileSize: maxAudioFileSizeBytes,
+  },
+  storage: publicVoiceUploadStorage,
+});
+
 async function runUpload(req: Request, res: Response) {
   await new Promise<void>((resolve, reject) => {
     voiceUpload.single('audio')(req, res, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+async function runPublicVoiceUpload(req: Request, res: Response) {
+  await new Promise<void>((resolve, reject) => {
+    publicVoiceUpload.single('audio')(req, res, (error) => {
       if (error) {
         reject(error);
         return;
@@ -314,6 +374,25 @@ async function fetchVoiceSampleById(id: number) {
   return result.rows[0] ?? null;
 }
 
+async function fetchVoiceCardById(id: number) {
+  const result = await pool.query<VoiceCardRecord>(
+    `
+      SELECT *
+      FROM voice_cards
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [id],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function fetchNextVoiceCardId() {
+  const result = await pool.query<{ next_id: string }>('SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM voice_cards');
+  return Number(result.rows[0]?.next_id ?? 1);
+}
+
 async function markRequestStatus(requestId: number, status: SampleRequestStatus) {
   await pool.query(
     `
@@ -327,6 +406,7 @@ async function markRequestStatus(requestId: number, status: SampleRequestStatus)
 
 async function ensureRuntimeDirectories() {
   await fs.mkdir(voiceInboxDirectory, { recursive: true });
+  await fs.mkdir(voicePublicDirectory, { recursive: true });
 }
 
 function getBaseUrl(req: Request) {
@@ -360,7 +440,7 @@ app.get('/api/health', async (_req, res) => {
 app.get('/api/voices', async (_req, res) => {
   try {
     const result = await pool.query<VoiceCardRecord>(`
-      SELECT id, name, script_text, audio_file, duration, wave_seed, display_order, is_active
+      SELECT id, name, script_text, english_meaning, audio_file, duration, wave_seed, display_order, is_active
       FROM voice_cards
       WHERE is_active = TRUE
       ORDER BY display_order ASC, id ASC
@@ -495,10 +575,11 @@ app.get('/api/admin/dashboard', requireAdmin, async (_req, res) => {
         SELECT
           l.*,
           r.client_name,
-          s.title AS sample_title
+          COALESCE(vc.name, s.title) AS sample_title
         FROM sample_email_logs l
         LEFT JOIN sample_requests r ON r.id = l.request_id
         LEFT JOIN voice_samples s ON s.id = l.voice_sample_id
+        LEFT JOIN voice_cards vc ON vc.id = l.voice_card_id
         ORDER BY COALESCE(l.sent_at, l.created_at) DESC
         LIMIT 8
       `),
@@ -559,31 +640,30 @@ app.get('/api/admin/sample-requests/:id', requireAdmin, async (req, res) => {
       return;
     }
 
-    const [voiceSamplesResult, emailLogsResult] = await Promise.all([
-      pool.query<VoiceSampleRecord>(
-        `
-          SELECT *
-          FROM voice_samples
-          WHERE request_id = $1
-          ORDER BY created_at DESC
-        `,
-        [requestId],
-      ),
-      pool.query<SampleEmailLogRecord>(
-        `
-          SELECT *
-          FROM sample_email_logs
-          WHERE request_id = $1
-          ORDER BY COALESCE(sent_at, created_at) DESC
-        `,
-        [requestId],
-      ),
-    ]);
+    const emailLogsResult = await pool.query<
+      SampleEmailLogRecord & {
+        sample_title: string | null;
+      }
+    >(
+      `
+        SELECT
+          l.*,
+          COALESCE(vc.name, s.title) AS sample_title
+        FROM sample_email_logs l
+        LEFT JOIN voice_samples s ON s.id = l.voice_sample_id
+        LEFT JOIN voice_cards vc ON vc.id = l.voice_card_id
+        WHERE l.request_id = $1
+        ORDER BY COALESCE(l.sent_at, l.created_at) DESC
+      `,
+      [requestId],
+    );
 
     res.json({
-      emailLogs: emailLogsResult.rows.map(toEmailLogResponse),
+      emailLogs: emailLogsResult.rows.map((row) => ({
+        ...toEmailLogResponse(row),
+        sampleTitle: row.sample_title,
+      })),
       request: toSampleRequestResponse(sampleRequest),
-      voiceSamples: voiceSamplesResult.rows.map(toVoiceSampleResponse),
     });
   } catch (error) {
     res.status(500).json({
@@ -674,90 +754,212 @@ app.patch('/api/admin/sample-requests/:id', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/admin/voice-samples', requireAdmin, async (_req, res) => {
+app.get('/api/admin/voice-cards', requireAdmin, async (_req, res) => {
   try {
-    const result = await pool.query<
-      VoiceSampleRecord & {
-        client_name: string | null;
-      }
-    >(`
-      SELECT
-        s.*,
-        r.client_name
-      FROM voice_samples s
-      LEFT JOIN sample_requests r ON r.id = s.request_id
-      ORDER BY s.created_at DESC
+    const result = await pool.query<VoiceCardRecord>(`
+      SELECT id, name, script_text, english_meaning, audio_file, duration, wave_seed, display_order, is_active
+      FROM voice_cards
+      ORDER BY display_order ASC, id ASC
     `);
 
     res.json({
-      samples: result.rows.map((row) => ({
-        ...toVoiceSampleResponse(row),
-        clientName: row.client_name,
-      })),
+      voiceCards: result.rows.map(toVoiceResponse),
     });
   } catch (error) {
     res.status(500).json({
-      error: error instanceof Error ? error.message : 'Failed to load voice samples.',
+      error: error instanceof Error ? error.message : 'Failed to load voice cards.',
     });
   }
 });
 
-app.post('/api/admin/voice-samples', requireAdmin, async (req, res) => {
+app.post('/api/admin/voice-cards', requireAdmin, async (req, res) => {
   try {
-    await runUpload(req, res);
+    const nextId = await fetchNextVoiceCardId();
+    const name = requireText(req.body.name, 'Voice card name is required.');
+    const scriptText = requireText(req.body.scriptText, 'Bangla script/caption is required.');
+    const duration = toOptionalNumber(req.body.duration);
+    const order = toOptionalNumber(req.body.order);
+    const waveSeed = toOptionalNumber(req.body.waveSeed);
+    const isActive = typeof req.body.isActive === 'boolean' ? req.body.isActive : String(req.body.isActive) !== 'false';
+
+    if (duration === null || duration <= 0) {
+      res.status(400).json({ error: 'Enter a valid duration.' });
+      return;
+    }
+
+    if (order === null || order < 0) {
+      res.status(400).json({ error: 'Enter a valid display order.' });
+      return;
+    }
+
+    if (waveSeed === null) {
+      res.status(400).json({ error: 'Enter a valid wave seed.' });
+      return;
+    }
+
+    const insertResult = await pool.query<VoiceCardRecord>(
+      `
+        INSERT INTO voice_cards (
+          id,
+          name,
+          script_text,
+          english_meaning,
+          audio_file,
+          duration,
+          wave_seed,
+          display_order,
+          is_active,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+        RETURNING *
+      `,
+      [
+        nextId,
+        name,
+        scriptText,
+        normalizeText(req.body.englishMeaning),
+        normalizeText(req.body.audioFile),
+        duration,
+        waveSeed,
+        order,
+        isActive,
+      ],
+    );
+
+    res.status(201).json({ voiceCard: toVoiceResponse(insertResult.rows[0]) });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Failed to create the voice card.',
+    });
+  }
+});
+
+app.patch('/api/admin/voice-cards/:id', requireAdmin, async (req, res) => {
+  try {
+    const voiceCardId = Number(req.params.id);
+
+    if (!Number.isFinite(voiceCardId)) {
+      res.status(400).json({ error: 'Invalid voice card id.' });
+      return;
+    }
+
+    const existing = await fetchVoiceCardById(voiceCardId);
+
+    if (!existing) {
+      res.status(404).json({ error: 'Voice card not found.' });
+      return;
+    }
+
+    const nextDuration = Object.prototype.hasOwnProperty.call(req.body, 'duration')
+      ? toOptionalNumber(req.body.duration)
+      : Number(existing.duration);
+    const nextOrder = Object.prototype.hasOwnProperty.call(req.body, 'order')
+      ? toOptionalNumber(req.body.order)
+      : Number(existing.display_order);
+    const nextWaveSeed = Object.prototype.hasOwnProperty.call(req.body, 'waveSeed')
+      ? toOptionalNumber(req.body.waveSeed)
+      : Number(existing.wave_seed);
+
+    if (nextDuration === null || nextDuration <= 0) {
+      res.status(400).json({ error: 'Enter a valid duration.' });
+      return;
+    }
+
+    if (nextOrder === null || nextOrder < 0) {
+      res.status(400).json({ error: 'Enter a valid display order.' });
+      return;
+    }
+
+    if (nextWaveSeed === null) {
+      res.status(400).json({ error: 'Enter a valid wave seed.' });
+      return;
+    }
+
+    const nextActive = Object.prototype.hasOwnProperty.call(req.body, 'isActive')
+      ? (typeof req.body.isActive === 'boolean' ? req.body.isActive : String(req.body.isActive) !== 'false')
+      : existing.is_active;
+
+    const result = await pool.query<VoiceCardRecord>(
+      `
+        UPDATE voice_cards
+        SET
+          name = $2,
+          script_text = $3,
+          english_meaning = $4,
+          duration = $5,
+          wave_seed = $6,
+          display_order = $7,
+          is_active = $8,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        voiceCardId,
+        normalizeText(req.body.name) ?? existing.name,
+        normalizeText(req.body.scriptText) ?? existing.script_text,
+        Object.prototype.hasOwnProperty.call(req.body, 'englishMeaning')
+          ? normalizeText(req.body.englishMeaning)
+          : existing.english_meaning,
+        nextDuration,
+        nextWaveSeed,
+        nextOrder,
+        nextActive,
+      ],
+    );
+
+    res.json({ voiceCard: toVoiceResponse(result.rows[0]) });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to update the voice card.',
+    });
+  }
+});
+
+app.post('/api/admin/voice-cards/:id/audio', requireAdmin, async (req, res) => {
+  try {
+    const voiceCardId = Number(req.params.id);
+
+    if (!Number.isFinite(voiceCardId)) {
+      res.status(400).json({ error: 'Invalid voice card id.' });
+      return;
+    }
+
+    const existing = await fetchVoiceCardById(voiceCardId);
+
+    if (!existing) {
+      res.status(404).json({ error: 'Voice card not found.' });
+      return;
+    }
+
+    await runPublicVoiceUpload(req, res);
 
     if (!req.file) {
       res.status(400).json({ error: 'Audio file is required.' });
       return;
     }
 
-    const title = requireText(req.body.title, 'Sample title is required.');
-    const requestId = toOptionalNumber(req.body.requestId);
+    const storedRelativePath = path.posix.join('voices', 'public', req.file.filename);
+    const previousAudioFile = existing.audio_file;
+    const result = await pool.query<VoiceCardRecord>(
+      `
+        UPDATE voice_cards
+        SET audio_file = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [voiceCardId, storedRelativePath],
+    );
 
-    if (requestId) {
-      const linkedRequest = await fetchSampleRequestById(requestId);
-
-      if (!linkedRequest) {
-        await fs.unlink(req.file.path).catch(() => undefined);
-        res.status(400).json({ error: 'Linked sample request was not found.' });
-        return;
+    if (previousAudioFile && previousAudioFile.startsWith('voices/public/')) {
+      const previousAbsolutePath = path.join(mediaRoot, previousAudioFile);
+      if (previousAbsolutePath !== req.file.path) {
+        await fs.unlink(previousAbsolutePath).catch(() => undefined);
       }
     }
 
-    const storedRelativePath = path.posix.join('voices', 'inbox', req.file.filename);
-
-    const insertResult = await pool.query<VoiceSampleRecord>(
-      `
-        INSERT INTO voice_samples (
-          title,
-          request_id,
-          original_filename,
-          stored_filename,
-          media_path,
-          mime_type,
-          file_size_bytes
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *
-      `,
-      [
-        title,
-        requestId,
-        req.file.originalname,
-        req.file.filename,
-        storedRelativePath,
-        req.file.mimetype,
-        req.file.size,
-      ],
-    );
-
-    const savedSample = insertResult.rows[0];
-
-    if (savedSample.request_id) {
-      await markRequestStatus(savedSample.request_id, 'sample_ready');
-    }
-
-    res.status(201).json({ sample: toVoiceSampleResponse(savedSample) });
+    res.json({ voiceCard: toVoiceResponse(result.rows[0]) });
   } catch (error) {
     if (req.file?.path) {
       await fs.unlink(req.file.path).catch(() => undefined);
@@ -768,71 +970,9 @@ app.post('/api/admin/voice-samples', requireAdmin, async (req, res) => {
         ? `File size exceeds ${Math.round(maxAudioFileSizeBytes / (1024 * 1024))}MB.`
         : error instanceof Error
           ? error.message
-          : 'Failed to upload voice sample.';
+          : 'Failed to upload public voice audio.';
 
     res.status(400).json({ error: message });
-  }
-});
-
-app.patch('/api/admin/voice-samples/:id', requireAdmin, async (req, res) => {
-  try {
-    const sampleId = Number(req.params.id);
-
-    if (!Number.isFinite(sampleId)) {
-      res.status(400).json({ error: 'Invalid sample id.' });
-      return;
-    }
-
-    const existing = await fetchVoiceSampleById(sampleId);
-
-    if (!existing) {
-      res.status(404).json({ error: 'Voice sample not found.' });
-      return;
-    }
-
-    const nextRequestIdValue = Object.prototype.hasOwnProperty.call(req.body, 'requestId')
-      ? req.body.requestId === ''
-        ? null
-        : toOptionalNumber(req.body.requestId)
-      : existing.request_id;
-
-    if (nextRequestIdValue) {
-      const linkedRequest = await fetchSampleRequestById(nextRequestIdValue);
-
-      if (!linkedRequest) {
-        res.status(400).json({ error: 'Linked sample request was not found.' });
-        return;
-      }
-    }
-
-    const result = await pool.query<VoiceSampleRecord>(
-      `
-        UPDATE voice_samples
-        SET
-          title = $2,
-          request_id = $3,
-          updated_at = NOW()
-        WHERE id = $1
-        RETURNING *
-      `,
-      [
-        sampleId,
-        normalizeText(req.body.title) ?? existing.title,
-        nextRequestIdValue,
-      ],
-    );
-
-    const updated = result.rows[0];
-
-    if (updated.request_id) {
-      await markRequestStatus(updated.request_id, 'sample_ready');
-    }
-
-    res.json({ sample: toVoiceSampleResponse(updated) });
-  } catch (error) {
-    res.status(500).json({
-      error: error instanceof Error ? error.message : 'Failed to update the voice sample.',
-    });
   }
 });
 
@@ -850,14 +990,14 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
     }
 
     const requestId = toOptionalNumber(req.body.requestId);
-    const voiceSampleId = toOptionalNumber(req.body.voiceSampleId);
+    const voiceCardId = toOptionalNumber(req.body.voiceCardId);
     const recipientEmail = requireText(req.body.recipientEmail, 'Recipient email is required.');
     const subject = requireText(req.body.subject, 'Email subject is required.');
     const message = requireText(req.body.message, 'Email message is required.');
     const deliveryMode = normalizeText(req.body.deliveryMode) ?? 'link';
 
-    if (!requestId || !voiceSampleId) {
-      res.status(400).json({ error: 'Choose both a sample request and a voice sample.' });
+    if (!requestId || !voiceCardId) {
+      res.status(400).json({ error: 'Choose both a sample request and a public voice card.' });
       return;
     }
 
@@ -871,9 +1011,9 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
       return;
     }
 
-    const [sampleRequest, voiceSample] = await Promise.all([
+    const [sampleRequest, voiceCard] = await Promise.all([
       fetchSampleRequestById(requestId),
-      fetchVoiceSampleById(voiceSampleId),
+      fetchVoiceCardById(voiceCardId),
     ]);
 
     if (!sampleRequest) {
@@ -881,8 +1021,13 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
       return;
     }
 
-    if (!voiceSample) {
-      res.status(404).json({ error: 'Voice sample not found.' });
+    if (!voiceCard) {
+      res.status(404).json({ error: 'Voice card not found.' });
+      return;
+    }
+
+    if (!voiceCard.audio_file) {
+      res.status(400).json({ error: 'The selected voice card does not have a public audio file yet.' });
       return;
     }
 
@@ -890,6 +1035,7 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
       `
         INSERT INTO sample_email_logs (
           request_id,
+          voice_card_id,
           voice_sample_id,
           recipient_email,
           subject,
@@ -897,10 +1043,10 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
           delivery_mode,
           status
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
       `,
-      [requestId, voiceSampleId, recipientEmail, subject, message, deliveryMode, 'pending'],
+      [requestId, voiceCardId, null, recipientEmail, subject, message, deliveryMode, 'pending'],
     );
 
     logId = logResult.rows[0].id;
@@ -915,7 +1061,7 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
       secure: smtpConfig.secure,
     });
 
-    const audioPublicUrl = new URL(`/media/${voiceSample.media_path}`, getBaseUrl(req)).toString();
+    const audioPublicUrl = new URL(`/media/${voiceCard.audio_file}`, getBaseUrl(req)).toString();
     const linkBlock =
       deliveryMode === 'link'
         ? `\n\nAudio sample:\n${audioPublicUrl}`
@@ -926,8 +1072,8 @@ app.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
         deliveryMode === 'attachment'
           ? [
               {
-                filename: voiceSample.original_filename,
-                path: path.join(mediaRoot, voiceSample.media_path),
+                filename: path.basename(voiceCard.audio_file),
+                path: path.join(mediaRoot, voiceCard.audio_file),
               },
             ]
           : [],
@@ -979,7 +1125,11 @@ app.get('/admin/login', async (_req, res) => {
   await serveAdminShell(res);
 });
 
-app.get(['/admin/dashboard', '/admin/sample-requests', '/admin/voice-samples', '/admin/send-sample'], async (req, res) => {
+app.get('/admin/voice-samples', (_req, res) => {
+  res.redirect('/admin/voice-cards');
+});
+
+app.get(['/admin/dashboard', '/admin/sample-requests', '/admin/voice-cards', '/admin/send-sample'], async (req, res) => {
   if (!req.session.adminUser) {
     res.redirect('/admin/login');
     return;

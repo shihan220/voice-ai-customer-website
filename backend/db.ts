@@ -14,6 +14,7 @@ export type VoiceCardRecord = {
   id: number;
   name: string;
   script_text: string;
+  english_meaning: string | null;
   audio_file: string | null;
   duration: number;
   wave_seed: number;
@@ -58,6 +59,7 @@ export type SampleEmailLogRecord = {
   id: number;
   request_id: number | null;
   voice_sample_id: number | null;
+  voice_card_id: number | null;
   recipient_email: string;
   subject: string;
   message: string;
@@ -74,6 +76,7 @@ export async function ensureSchema() {
       id INTEGER PRIMARY KEY,
       name VARCHAR(100) NOT NULL,
       script_text TEXT NOT NULL,
+      english_meaning TEXT,
       audio_file VARCHAR(255),
       duration DOUBLE PRECISION NOT NULL DEFAULT 4.0,
       wave_seed INTEGER NOT NULL DEFAULT 42,
@@ -87,6 +90,11 @@ export async function ensureSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_voice_cards_active_order
       ON voice_cards (is_active, display_order, id);
+  `);
+
+  await pool.query(`
+    ALTER TABLE voice_cards
+      ADD COLUMN IF NOT EXISTS english_meaning TEXT;
   `);
 
   await pool.query(`
@@ -148,6 +156,7 @@ export async function ensureSchema() {
       id BIGSERIAL PRIMARY KEY,
       request_id BIGINT REFERENCES sample_requests (id) ON DELETE SET NULL,
       voice_sample_id BIGINT REFERENCES voice_samples (id) ON DELETE SET NULL,
+      voice_card_id INTEGER REFERENCES voice_cards (id) ON DELETE SET NULL,
       recipient_email TEXT NOT NULL,
       subject TEXT NOT NULL,
       message TEXT NOT NULL,
@@ -164,6 +173,11 @@ export async function ensureSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_sample_email_logs_request_id_created_at
       ON sample_email_logs (request_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    ALTER TABLE sample_email_logs
+      ADD COLUMN IF NOT EXISTS voice_card_id INTEGER REFERENCES voice_cards (id) ON DELETE SET NULL;
   `);
 
   await pool.query(`
