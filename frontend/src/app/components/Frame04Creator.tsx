@@ -1,8 +1,18 @@
 import { ArrowRight, FileText, Mic, Video, Send } from 'lucide-react';
+import { DecorativeBanglaLetters, type DecorativeBanglaLetter } from './DecorativeBanglaLetters';
 
 type Frame04CreatorProps = {
   onSampleClick?: () => void;
 };
+
+const decorativeLetters: DecorativeBanglaLetter[] = [
+  { char: 'আ', top: '12%', left: '6%', size: '30px', opacity: 0.05, rotation: '-6deg' },
+  { char: 'ই', top: '18%', left: '88%', size: '34px', opacity: 0.05, rotation: '9deg' },
+  { char: 'উ', top: '40%', left: '3%', size: '24px', opacity: 0.04, rotation: '7deg' },
+  { char: 'ত', top: '33%', left: '93%', size: '30px', opacity: 0.05, rotation: '-9deg' },
+  { char: 'র', top: '71%', left: '8%', size: '38px', opacity: 0.05, rotation: '8deg' },
+  { char: 'স', top: '86%', left: '84%', size: '32px', opacity: 0.05, rotation: '-7deg' },
+];
 
 export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
   const voiceStyles = [
@@ -23,7 +33,8 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
 
   return (
     <div className="w-full relative overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
-      <div className="mx-auto grid max-w-7xl items-center gap-10 lg:grid-cols-[1.08fr_0.92fr]">
+      <DecorativeBanglaLetters letters={decorativeLetters} />
+      <div className="relative z-10 mx-auto grid max-w-7xl items-center gap-10 lg:grid-cols-[1.08fr_0.92fr]">
         <div>
           <div 
             className="inline-block px-4 py-1.5 rounded-full mb-6 uppercase tracking-wider self-start text-[10px] lg:text-[11px]"

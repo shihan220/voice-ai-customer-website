@@ -1,3 +1,5 @@
+import { DecorativeBanglaLetters, type DecorativeBanglaLetter } from './DecorativeBanglaLetters';
+
 const pricingPlans = [
   {
     name: 'Starter',
@@ -45,37 +47,29 @@ const pricingPlans = [
   },
 ] as const;
 
-const decorativeLetters = [
+const decorativeLetters: DecorativeBanglaLetter[] = [
   { char: 'অ', top: '14%', left: '8%', size: '54px', opacity: 0.08, rotation: '-8deg' },
+  { char: 'ঈ', top: '8%', left: '18%', size: '28px', opacity: 0.05, rotation: '11deg' },
   { char: 'আ', top: '22%', left: '82%', size: '42px', opacity: 0.06, rotation: '6deg' },
+  { char: 'উ', top: '18%', left: '66%', size: '30px', opacity: 0.05, rotation: '-10deg' },
   { char: 'ই', top: '56%', left: '5%', size: '36px', opacity: 0.07, rotation: '-4deg' },
+  { char: 'এ', top: '38%', left: '14%', size: '26px', opacity: 0.05, rotation: '8deg' },
   { char: 'ক', top: '68%', left: '90%', size: '58px', opacity: 0.07, rotation: '10deg' },
+  { char: 'গ', top: '30%', left: '92%', size: '32px', opacity: 0.05, rotation: '-5deg' },
   { char: 'র', top: '10%', left: '48%', size: '40px', opacity: 0.05, rotation: '-12deg' },
+  { char: 'ল', top: '62%', left: '34%', size: '34px', opacity: 0.05, rotation: '7deg' },
   { char: 'শ', top: '78%', left: '24%', size: '46px', opacity: 0.06, rotation: '4deg' },
   { char: 'স', top: '42%', left: '68%', size: '50px', opacity: 0.05, rotation: '-7deg' },
   { char: 'হ', top: '84%', left: '58%', size: '34px', opacity: 0.06, rotation: '9deg' },
+  { char: 'ম', top: '74%', left: '74%', size: '30px', opacity: 0.05, rotation: '-9deg' },
+  { char: 'ব', top: '88%', left: '10%', size: '24px', opacity: 0.04, rotation: '12deg' },
+  { char: 'ত', top: '12%', left: '94%', size: '26px', opacity: 0.04, rotation: '-6deg' },
 ] as const;
 
 export function Frame05Roadmap() {
   return (
     <div className="relative w-full overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#E3DFD4' }}>
-      <div className="pointer-events-none absolute inset-0">
-        {decorativeLetters.map((letter) => (
-          <span
-            key={`${letter.char}-${letter.top}-${letter.left}`}
-            className="absolute select-none font-semibold text-[#373A40]"
-            style={{
-              fontSize: letter.size,
-              left: letter.left,
-              opacity: letter.opacity,
-              top: letter.top,
-              transform: `rotate(${letter.rotation})`,
-            }}
-          >
-            {letter.char}
-          </span>
-        ))}
-      </div>
+      <DecorativeBanglaLetters letters={decorativeLetters} />
 
       <div className="relative mx-auto max-w-7xl">
         <div className="mb-10 grid gap-5 lg:mb-12 lg:grid-cols-[0.76fr_1fr] lg:items-end">

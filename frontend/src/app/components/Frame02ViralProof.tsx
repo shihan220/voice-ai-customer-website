@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Pause, Play } from 'lucide-react';
+import { DecorativeBanglaLetters, type DecorativeBanglaLetter } from './DecorativeBanglaLetters';
 
 type VoiceCard = {
   id: number;
@@ -129,6 +130,15 @@ const fallbackVoices: VoiceCard[] = [
     waveSeed: 51,
     order: 9,
   },
+];
+
+const decorativeLetters: DecorativeBanglaLetter[] = [
+  { char: 'অ', top: '10%', left: '7%', size: '32px', opacity: 0.05, rotation: '-8deg' },
+  { char: 'আ', top: '14%', left: '92%', size: '40px', opacity: 0.05, rotation: '7deg' },
+  { char: 'ই', top: '37%', left: '4%', size: '26px', opacity: 0.04, rotation: '11deg' },
+  { char: 'ক', top: '42%', left: '95%', size: '30px', opacity: 0.05, rotation: '-7deg' },
+  { char: 'র', top: '74%', left: '7%', size: '34px', opacity: 0.05, rotation: '8deg' },
+  { char: 'স', top: '84%', left: '90%', size: '30px', opacity: 0.05, rotation: '-9deg' },
 ];
 
 function buildWaveform(seed: number, index: number) {
@@ -319,7 +329,8 @@ export function Frame02ViralProof() {
 
   return (
     <div className="w-full relative overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
-      <div className="mx-auto grid max-w-7xl items-start gap-10 lg:grid-cols-[0.82fr_1.18fr]">
+      <DecorativeBanglaLetters letters={decorativeLetters} />
+      <div className="relative z-10 mx-auto grid max-w-7xl items-start gap-10 lg:grid-cols-[0.82fr_1.18fr]">
         <div className="lg:sticky lg:top-24">
           <div 
             className="inline-block px-4 py-1.5 rounded-full mb-6 uppercase tracking-wider self-start text-[10px] lg:text-[11px]"

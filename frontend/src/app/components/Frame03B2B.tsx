@@ -1,8 +1,18 @@
 import { Phone, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { DecorativeBanglaLetters, type DecorativeBanglaLetter } from './DecorativeBanglaLetters';
 
 type Frame03B2BProps = {
   onPilotClick?: () => void;
 };
+
+const decorativeLetters: DecorativeBanglaLetter[] = [
+  { char: 'অ', top: '10%', left: '7%', size: '32px', opacity: 0.05, rotation: '-8deg' },
+  { char: 'ক', top: '14%', left: '90%', size: '42px', opacity: 0.06, rotation: '7deg' },
+  { char: 'গ', top: '34%', left: '4%', size: '26px', opacity: 0.05, rotation: '10deg' },
+  { char: 'দ', top: '44%', left: '94%', size: '30px', opacity: 0.05, rotation: '-6deg' },
+  { char: 'ভ', top: '69%', left: '9%', size: '36px', opacity: 0.05, rotation: '8deg' },
+  { char: 'ল', top: '82%', left: '88%', size: '28px', opacity: 0.05, rotation: '-10deg' },
+];
 
 export function Frame03B2B({ onPilotClick }: Frame03B2BProps) {
   const flow = ['Missed Lead', 'AI Callback', 'Qualify', 'Human Handoff', 'Sales Team'];
@@ -10,8 +20,9 @@ export function Frame03B2B({ onPilotClick }: Frame03B2BProps) {
 
   return (
     <div className="w-full relative overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#CAC4B6' }}>
+      <DecorativeBanglaLetters letters={decorativeLetters} tone="#6B5243" />
       <div className="absolute left-0 top-0 h-full w-1/3 bg-[#EEEBE4]/20" />
-      <div className="relative mx-auto max-w-7xl">
+      <div className="relative z-10 mx-auto max-w-7xl">
         <div className="grid items-start gap-10 lg:grid-cols-[0.95fr_1.05fr]">
           <div>
             <div 

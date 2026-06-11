@@ -18,7 +18,7 @@ export default function App() {
     { id: 'viral-proof', label: 'Proof', component: <Frame02ViralProof /> },
     { id: 'b2b-agent', label: 'Sales Agent', component: <Frame03B2B onPilotClick={() => openLeadDialog('pilot')} /> },
     { id: 'creator-studio', label: 'Creators', component: <Frame04Creator onSampleClick={() => openLeadDialog('sample')} /> },
-    { id: 'roadmap', label: 'Roadmap', component: <Frame05Roadmap /> },
+    { id: 'roadmap', label: 'Pricing', component: <Frame05Roadmap /> },
     { id: 'positioning', label: 'Products', component: <Frame06Positioning /> },
   ];
 

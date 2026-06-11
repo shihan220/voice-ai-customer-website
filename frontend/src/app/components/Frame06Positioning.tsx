@@ -1,4 +1,14 @@
 import { Sparkles, Phone, Code } from 'lucide-react';
+import { DecorativeBanglaLetters, type DecorativeBanglaLetter } from './DecorativeBanglaLetters';
+
+const decorativeLetters: DecorativeBanglaLetter[] = [
+  { char: 'ঈ', top: '11%', left: '5%', size: '28px', opacity: 0.05, rotation: '-8deg' },
+  { char: 'এ', top: '17%', left: '91%', size: '34px', opacity: 0.05, rotation: '6deg' },
+  { char: 'প', top: '42%', left: '3%', size: '26px', opacity: 0.04, rotation: '8deg' },
+  { char: 'ব', top: '38%', left: '95%', size: '30px', opacity: 0.05, rotation: '-7deg' },
+  { char: 'ম', top: '80%', left: '10%', size: '36px', opacity: 0.05, rotation: '10deg' },
+  { char: 'হ', top: '84%', left: '88%', size: '34px', opacity: 0.05, rotation: '-9deg' },
+];
 
 export function Frame06Positioning() {
   const products = [
@@ -24,7 +34,8 @@ export function Frame06Positioning() {
 
   return (
     <div className="w-full relative overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
-      <div className="w-full flex flex-col relative justify-center max-w-7xl mx-auto">
+      <DecorativeBanglaLetters letters={decorativeLetters} />
+      <div className="w-full flex flex-col relative z-10 justify-center max-w-7xl mx-auto">
         <div className="mb-10 grid gap-5 lg:mb-12 lg:grid-cols-[0.95fr_1.05fr] lg:items-end">
           <div>
           <div 

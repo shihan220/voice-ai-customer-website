@@ -1,4 +1,5 @@
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
+import { DecorativeBanglaLetters, type DecorativeBanglaLetter } from './DecorativeBanglaLetters';
 
 const faqs = [
   {
@@ -59,13 +60,23 @@ const faqs = [
   },
 ];
 
+const decorativeLetters: DecorativeBanglaLetter[] = [
+  { char: 'অ', top: '9%', left: '7%', size: '30px', opacity: 0.05, rotation: '-7deg' },
+  { char: 'ও', top: '12%', left: '90%', size: '36px', opacity: 0.05, rotation: '6deg' },
+  { char: 'খ', top: '36%', left: '4%', size: '24px', opacity: 0.04, rotation: '11deg' },
+  { char: 'ন', top: '48%', left: '95%', size: '28px', opacity: 0.05, rotation: '-8deg' },
+  { char: 'শ', top: '73%', left: '8%', size: '34px', opacity: 0.05, rotation: '8deg' },
+  { char: 'ষ', top: '85%', left: '88%', size: '30px', opacity: 0.05, rotation: '-10deg' },
+];
+
 export function Frame07FAQ() {
   return (
     <div
       className="relative w-full overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28"
       style={{ backgroundColor: '#E3DFD4' }}
     >
-      <div className="mx-auto max-w-7xl">
+      <DecorativeBanglaLetters letters={decorativeLetters} />
+      <div className="relative z-10 mx-auto max-w-7xl">
         <div className="mb-10 grid gap-5 lg:mb-12 lg:grid-cols-[0.92fr_1.08fr] lg:items-start">
           <div>
             <div
