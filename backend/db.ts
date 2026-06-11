@@ -1,3 +1,6 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 const { Pool } = pg;
@@ -24,6 +27,21 @@ export type VoiceCardRecord = {
 
 export type SampleRequestStatus = 'new' | 'reviewing' | 'sample_ready' | 'sent' | 'archived';
 export type EmailLogStatus = 'pending' | 'sent' | 'failed';
+export type UserPackageType = 'starter' | 'gold' | 'platinum';
+export type PaymentProvider = 'stripe' | 'bkash';
+export type PaymentType = 'package_upgrade' | 'extra_tokens';
+export type PaymentStatus = 'pending' | 'completed' | 'failed' | 'cancelled';
+export type TokenTransactionType =
+  | 'signup_grant'
+  | 'monthly_refill'
+  | 'package_upgrade'
+  | 'extra_purchase'
+  | 'usage'
+  | 'admin_adjustment';
+
+const backendRoot = fileURLToPath(new URL('.', import.meta.url));
+const projectRoot = path.resolve(backendRoot, '..');
+const migrationsDirectory = path.join(projectRoot, 'database', 'migrations');
 
 export type SampleRequestRecord = {
   id: number;
@@ -40,6 +58,132 @@ export type SampleRequestRecord = {
   user_agent: string | null;
   created_at: Date;
   updated_at: Date;
+};
+
+export type PackageRecord = {
+  package_code: UserPackageType;
+  name: string;
+  monthly_refill_tokens: number;
+  signup_token_grant: number;
+  is_premium: boolean;
+  display_order: number;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type UserRecord = {
+  id: number;
+  email: string;
+  password_hash: string;
+  country_code: string | null;
+  mobile_number: string | null;
+  mobile_e164: string | null;
+  email_verified_at: Date | null;
+  phone_verified_at: Date | null;
+  package_code: UserPackageType;
+  token_balance: number;
+  starter_granted_at: Date | null;
+  starter_last_refill_at: Date | null;
+  account_status: 'active' | 'disabled';
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type EmailVerificationRecord = {
+  id: number;
+  user_id: number;
+  purpose: 'signup' | 'email_change';
+  sent_to_email: string;
+  otp_hash: string;
+  otp_expires_at: Date;
+  verified_at: Date | null;
+  attempts: number;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type PhoneVerificationRecord = {
+  id: number;
+  user_id: number;
+  purpose: 'signup' | 'phone_change';
+  sent_to_phone: string;
+  otp_hash: string;
+  otp_expires_at: Date;
+  verified_at: Date | null;
+  attempts: number;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type PasswordResetRecord = {
+  id: number;
+  user_id: number;
+  token_hash: string;
+  expires_at: Date;
+  used_at: Date | null;
+  created_at: Date;
+};
+
+export type PaymentRecord = {
+  id: number;
+  user_id: number;
+  provider: PaymentProvider;
+  payment_type: PaymentType;
+  status: PaymentStatus;
+  amount: string;
+  currency: string;
+  package_code: UserPackageType | null;
+  token_amount: number | null;
+  provider_payment_id: string | null;
+  provider_transaction_id: string | null;
+  metadata: Record<string, unknown>;
+  completed_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type TokenTransactionRecord = {
+  id: number;
+  user_id: number;
+  payment_id: number | null;
+  package_upgrade_id: number | null;
+  transaction_type: TokenTransactionType;
+  token_delta: number;
+  balance_after: number;
+  notes: string | null;
+  created_at: Date;
+};
+
+export type PackageUpgradeRecord = {
+  id: number;
+  user_id: number;
+  from_package_code: UserPackageType | null;
+  to_package_code: UserPackageType;
+  payment_id: number | null;
+  granted_token_amount: number | null;
+  status: PaymentStatus;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type AdminActionRecord = {
+  id: number;
+  admin_email: string;
+  action_type: string;
+  target_user_id: number | null;
+  payment_id: number | null;
+  token_transaction_id: number | null;
+  package_upgrade_id: number | null;
+  metadata: Record<string, unknown>;
+  created_at: Date;
+};
+
+export type UserActivityRecord = {
+  id: number;
+  user_id: number;
+  action_type: string;
+  metadata: Record<string, unknown>;
+  created_at: Date;
 };
 
 export type VoiceSampleRecord = {
@@ -69,6 +213,66 @@ export type SampleEmailLogRecord = {
   sent_at: Date | null;
   created_at: Date;
 };
+
+async function applySqlMigrations() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id BIGSERIAL PRIMARY KEY,
+      filename TEXT NOT NULL UNIQUE,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  let migrationFiles: string[] = [];
+
+  try {
+    migrationFiles = (await fs.readdir(migrationsDirectory))
+      .filter((filename) => filename.endsWith('.sql'))
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+
+    throw error;
+  }
+
+  for (const filename of migrationFiles) {
+    const existingResult = await pool.query<{ filename: string }>(
+      `
+        SELECT filename
+        FROM schema_migrations
+        WHERE filename = $1
+        LIMIT 1
+      `,
+      [filename],
+    );
+
+    if (existingResult.rowCount) {
+      continue;
+    }
+
+    const migrationPath = path.join(migrationsDirectory, filename);
+    const sql = await fs.readFile(migrationPath, 'utf8');
+
+    await pool.query('BEGIN');
+
+    try {
+      await pool.query(sql);
+      await pool.query(
+        `
+          INSERT INTO schema_migrations (filename)
+          VALUES ($1)
+        `,
+        [filename],
+      );
+      await pool.query('COMMIT');
+    } catch (error) {
+      await pool.query('ROLLBACK');
+      throw error;
+    }
+  }
+}
 
 export async function ensureSchema() {
   await pool.query(`
@@ -184,4 +388,6 @@ export async function ensureSchema() {
     ALTER TABLE sample_email_logs
       DROP COLUMN IF EXISTS include_transcript;
   `);
+
+  await applySqlMigrations();
 }

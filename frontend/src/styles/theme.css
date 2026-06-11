@@ -137,13 +137,22 @@
     font-size: var(--font-size);
     scroll-behavior: smooth;
     background: #eeebe4;
+    max-width: 100%;
+    overflow-x: clip;
   }
 
   body {
     min-height: 100%;
+    max-width: 100%;
     overflow-x: hidden;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+  }
+
+  #root {
+    min-height: 100%;
+    max-width: 100%;
+    overflow-x: clip;
   }
 
   ::selection {

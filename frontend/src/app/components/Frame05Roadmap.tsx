@@ -6,13 +6,13 @@ const pricingPlans = [
     eyebrow: 'Basic launch',
     tone: '#E3BB97',
     buttonLabel: 'Start Basic',
-    description: 'A clean starting point for teams that want to test Bangladeshi Bangla voice with minimal lift.',
+    description: 'A clean starting point for teams that want to test Bangladeshi Bangla voice before moving into premium usage.',
     features: [
-      'Basic Bangla AI voice sample',
-      '1 voice style',
-      'Basic customer response script',
-      'Email support',
-      'Good for small testing',
+      '1,000 monthly refill tokens',
+      'Auto-refill every month',
+      'Basic sample access',
+      'Best for trying the platform',
+      'No extra token purchase unless upgraded',
     ],
   },
   {
@@ -20,14 +20,13 @@ const pricingPlans = [
     eyebrow: 'Growth tier',
     tone: '#DF9E64',
     buttonLabel: 'Choose Gold',
-    description: 'A stronger commercial package for businesses that need more range, support, and tailored scripting.',
+    description: 'A stronger commercial package for businesses that need premium access, repeat usage, and paid top-ups.',
     features: [
-      'Multiple Bangla AI voice samples',
-      '3 voice styles',
-      'Custom business script',
-      'Audio delivery support',
-      'Priority email support',
-      'Good for growing businesses',
+      '10,000 fixed tokens',
+      'Premium database access',
+      'Can buy extra tokens',
+      'Pay with card or bKash',
+      'Best for regular users',
     ],
   },
   {
@@ -35,14 +34,14 @@ const pricingPlans = [
     eyebrow: 'Premium scale',
     tone: '#AE6C4A',
     buttonLabel: 'Go Platinum',
-    description: 'A premium offer for agencies and larger companies managing richer customer conversation flows.',
+    description: 'A premium offer for agencies and larger companies managing high-volume customer voice workflows.',
     features: [
-      'Premium Bangla AI voice package',
-      'Multiple custom voice styles',
-      'Advanced customer conversation flow',
-      'Business-specific script writing',
-      'Priority support',
-      'Best for agencies and larger companies',
+      '100,000 fixed tokens',
+      'Premium database access',
+      'Can buy extra tokens',
+      'Pay with card or bKash',
+      'Best for heavy/high-volume users',
+      'Priority/high-volume access',
     ],
   },
 ] as const;
@@ -66,7 +65,11 @@ const decorativeLetters: DecorativeBanglaLetter[] = [
   { char: 'ত', top: '12%', left: '94%', size: '26px', opacity: 0.04, rotation: '-6deg' },
 ] as const;
 
-export function Frame05Roadmap() {
+export function Frame05Roadmap({
+  onPlanSelect,
+}: {
+  onPlanSelect: (planCode: 'starter' | 'gold' | 'platinum') => void;
+}) {
   return (
     <div className="relative w-full overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#E3DFD4' }}>
       <DecorativeBanglaLetters letters={decorativeLetters} />
@@ -154,6 +157,7 @@ export function Frame05Roadmap() {
 
               <button
                 type="button"
+                onClick={() => onPlanSelect(plan.name.toLowerCase() as 'starter' | 'gold' | 'platinum')}
                 className="w-full rounded-full px-5 py-3 text-sm font-semibold transition hover:brightness-95"
                 style={{
                   backgroundColor: index === 2 ? '#995842' : plan.tone,

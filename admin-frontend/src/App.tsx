@@ -85,6 +85,88 @@ type DashboardPayload = {
   };
 };
 
+type AdminUser = {
+  accountStatus: 'active' | 'disabled';
+  countryCode: string | null;
+  createdAt: string;
+  email: string;
+  emailVerifiedAt: string | null;
+  id: number;
+  mobileE164: string | null;
+  mobileNumber: string | null;
+  packageCode: 'starter' | 'gold' | 'platinum';
+  phoneVerifiedAt: string | null;
+  starterGrantedAt: string | null;
+  starterLastRefillAt: string | null;
+  tokenBalance: number;
+  updatedAt: string;
+};
+
+type AdminPackageSummary = {
+  code: 'starter' | 'gold' | 'platinum';
+  displayOrder: number;
+  isPremium: boolean;
+  monthlyRefillTokens: number;
+  name: string;
+  signupTokenGrant: number;
+};
+
+type AdminPayment = {
+  amount: number;
+  completedAt: string | null;
+  createdAt: string;
+  currency: string;
+  id: number;
+  metadata: Record<string, unknown>;
+  packageCode: string | null;
+  paymentType: string;
+  provider: string;
+  providerPaymentId: string | null;
+  providerTransactionId: string | null;
+  status: string;
+  tokenAmount: number | null;
+  updatedAt: string;
+  userId: number;
+};
+
+type AdminTokenTransaction = {
+  balanceAfter: number;
+  createdAt: string;
+  id: number;
+  notes: string | null;
+  packageUpgradeId: number | null;
+  paymentId: number | null;
+  tokenDelta: number;
+  transactionType: string;
+  userId: number;
+};
+
+type AdminPackageUpgrade = {
+  createdAt: string;
+  fromPackageCode: string | null;
+  grantedTokenAmount: number | null;
+  id: number;
+  paymentId: number | null;
+  status: string;
+  toPackageCode: string;
+  updatedAt: string;
+  userId: number;
+};
+
+type AdminAction = {
+  actionType: string;
+  adminEmail: string;
+  createdAt: string;
+  id: number;
+  metadata: Record<string, unknown>;
+  packageUpgradeId: number | null;
+  paymentId: number | null;
+  targetUserId: number | null;
+  tokenTransactionId: number | null;
+};
+
+type CustomerFilter = 'all' | 'starter' | 'gold' | 'platinum' | 'verified' | 'unverified';
+
 type SampleRequestDetailPayload = {
   emailLogs: EmailLog[];
   request: SampleRequest;
@@ -111,11 +193,22 @@ type VoiceCardDraft = {
 const protectedRoutes = new Set([
   '/admin/dashboard',
   '/admin/sample-requests',
+  '/admin/customers',
+  '/admin/payments',
+  '/admin/activity',
   '/admin/voice-cards',
   '/admin/send-sample',
 ]);
 
 const requestStatuses: SampleRequestStatus[] = ['new', 'reviewing', 'sample_ready', 'sent', 'archived'];
+const customerFilters: Array<{ label: string; value: CustomerFilter }> = [
+  { label: 'All users', value: 'all' },
+  { label: 'Starter', value: 'starter' },
+  { label: 'Gold', value: 'gold' },
+  { label: 'Platinum', value: 'platinum' },
+  { label: 'Verified', value: 'verified' },
+  { label: 'Unverified', value: 'unverified' },
+];
 
 function readLocation(): AppLocation {
   return {
@@ -320,6 +413,9 @@ function App() {
     >
       {currentPath === '/admin/dashboard' ? <DashboardPage /> : null}
       {currentPath === '/admin/sample-requests' ? <SampleRequestsPage onNavigate={navigate} /> : null}
+      {currentPath === '/admin/customers' ? <CustomersPage /> : null}
+      {currentPath === '/admin/payments' ? <PaymentsPage /> : null}
+      {currentPath === '/admin/activity' ? <ActivityPage /> : null}
       {currentPath === '/admin/voice-cards' ? <VoiceCardsPage /> : null}
       {currentPath === '/admin/send-sample' ? <SendSamplePage search={location.search} /> : null}
       {!protectedRoutes.has(currentPath) ? <DashboardPage /> : null}
@@ -450,6 +546,9 @@ function AdminShell({
   const links = [
     { href: '/admin/dashboard', label: 'Dashboard' },
     { href: '/admin/sample-requests', label: 'Sample Requests' },
+    { href: '/admin/customers', label: 'Customers' },
+    { href: '/admin/payments', label: 'Payments' },
+    { href: '/admin/activity', label: 'Activity' },
     { href: '/admin/voice-cards', label: 'Public Voice Cards' },
     { href: '/admin/send-sample', label: 'Send Sample' },
   ];
@@ -610,6 +709,443 @@ function DashboardPage() {
         </Panel>
       </div>
     </section>
+  );
+}
+
+function CustomersPage() {
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [packages, setPackages] = useState<AdminPackageSummary[]>([]);
+  const [activeFilter, setActiveFilter] = useState<CustomerFilter>('all');
+  const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [tokenDelta, setTokenDelta] = useState('1000');
+  const [tokenNotes, setTokenNotes] = useState('');
+  const [packageCode, setPackageCode] = useState<'starter' | 'gold' | 'platinum'>('gold');
+  const [packageNotes, setPackageNotes] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState<null | 'package' | 'tokens'>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const payload = await apiRequest<{ packages: AdminPackageSummary[]; users: AdminUser[] }>('/api/admin/users');
+      setPackages(payload.packages);
+      setUsers(payload.users);
+      setSelectedUserId((current) => {
+        if (current && payload.users.some((user) => user.id === current)) {
+          return current;
+        }
+
+        return payload.users[0]?.id ?? null;
+      });
+      if (payload.packages[0]) {
+        setPackageCode(payload.packages[0].code);
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to load customers.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const filteredUsers = useMemo(() => {
+    return users.filter((user) => {
+      if (activeFilter === 'all') {
+        return true;
+      }
+
+      if (activeFilter === 'verified') {
+        return Boolean(user.emailVerifiedAt && user.phoneVerifiedAt);
+      }
+
+      if (activeFilter === 'unverified') {
+        return !user.emailVerifiedAt || !user.phoneVerifiedAt;
+      }
+
+      return user.packageCode === activeFilter;
+    });
+  }, [activeFilter, users]);
+
+  useEffect(() => {
+    setSelectedUserId((current) => {
+      if (current && filteredUsers.some((user) => user.id === current)) {
+        return current;
+      }
+
+      return filteredUsers[0]?.id ?? null;
+    });
+  }, [filteredUsers]);
+
+  const selectedUser = filteredUsers.find((user) => user.id === selectedUserId) ?? null;
+
+  useEffect(() => {
+    if (selectedUser) {
+      setPackageCode(selectedUser.packageCode);
+    }
+  }, [selectedUser]);
+
+  const handleTokenAdjustment = async () => {
+    if (!selectedUser) return;
+
+    setSubmitting('tokens');
+    setError('');
+    setMessage('');
+
+    try {
+      await apiRequest(`/api/admin/users/${selectedUser.id}/token-adjustments`, {
+        body: JSON.stringify({
+          notes: tokenNotes,
+          tokenDelta: Number(tokenDelta),
+        }),
+        method: 'POST',
+      });
+      setMessage('Token adjustment saved.');
+      setTokenNotes('');
+      await load();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to adjust tokens.');
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const handlePackageUpgrade = async () => {
+    if (!selectedUser) return;
+
+    setSubmitting('package');
+    setError('');
+    setMessage('');
+
+    try {
+      await apiRequest(`/api/admin/users/${selectedUser.id}/package-upgrades`, {
+        body: JSON.stringify({
+          notes: packageNotes,
+          packageCode,
+        }),
+        method: 'POST',
+      });
+      setMessage('Package update saved.');
+      setPackageNotes('');
+      await load();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to change package.');
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  if (loading) {
+    return <PageLoading label="Loading customers..." />;
+  }
+
+  return (
+    <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+      <Panel title="Customers" subtitle="Review verified users, packages, and balances from the customer auth system.">
+        {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+        {message ? <InlineMessage tone="success">{message}</InlineMessage> : null}
+        <div className="mb-5 flex flex-wrap gap-2">
+          {customerFilters.map((filter) => (
+            <button
+              key={filter.value}
+              className={cx(
+                'rounded-full px-4 py-2 text-sm font-semibold transition',
+                activeFilter === filter.value
+                  ? 'bg-[#ae6c4a] text-white shadow-[0_12px_30px_rgba(174,108,74,0.24)]'
+                  : 'border border-[#d8cbbe] bg-white/80 text-[#5e534b] hover:border-[#cdb6a1] hover:text-[#a96544]',
+              )}
+              onClick={() => setActiveFilter(filter.value)}
+              type="button"
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+        {!filteredUsers.length ? (
+          <EmptyState label="No customer accounts yet." />
+        ) : (
+          <div className="overflow-hidden rounded-[24px] border border-[#e6d8ca]">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-[#efe1d2] text-sm">
+                <thead className="bg-[#faf7f1] text-left text-[#7a6d63]">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Email</th>
+                    <th className="px-4 py-3 font-semibold">Package</th>
+                    <th className="px-4 py-3 font-semibold">Tokens</th>
+                    <th className="px-4 py-3 font-semibold">Verification</th>
+                    <th className="px-4 py-3 font-semibold">Created</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#f1e7db] bg-white/90">
+                  {filteredUsers.map((user) => (
+                    <tr
+                      key={user.id}
+                      className={cx(
+                        'cursor-pointer transition hover:bg-[#fcf8f3]',
+                        selectedUserId === user.id && 'bg-[#f7eee4]',
+                      )}
+                      onClick={() => setSelectedUserId(user.id)}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-[#2f343b]">{user.email}</div>
+                        <div className="text-xs text-[#7a6d63]">{user.mobileE164 ?? 'No phone'}</div>
+                      </td>
+                      <td className="px-4 py-3 text-[#5a514a]">{statusLabel(user.packageCode)}</td>
+                      <td className="px-4 py-3 text-[#2f343b]">{user.tokenBalance.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-[#5a514a]">
+                        {user.emailVerifiedAt ? 'Email' : 'Email pending'} / {user.phoneVerifiedAt ? 'Phone' : 'Phone pending'}
+                      </td>
+                      <td className="px-4 py-3 text-[#5a514a]">{formatDate(user.createdAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Customer controls" subtitle="Apply package upgrades and token adjustments with admin action logging.">
+        {!selectedUser ? (
+          <EmptyState label="Select a customer to manage package and token settings." />
+        ) : (
+          <div className="space-y-6">
+            <PanelInset title="Selected customer">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <InfoChip label="Email" value={selectedUser.email} />
+                <InfoChip label="Package" value={statusLabel(selectedUser.packageCode)} />
+                <InfoChip label="Token balance" value={selectedUser.tokenBalance.toLocaleString()} />
+                <InfoChip label="Account status" value={statusLabel(selectedUser.accountStatus)} />
+              </div>
+            </PanelInset>
+
+            <PanelInset title="Adjust tokens">
+              <div className="grid gap-4 sm:grid-cols-[160px_1fr]">
+                <FieldLabel label="Token delta">
+                  <TextInput onChange={(event) => setTokenDelta(event.target.value)} value={tokenDelta} />
+                </FieldLabel>
+                <FieldLabel label="Notes">
+                  <TextAreaInput
+                    className="min-h-[96px]"
+                    onChange={(event) => setTokenNotes(event.target.value)}
+                    placeholder="Explain the reason for this adjustment."
+                    value={tokenNotes}
+                  />
+                </FieldLabel>
+              </div>
+              <div className="mt-4">
+                <PrimaryButton disabled={submitting !== null} onClick={() => void handleTokenAdjustment()} type="button">
+                  {submitting === 'tokens' ? 'Saving adjustment...' : 'Save token adjustment'}
+                </PrimaryButton>
+              </div>
+            </PanelInset>
+
+            <PanelInset title="Change package">
+              <div className="grid gap-4 sm:grid-cols-[220px_1fr]">
+                <FieldLabel label="Target package">
+                  <SelectInput onChange={(event) => setPackageCode(event.target.value as typeof packageCode)} value={packageCode}>
+                    {packages.map((item) => (
+                      <option key={item.code} value={item.code}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </SelectInput>
+                </FieldLabel>
+                <FieldLabel label="Notes">
+                  <TextAreaInput
+                    className="min-h-[96px]"
+                    onChange={(event) => setPackageNotes(event.target.value)}
+                    placeholder="Explain the manual package change."
+                    value={packageNotes}
+                  />
+                </FieldLabel>
+              </div>
+              <div className="mt-4">
+                <PrimaryButton disabled={submitting !== null} onClick={() => void handlePackageUpgrade()} type="button">
+                  {submitting === 'package' ? 'Saving package...' : 'Save package change'}
+                </PrimaryButton>
+              </div>
+            </PanelInset>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+function PaymentsPage() {
+  const [payments, setPayments] = useState<AdminPayment[]>([]);
+  const [tokenTransactions, setTokenTransactions] = useState<AdminTokenTransaction[]>([]);
+  const [packageUpgrades, setPackageUpgrades] = useState<AdminPackageUpgrade[]>([]);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      setError('');
+
+      try {
+        const payload = await apiRequest<{
+          packageUpgrades: AdminPackageUpgrade[];
+          payments: AdminPayment[];
+          tokenTransactions: AdminTokenTransaction[];
+        }>('/api/admin/payments');
+        setPayments(payload.payments);
+        setTokenTransactions(payload.tokenTransactions);
+        setPackageUpgrades(payload.packageUpgrades);
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : 'Failed to load payment activity.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void load();
+  }, []);
+
+  if (loading) {
+    return <PageLoading label="Loading payments..." />;
+  }
+
+  return (
+    <div className="space-y-6">
+      {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <Panel title="Payments" subtitle="Provider callbacks and customer purchase records.">
+          {!payments.length ? (
+            <EmptyState compact label="No payments recorded." />
+          ) : (
+            <div className="space-y-3">
+              {payments.slice(0, 10).map((payment) => (
+                <div key={payment.id} className="rounded-2xl border border-[#eadfce] bg-[#faf7f1] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-[#2f343b]">
+                        {statusLabel(payment.paymentType)} • {payment.provider}
+                      </div>
+                      <div className="text-xs text-[#7a6d63]">User #{payment.userId}</div>
+                    </div>
+                    <StatusBadge status={payment.status} />
+                  </div>
+                  <div className="mt-2 text-sm text-[#5a514a]">
+                    {payment.amount.toFixed(2)} {payment.currency.toUpperCase()}
+                  </div>
+                  <div className="mt-1 text-xs text-[#7a6d63]">{formatDate(payment.createdAt)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Token ledger" subtitle="Signup grants, refills, purchases, usage, and admin adjustments.">
+          {!tokenTransactions.length ? (
+            <EmptyState compact label="No token transactions yet." />
+          ) : (
+            <div className="space-y-3">
+              {tokenTransactions.slice(0, 10).map((entry) => (
+                <div key={entry.id} className="rounded-2xl border border-[#eadfce] bg-[#faf7f1] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-semibold text-[#2f343b]">{statusLabel(entry.transactionType)}</div>
+                    <div className={cx('text-sm font-semibold', entry.tokenDelta >= 0 ? 'text-[#3f7043]' : 'text-[#8d4f37]')}>
+                      {entry.tokenDelta >= 0 ? '+' : ''}
+                      {entry.tokenDelta}
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-[#7a6d63]">
+                    User #{entry.userId} • Balance after {entry.balanceAfter}
+                  </div>
+                  {entry.notes ? <div className="mt-2 text-sm text-[#5a514a]">{entry.notes}</div> : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Package upgrades" subtitle="Manual upgrades and payment-backed plan changes.">
+          {!packageUpgrades.length ? (
+            <EmptyState compact label="No package upgrades yet." />
+          ) : (
+            <div className="space-y-3">
+              {packageUpgrades.slice(0, 10).map((upgrade) => (
+                <div key={upgrade.id} className="rounded-2xl border border-[#eadfce] bg-[#faf7f1] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-semibold text-[#2f343b]">
+                      {statusLabel(upgrade.fromPackageCode ?? 'none')} → {statusLabel(upgrade.toPackageCode)}
+                    </div>
+                    <StatusBadge status={upgrade.status} />
+                  </div>
+                  <div className="mt-2 text-xs text-[#7a6d63]">
+                    User #{upgrade.userId} • Granted {upgrade.grantedTokenAmount ?? 0} tokens
+                  </div>
+                  <div className="mt-1 text-xs text-[#7a6d63]">{formatDate(upgrade.createdAt)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function ActivityPage() {
+  const [actions, setActions] = useState<AdminAction[]>([]);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      setError('');
+
+      try {
+        const payload = await apiRequest<{ actions: AdminAction[] }>('/api/admin/admin-actions');
+        setActions(payload.actions);
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : 'Failed to load admin activity.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void load();
+  }, []);
+
+  if (loading) {
+    return <PageLoading label="Loading admin activity..." />;
+  }
+
+  return (
+    <Panel title="Admin activity" subtitle="Every manual package and token adjustment is logged here.">
+      {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+      {!actions.length ? (
+        <EmptyState label="No admin actions yet." />
+      ) : (
+        <div className="space-y-3">
+          {actions.slice(0, 20).map((action) => (
+            <div key={action.id} className="rounded-2xl border border-[#eadfce] bg-[#faf7f1] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-[#2f343b]">{statusLabel(action.actionType)}</div>
+                  <div className="text-xs text-[#7a6d63]">
+                    {action.adminEmail} • target user #{action.targetUserId ?? 'n/a'}
+                  </div>
+                </div>
+                <div className="text-xs text-[#7a6d63]">{formatDate(action.createdAt)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
   );
 }
 
@@ -1661,10 +2197,10 @@ function PageLoading({ label }: { label: string }) {
 
 function InlineMessage({
   children,
-  tone,
+  tone = 'success',
 }: {
   children: ReactNode;
-  tone: 'error' | 'success';
+  tone?: 'error' | 'success';
 }) {
   return (
     <div

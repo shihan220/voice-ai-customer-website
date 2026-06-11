@@ -88,7 +88,7 @@ export function BanglaVoiceHero({ onSampleClick }: BanglaVoiceHeroProps) {
   return (
     <div className="relative min-h-screen w-full overflow-hidden bg-[#F2EFE7] text-[#33373D]">
       <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(380px,2fr)]">
-        <div className="relative flex min-h-[66vh] items-center overflow-hidden px-6 py-16 sm:px-10 md:px-14 lg:min-h-screen lg:px-20 xl:px-24">
+        <div className="relative flex min-h-[66vh] items-center overflow-hidden px-5 py-16 sm:px-10 md:px-14 lg:min-h-screen lg:px-20 xl:px-24">
           <div className="pointer-events-none absolute left-[-140px] top-[-120px] h-80 w-80 rounded-full bg-[#E3BB97]/25 blur-3xl" />
           <div className="pointer-events-none absolute bottom-12 right-10 hidden h-24 w-24 rounded-full border border-[#D6C9B5] opacity-70 lg:block" />
           <div className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 overflow-hidden" aria-hidden="true">
@@ -119,7 +119,7 @@ export function BanglaVoiceHero({ onSampleClick }: BanglaVoiceHeroProps) {
               ))}
             </div>
           </div>
-          <div className="pointer-events-none absolute bottom-10 left-10 grid grid-cols-3 gap-2 opacity-35" aria-hidden="true">
+          <div className="pointer-events-none absolute bottom-8 left-5 grid grid-cols-3 gap-2 opacity-35 sm:bottom-10 sm:left-10" aria-hidden="true">
             {Array.from({ length: 9 }).map((_, index) => (
               <span key={index} className="h-1.5 w-1.5 rounded-full bg-[#AE6C4A]" />
             ))}
@@ -130,7 +130,7 @@ export function BanglaVoiceHero({ onSampleClick }: BanglaVoiceHeroProps) {
               BANGLADESHI BANGLA AI VOICE
             </div>
 
-            <h1 className="mb-7 max-w-[780px] text-[46px] font-bold leading-[1.08] text-[#33373D] sm:text-[58px] lg:text-[72px] xl:text-[86px]">
+            <h1 className="mb-7 max-w-[780px] text-[38px] font-bold leading-[1.08] text-[#33373D] sm:text-[58px] lg:text-[72px] xl:text-[86px]">
               বাংলা Voice That
               <br />
               Finally Sounds
@@ -152,8 +152,8 @@ export function BanglaVoiceHero({ onSampleClick }: BanglaVoiceHeroProps) {
               <span>B2B premium</span>
             </div>
 
-            <div 
-              className="mt-8 max-w-3xl rounded-2xl p-6 lg:p-8 relative overflow-hidden shadow-[0_24px_70px_rgba(174,108,74,0.16)]"
+            <div
+              className="relative mt-8 max-w-3xl overflow-hidden rounded-2xl p-5 shadow-[0_24px_70px_rgba(174,108,74,0.16)] sm:p-6 lg:p-8"
               style={{ backgroundColor: '#E3DFD4' }}
             >
               <div className="absolute inset-0 flex items-center justify-center opacity-20 pointer-events-none">
@@ -173,8 +173,8 @@ export function BanglaVoiceHero({ onSampleClick }: BanglaVoiceHeroProps) {
                 </div>
               </div>
 
-              <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between text-left gap-5">
-                <div>
+              <div className="relative z-10 flex flex-col items-start justify-between gap-5 text-left md:flex-row md:items-center">
+                <div className="min-w-0">
                   <p 
                     className="mb-2 text-2xl lg:text-[28px]"
                     style={{ 
@@ -195,10 +195,10 @@ export function BanglaVoiceHero({ onSampleClick }: BanglaVoiceHeroProps) {
                   </p>
                 </div>
 
-                <button 
+                <button
                   type="button"
                   onClick={onSampleClick}
-                  className="px-8 py-4 lg:px-10 lg:py-4 rounded-xl transition-all hover:scale-105 flex-shrink-0"
+                  className="w-full rounded-xl px-6 py-4 transition-all hover:scale-105 sm:w-auto sm:px-8 lg:px-10 lg:py-4"
                   style={{ 
                     backgroundColor: '#AE6C4A',
                     color: '#EEEBE4',
@@ -214,7 +214,7 @@ export function BanglaVoiceHero({ onSampleClick }: BanglaVoiceHeroProps) {
           </div>
         </div>
 
-        <div className="relative min-h-[320px] overflow-hidden bg-[linear-gradient(150deg,#B87553_0%,#995842_48%,#6F3E31_100%)] lg:min-h-screen">
+        <div className="relative min-h-[280px] overflow-hidden bg-[linear-gradient(150deg,#B87553_0%,#995842_48%,#6F3E31_100%)] lg:min-h-screen">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_22%_18%,rgba(255,237,212,0.22),transparent_28%),radial-gradient(circle_at_80%_78%,rgba(74,35,28,0.32),transparent_34%)]" />
           <div className="absolute inset-y-0 left-0 hidden w-24 bg-gradient-to-r from-black/20 to-transparent lg:block" />
           <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-white/10 to-transparent" />
