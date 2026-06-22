@@ -9,15 +9,18 @@
     "build:admin": "vite build --config admin-frontend/vite.config.ts",
     "typecheck": "tsc --noEmit",
     "dev": "vite --config frontend/vite.config.ts",
+    "dev:admin": "vite --config admin-frontend/vite.config.ts --host 127.0.0.1 --port 5175 --strictPort",
     "dev:backend": "tsx watch backend/index.ts",
-    "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev -- --host 127.0.0.1 --port 5173 --strictPort\"",
+    "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev -- --host 127.0.0.1 --port 5175 --strictPort\"",
     "verify:db:fresh": "tsx backend/scripts/verify-fresh-db.ts",
+    "verify:local:runtime": "tsx backend/scripts/verify-local-runtime.ts",
     "db:import:voices": "tsx backend/scripts/import-voices.ts",
     "db:seed:voices": "tsx backend/scripts/seed-voices.ts"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
     "@emotion/styled": "11.14.1",
+    "@hookform/resolvers": "^5.4.0",
     "@mui/icons-material": "7.3.5",
     "@mui/material": "7.3.5",
     "@popperjs/core": "2.11.8",
@@ -56,6 +59,7 @@
     "argon2": "^0.44.0",
     "canvas-confetti": "1.9.4",
     "class-variance-authority": "0.7.1",
+    "cloudinary": "^2.10.0",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
     "connect-pg-simple": "^10.0.0",
@@ -71,9 +75,9 @@
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "0.487.0",
     "motion": "12.23.24",
-    "multer": "^2.1.1",
+    "multer": "^2.2.0",
     "next-themes": "0.4.6",
-    "nodemailer": "^8.0.10",
+    "nodemailer": "^9.0.1",
     "pg": "^8.21.0",
     "react-day-picker": "8.10.1",
     "react-dnd": "16.0.1",
@@ -88,10 +92,12 @@
     "recharts": "2.15.2",
     "sonner": "2.0.3",
     "stripe": "^22.2.0",
+    "sweetalert2": "^11.26.25",
     "tailwind-merge": "3.2.0",
     "tw-animate-css": "1.3.8",
     "twilio": "^6.0.2",
-    "vaul": "1.1.2"
+    "vaul": "1.1.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.1.12",
@@ -117,6 +123,14 @@
     },
     "react-dom": {
       "optional": true
+    }
+  },
+  "overrides": {
+    "axios": {
+      "form-data": "^4.0.6"
+    },
+    "tsx": {
+      "esbuild": "^0.28.1"
     }
   },
   "pnpm": {

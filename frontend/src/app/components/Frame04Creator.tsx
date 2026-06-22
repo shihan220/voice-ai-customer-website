@@ -15,12 +15,12 @@ const decorativeLetters: DecorativeBanglaLetter[] = [
 ];
 
 export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
-  const voiceStyles = [
-    'Friendly Apu',
-    'Energetic Bhaiya',
-    'Premium Brand',
-    'Storyteller',
-    'Corporate'
+  const creatorOutputs = [
+    'UGC sample delivery',
+    'Faceless channel voiceovers',
+    'Avatar dubbing workflow',
+    'Agency-ready ad narration',
+    'Brand content production',
   ];
 
   const pipeline = [
@@ -56,7 +56,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
               color: '#373A40'
             }}
           >
-            One Script → 5 Voice Ads
+            One Script → Bangla Ad Production
           </h2>
 
           <p 
@@ -108,14 +108,14 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
                 letterSpacing: '0.1em'
               }}
             >
-              5 Voice Styles Available
+              Ideal use cases
             </div>
 
             <div className="flex flex-wrap gap-2 lg:gap-3 mb-8">
-              {voiceStyles.map((style, i) => (
+              {creatorOutputs.map((item, i) => (
                 <div 
-                  key={style}
-                  className="px-4 py-2 lg:px-6 lg:py-3 rounded-full relative overflow-hidden group cursor-pointer transition-all hover:scale-105 text-sm lg:text-[15px]"
+                  key={item}
+                  className="px-4 py-2 lg:px-6 lg:py-3 rounded-full relative overflow-hidden transition-all text-sm lg:text-[15px]"
                   style={{ 
                     backgroundColor: i === 0 ? '#AE6C4A' : '#E3DFD4',
                     color: i === 0 ? '#EEEBE4' : '#373A40',
@@ -123,11 +123,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
                     border: i === 0 ? 'none' : '2px solid #D2CCBE'
                   }}
                 >
-                  {style}
-                  <div 
-                    className="absolute bottom-0 left-0 right-0 h-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                    style={{ backgroundColor: '#DF9E64' }}
-                  />
+                  {item}
                 </div>
               ))}
             </div>
@@ -147,7 +143,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
                 fontWeight: '500'
               }}
             >
-              Send 1 product script. Get 5 Bangladeshi Bangla ad voices.
+              Send one product script and receive a clean Bangladeshi Bangla sample workflow for your content or campaign.
             </p>
             <button 
               type="button"

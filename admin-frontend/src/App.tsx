@@ -65,15 +65,6 @@ type EmailLog = {
   voiceSampleId: number | null;
 };
 
-type EmailStatus = {
-  configured: boolean;
-  from: string | null;
-  host: string | null;
-  message: string;
-  missing: string[];
-  port: number | null;
-};
-
 type DashboardPayload = {
   recentEmails: EmailLog[];
   recentRequests: SampleRequest[];
@@ -165,7 +156,7 @@ type AdminAction = {
   tokenTransactionId: number | null;
 };
 
-type CustomerFilter = 'all' | 'starter' | 'gold' | 'platinum' | 'verified' | 'unverified';
+type CustomerFilter = 'all' | 'starter' | 'gold' | 'platinum';
 
 type SampleRequestDetailPayload = {
   emailLogs: EmailLog[];
@@ -197,7 +188,6 @@ const protectedRoutes = new Set([
   '/admin/payments',
   '/admin/activity',
   '/admin/voice-cards',
-  '/admin/send-sample',
 ]);
 
 const requestStatuses: SampleRequestStatus[] = ['new', 'reviewing', 'sample_ready', 'sent', 'archived'];
@@ -206,8 +196,6 @@ const customerFilters: Array<{ label: string; value: CustomerFilter }> = [
   { label: 'Starter', value: 'starter' },
   { label: 'Gold', value: 'gold' },
   { label: 'Platinum', value: 'platinum' },
-  { label: 'Verified', value: 'verified' },
-  { label: 'Unverified', value: 'unverified' },
 ];
 
 function readLocation(): AppLocation {
@@ -362,6 +350,11 @@ function App() {
       return;
     }
 
+    if (currentPath === '/admin/send-sample') {
+      navigate(session.authenticated ? '/admin/dashboard' : '/admin/login', true);
+      return;
+    }
+
     if (currentPath === '/admin/voice-samples') {
       navigate('/admin/voice-cards', true);
       return;
@@ -378,6 +371,10 @@ function App() {
   }, [currentPath, isProtectedRoute, session, sessionLoading]);
 
   const handleLogout = async () => {
+    if (!window.confirm('Do you really want to log out?')) {
+      return;
+    }
+
     await apiRequest('/api/admin/logout', { method: 'POST' });
     setSession({ adminEmail: null, authenticated: false });
     navigate('/admin/login', true);
@@ -417,7 +414,6 @@ function App() {
       {currentPath === '/admin/payments' ? <PaymentsPage /> : null}
       {currentPath === '/admin/activity' ? <ActivityPage /> : null}
       {currentPath === '/admin/voice-cards' ? <VoiceCardsPage /> : null}
-      {currentPath === '/admin/send-sample' ? <SendSamplePage search={location.search} /> : null}
       {!protectedRoutes.has(currentPath) ? <DashboardPage /> : null}
     </AdminShell>
   );
@@ -442,6 +438,7 @@ function LoginPage({
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState(errorMessage);
 
@@ -476,7 +473,7 @@ function LoginPage({
             Admin Access
           </div>
           <h1 className="mt-6 max-w-md text-4xl font-bold leading-tight text-[#2f343b]">
-            Manage requests, public voice cards, and outbound sample emails.
+            Manage requests, public voice cards, and customer activity.
           </h1>
           <p className="mt-4 max-w-lg text-sm leading-7 text-[#64584f] sm:text-base">
             This workspace is connected to the existing PostgreSQL data and the same media pipeline used by the public
@@ -485,7 +482,7 @@ function LoginPage({
           <div className="mt-10 grid gap-4 sm:grid-cols-3">
             <InfoChip label="Protected routes" value="/admin/*" />
             <InfoChip label="Public voices" value="voice_cards" />
-            <InfoChip label="Email flow" value="SMTP + logs" />
+            <InfoChip label="Requests" value="sample_requests" />
           </div>
         </section>
 
@@ -507,13 +504,23 @@ function LoginPage({
             </FieldLabel>
 
             <FieldLabel label="Password">
-              <TextInput
-                autoComplete="current-password"
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Enter admin password"
-                type="password"
-                value={password}
-              />
+              <div className="relative">
+                <TextInput
+                  autoComplete="current-password"
+                  className="pr-20"
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Enter admin password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                />
+                <button
+                  className="absolute inset-y-0 right-0 px-4 text-xs font-semibold uppercase tracking-[0.12em] text-[#8d5d45] transition hover:text-[#ae6c4a]"
+                  onClick={() => setShowPassword((current) => !current)}
+                  type="button"
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </FieldLabel>
 
             {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
@@ -550,7 +557,6 @@ function AdminShell({
     { href: '/admin/payments', label: 'Payments' },
     { href: '/admin/activity', label: 'Activity' },
     { href: '/admin/voice-cards', label: 'Public Voice Cards' },
-    { href: '/admin/send-sample', label: 'Send Sample' },
   ];
 
   return (
@@ -559,7 +565,7 @@ function AdminShell({
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
           <div>
             <div className="inline-flex rounded-full border border-[#d9c6b2] bg-[#efe2d1] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#a96544]">
-              Bangla Voice AI Admin
+              BANGLA SPEECH AI Admin
             </div>
             <p className="mt-2 text-sm text-[#6d6158]">Signed in as {adminEmail ?? 'admin'}.</p>
           </div>
@@ -761,14 +767,6 @@ function CustomersPage() {
         return true;
       }
 
-      if (activeFilter === 'verified') {
-        return Boolean(user.emailVerifiedAt && user.phoneVerifiedAt);
-      }
-
-      if (activeFilter === 'unverified') {
-        return !user.emailVerifiedAt || !user.phoneVerifiedAt;
-      }
-
       return user.packageCode === activeFilter;
     });
   }, [activeFilter, users]);
@@ -846,8 +844,8 @@ function CustomersPage() {
   }
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-      <Panel title="Customers" subtitle="Review verified users, packages, and balances from the customer auth system.">
+    <div className="grid gap-6">
+      <Panel title="Customers" subtitle="Review customer packages and token balances from the customer auth system.">
         {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
         {message ? <InlineMessage tone="success">{message}</InlineMessage> : null}
         <div className="mb-5 flex flex-wrap gap-2">
@@ -878,7 +876,6 @@ function CustomersPage() {
                     <th className="px-4 py-3 font-semibold">Email</th>
                     <th className="px-4 py-3 font-semibold">Package</th>
                     <th className="px-4 py-3 font-semibold">Tokens</th>
-                    <th className="px-4 py-3 font-semibold">Verification</th>
                     <th className="px-4 py-3 font-semibold">Created</th>
                   </tr>
                 </thead>
@@ -898,9 +895,6 @@ function CustomersPage() {
                       </td>
                       <td className="px-4 py-3 text-[#5a514a]">{statusLabel(user.packageCode)}</td>
                       <td className="px-4 py-3 text-[#2f343b]">{user.tokenBalance.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-[#5a514a]">
-                        {user.emailVerifiedAt ? 'Email' : 'Email pending'} / {user.phoneVerifiedAt ? 'Phone' : 'Phone pending'}
-                      </td>
                       <td className="px-4 py-3 text-[#5a514a]">{formatDate(user.createdAt)}</td>
                     </tr>
                   ))}
@@ -911,68 +905,23 @@ function CustomersPage() {
         )}
       </Panel>
 
-      <Panel title="Customer controls" subtitle="Apply package upgrades and token adjustments with admin action logging.">
+      <Panel title="Customer updates" subtitle="Package and token changes should now come from successful customer payments.">
         {!selectedUser ? (
-          <EmptyState label="Select a customer to manage package and token settings." />
+          <EmptyState label="Select a customer row to review account details." />
         ) : (
-          <div className="space-y-6">
-            <PanelInset title="Selected customer">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <InfoChip label="Email" value={selectedUser.email} />
-                <InfoChip label="Package" value={statusLabel(selectedUser.packageCode)} />
-                <InfoChip label="Token balance" value={selectedUser.tokenBalance.toLocaleString()} />
-                <InfoChip label="Account status" value={statusLabel(selectedUser.accountStatus)} />
-              </div>
-            </PanelInset>
-
-            <PanelInset title="Adjust tokens">
-              <div className="grid gap-4 sm:grid-cols-[160px_1fr]">
-                <FieldLabel label="Token delta">
-                  <TextInput onChange={(event) => setTokenDelta(event.target.value)} value={tokenDelta} />
-                </FieldLabel>
-                <FieldLabel label="Notes">
-                  <TextAreaInput
-                    className="min-h-[96px]"
-                    onChange={(event) => setTokenNotes(event.target.value)}
-                    placeholder="Explain the reason for this adjustment."
-                    value={tokenNotes}
-                  />
-                </FieldLabel>
-              </div>
-              <div className="mt-4">
-                <PrimaryButton disabled={submitting !== null} onClick={() => void handleTokenAdjustment()} type="button">
-                  {submitting === 'tokens' ? 'Saving adjustment...' : 'Save token adjustment'}
-                </PrimaryButton>
-              </div>
-            </PanelInset>
-
-            <PanelInset title="Change package">
-              <div className="grid gap-4 sm:grid-cols-[220px_1fr]">
-                <FieldLabel label="Target package">
-                  <SelectInput onChange={(event) => setPackageCode(event.target.value as typeof packageCode)} value={packageCode}>
-                    {packages.map((item) => (
-                      <option key={item.code} value={item.code}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </SelectInput>
-                </FieldLabel>
-                <FieldLabel label="Notes">
-                  <TextAreaInput
-                    className="min-h-[96px]"
-                    onChange={(event) => setPackageNotes(event.target.value)}
-                    placeholder="Explain the manual package change."
-                    value={packageNotes}
-                  />
-                </FieldLabel>
-              </div>
-              <div className="mt-4">
-                <PrimaryButton disabled={submitting !== null} onClick={() => void handlePackageUpgrade()} type="button">
-                  {submitting === 'package' ? 'Saving package...' : 'Save package change'}
-                </PrimaryButton>
-              </div>
-            </PanelInset>
-          </div>
+          <PanelInset title="Selected customer">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <InfoChip label="Email" value={selectedUser.email} />
+              <InfoChip label="Package" value={statusLabel(selectedUser.packageCode)} />
+              <InfoChip label="Token balance" value={selectedUser.tokenBalance.toLocaleString()} />
+            </div>
+            <div className="mt-4">
+              <InlineMessage>
+                Successful customer payments should automatically upgrade the account and update token balance. Manual
+                customer controls have been removed from this panel.
+              </InlineMessage>
+            </div>
+          </PanelInset>
         )}
       </Panel>
     </div>
@@ -1301,7 +1250,7 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
       <PageHeading
         eyebrow="Leads"
         title="Sample requests"
-        description="Review inbound requests, adjust status, and open the send-sample workflow against a selected client."
+        description="Review inbound requests, update request status, and track delivery history from one place."
       />
 
       {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
@@ -1345,7 +1294,7 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
           )}
         </Panel>
 
-        <Panel title="Request detail" subtitle="Edit the selected request and open delivery actions">
+        <Panel title="Request detail" subtitle="Edit the selected request and review delivery history">
           {!selectedRequestId ? (
             <EmptyState label="Choose a request from the queue." />
           ) : detailLoading || !detail ? (
@@ -1426,12 +1375,6 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
                 <PrimaryButton disabled={saveState === 'saving'} onClick={handleSave} type="button">
                   {saveState === 'saving' ? 'Saving...' : saveState === 'saved' ? 'Saved' : 'Save changes'}
                 </PrimaryButton>
-                <SecondaryButton
-                  onClick={() => onNavigate(`/admin/send-sample?requestId=${selectedRequestId}`)}
-                  type="button"
-                >
-                  Open send sample
-                </SecondaryButton>
                 <DangerButton disabled={deletingRequest} onClick={handleDelete} type="button">
                   {deletingRequest ? 'Deleting...' : 'Delete request'}
                 </DangerButton>
@@ -1855,263 +1798,6 @@ function VoiceCardsPage() {
           </div>
         </Panel>
       </div>
-    </section>
-  );
-}
-
-function SendSamplePage({ search }: { search: string }) {
-  const [requests, setRequests] = useState<SampleRequest[]>([]);
-  const [voiceCards, setVoiceCards] = useState<PublicVoiceCard[]>([]);
-  const [emailStatus, setEmailStatus] = useState<EmailStatus | null>(null);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-  const [sending, setSending] = useState(false);
-
-  const queryRequestId = useMemo(() => {
-    const value = new URLSearchParams(search).get('requestId');
-    return value ? Number(value) : null;
-  }, [search]);
-
-  const [form, setForm] = useState({
-    deliveryMode: 'link' as DeliveryMode,
-    message: 'Thanks for your interest in Bangla Voice AI. I have attached your requested sample below.',
-    recipientEmail: '',
-    requestId: '',
-    subject: 'Your Bangla AI voice sample',
-    voiceCardId: '',
-  });
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const [requestsPayload, voiceCardsPayload, emailStatusPayload] = await Promise.all([
-          apiRequest<{ requests: SampleRequest[] }>('/api/admin/sample-requests'),
-          apiRequest<{ voiceCards: PublicVoiceCard[] }>('/api/admin/voice-cards'),
-          apiRequest<EmailStatus>('/api/admin/email-status'),
-        ]);
-
-        setRequests(requestsPayload.requests);
-        setVoiceCards(voiceCardsPayload.voiceCards);
-        setEmailStatus(emailStatusPayload);
-
-        const initialRequestId =
-          queryRequestId && requestsPayload.requests.some((request) => request.id === queryRequestId)
-            ? String(queryRequestId)
-            : requestsPayload.requests[0]
-              ? String(requestsPayload.requests[0].id)
-              : '';
-
-        const initialRequest = requestsPayload.requests.find((request) => String(request.id) === initialRequestId);
-        const initialVoiceCard = voiceCardsPayload.voiceCards[0];
-
-        setForm((current) => ({
-          ...current,
-          recipientEmail: initialRequest?.email ?? current.recipientEmail,
-          requestId: initialRequestId,
-          voiceCardId: initialVoiceCard ? String(initialVoiceCard.id) : '',
-        }));
-      } catch (error) {
-        setError(error instanceof Error ? error.message : 'Failed to load send-sample data.');
-      }
-    };
-
-    void load();
-  }, [queryRequestId]);
-
-  useEffect(() => {
-    if (!form.requestId) {
-      return;
-    }
-
-    const selectedRequest = requests.find((request) => String(request.id) === form.requestId);
-
-    if (selectedRequest) {
-      setForm((current) => ({
-        ...current,
-        recipientEmail: selectedRequest.email,
-      }));
-    }
-  }, [form.requestId, requests]);
-
-  const selectedVoiceCard = useMemo(
-    () => voiceCards.find((card) => String(card.id) === form.voiceCardId) ?? null,
-    [form.voiceCardId, voiceCards],
-  );
-  const selectedVoiceHasAudio = Boolean(selectedVoiceCard?.audioUrl && selectedVoiceCard?.audioFile);
-  const deliveryModeMessage =
-    form.deliveryMode === 'attachment'
-      ? 'The selected public voice card audio will be attached automatically.'
-      : 'The selected public voice card audio link will be included in the email.';
-
-  const handleSend = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setSending(true);
-    setError('');
-    setMessage('');
-
-    try {
-      const payload = await apiRequest<{ message: string }>('/api/admin/send-sample', {
-        body: JSON.stringify({
-          deliveryMode: form.deliveryMode,
-          message: form.message,
-          recipientEmail: form.recipientEmail,
-          requestId: Number(form.requestId),
-          subject: form.subject,
-          voiceCardId: Number(form.voiceCardId),
-        }),
-        method: 'POST',
-      });
-
-      setMessage(payload.message);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to send sample email.');
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <section className="space-y-6">
-      <PageHeading
-        eyebrow="Delivery"
-        title="Send sample"
-        description="Choose a request, select a public voice card, and deliver the website audio through SMTP."
-      />
-
-      {emailStatus && !emailStatus.configured ? <InlineMessage tone="error">{emailStatus.message}</InlineMessage> : null}
-      {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
-      {message ? <InlineMessage tone="success">{message}</InlineMessage> : null}
-      {selectedVoiceCard && !selectedVoiceHasAudio ? (
-        <InlineMessage tone="error">This voice card has no audio file. Add audio from Public Voice Cards first.</InlineMessage>
-      ) : null}
-
-      <Panel title="Compose client sample email" subtitle="Attachment and public-link delivery are both supported">
-        {requests.length === 0 ? (
-          <EmptyState label="You need at least one sample request before sending email." />
-        ) : voiceCards.length === 0 ? (
-          <EmptyState label="You need at least one public voice card before sending email." />
-        ) : (
-          <form className="grid gap-4 lg:grid-cols-2" onSubmit={handleSend}>
-            <FieldLabel label="Sample request">
-              <SelectInput
-                onChange={(event) => setForm((current) => ({ ...current, requestId: event.target.value }))}
-                value={form.requestId}
-              >
-                {requests.map((request) => (
-                  <option key={request.id} value={String(request.id)}>
-                    {request.clientName} • {request.email}
-                  </option>
-                ))}
-              </SelectInput>
-            </FieldLabel>
-
-            <FieldLabel label="Public voice card">
-              <SelectInput
-                onChange={(event) => setForm((current) => ({ ...current, voiceCardId: event.target.value }))}
-                value={form.voiceCardId}
-              >
-                {voiceCards.map((card) => (
-                  <option key={card.id} value={String(card.id)}>
-                    {card.name}{card.audioUrl ? '' : ' (No audio)'}
-                  </option>
-                ))}
-              </SelectInput>
-            </FieldLabel>
-
-            <FieldLabel label="Recipient email">
-              <TextInput
-                onChange={(event) => setForm((current) => ({ ...current, recipientEmail: event.target.value }))}
-                type="email"
-                value={form.recipientEmail}
-              />
-            </FieldLabel>
-
-            <FieldLabel label="Delivery mode">
-              <SelectInput
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, deliveryMode: event.target.value as DeliveryMode }))
-                }
-                value={form.deliveryMode}
-              >
-                <option value="link">Public audio link</option>
-                <option value="attachment">Audio attachment</option>
-              </SelectInput>
-            </FieldLabel>
-
-            {selectedVoiceCard ? (
-              <div className="lg:col-span-2">
-                <PanelInset title="Selected voice card preview">
-                  <div className="space-y-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-[#2f343b]">{selectedVoiceCard.name}</div>
-                        <div className="mt-1 text-xs text-[#7c7168]">
-                          {selectedVoiceCard.audioFile ?? 'No audio file linked'}
-                        </div>
-                        {selectedVoiceCard.audioUrl ? (
-                          <div className="mt-1 text-xs text-[#7c7168]">{selectedVoiceCard.audioUrl}</div>
-                        ) : null}
-                      </div>
-                      <span className="inline-flex rounded-full border border-[#e3d7c8] bg-[#f8f2ea] px-3 py-1 text-xs font-semibold text-[#7a5f4f]">
-                        {form.deliveryMode === 'attachment' ? 'This audio will be attached' : 'This audio link will be included'}
-                      </span>
-                    </div>
-
-                    <div className="grid gap-4 lg:grid-cols-2">
-                      <div className="rounded-2xl border border-[#eadfce] bg-white/88 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#a96544]">Bangla caption</div>
-                        <p className="mt-2 text-sm leading-7 text-[#2f343b]">{selectedVoiceCard.scriptText}</p>
-                      </div>
-                      <div className="rounded-2xl border border-[#eadfce] bg-white/88 p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#a96544]">English meaning</div>
-                        <p className="mt-2 text-sm leading-7 text-[#2f343b]">
-                          {selectedVoiceCard.englishMeaning ?? 'No English meaning set for this voice card.'}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-[#eadfce] bg-white/88 p-4">
-                      <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#a96544]">Delivery mode status</div>
-                      <p className="mt-2 text-sm leading-7 text-[#2f343b]">{deliveryModeMessage}</p>
-                      {selectedVoiceCard.audioUrl ? (
-                        <audio className="mt-4 w-full" controls preload="none" src={selectedVoiceCard.audioUrl} />
-                      ) : null}
-                    </div>
-                  </div>
-                </PanelInset>
-              </div>
-            ) : null}
-
-            <div className="lg:col-span-2">
-              <FieldLabel label="Email subject">
-                <TextInput
-                  onChange={(event) => setForm((current) => ({ ...current, subject: event.target.value }))}
-                  value={form.subject}
-                />
-              </FieldLabel>
-            </div>
-
-            <div className="lg:col-span-2">
-              <FieldLabel label="Email message">
-                <TextAreaInput
-                  onChange={(event) => setForm((current) => ({ ...current, message: event.target.value }))}
-                  rows={8}
-                  value={form.message}
-                />
-              </FieldLabel>
-            </div>
-
-            <div className="lg:col-span-2">
-              <PrimaryButton
-                disabled={sending || Boolean(emailStatus && !emailStatus.configured) || !selectedVoiceHasAudio}
-                type="submit"
-              >
-                {sending ? 'Sending...' : 'Send sample'}
-              </PrimaryButton>
-            </div>
-          </form>
-        )}
-      </Panel>
     </section>
   );
 }

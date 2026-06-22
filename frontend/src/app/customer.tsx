@@ -1,4 +1,6 @@
+import { Eye, EyeOff } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import brandLogo from '../assets/bangla-speech-ai-logo.png';
 
 export type CustomerUser = {
   accountStatus: 'active' | 'disabled';
@@ -176,17 +178,6 @@ function buildAccountHref(section?: string | null) {
   return `/account${createSearch(params)}`;
 }
 
-function buildManagedAccountHref(section?: string | null) {
-  const params = new URLSearchParams();
-  params.set('view', 'manage');
-
-  if (section) {
-    params.set('section', section);
-  }
-
-  return `/account${createSearch(params)}`;
-}
-
 function InlineMessage({ children, tone = 'neutral' }: InlineMessageProps) {
   return (
     <div
@@ -202,6 +193,9 @@ function InlineMessage({ children, tone = 'neutral' }: InlineMessageProps) {
   );
 }
 
+const textInputClassName =
+  'w-full rounded-2xl border border-[#d8cbbe] bg-white px-4 py-3 text-sm text-[#2f343b] outline-none transition placeholder:text-[#9a8e83] focus:border-[#ae6c4a] focus:ring-2 focus:ring-[#e8c6ad]';
+
 function TextInput({
   className,
   ...props
@@ -209,11 +203,33 @@ function TextInput({
   return (
     <input
       {...props}
-      className={cx(
-        'w-full rounded-2xl border border-[#d8cbbe] bg-white px-4 py-3 text-sm text-[#2f343b] outline-none transition placeholder:text-[#9a8e83] focus:border-[#ae6c4a] focus:ring-2 focus:ring-[#e8c6ad]',
-        className,
-      )}
+      className={cx(textInputClassName, className)}
     />
+  );
+}
+
+function PasswordInput({
+  className,
+  ...props
+}: React.InputHTMLAttributes<HTMLInputElement> & { className?: string }) {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <div className="relative">
+      <input
+        {...props}
+        type={visible ? 'text' : 'password'}
+        className={cx(textInputClassName, 'pr-12', className)}
+      />
+      <button
+        aria-label={visible ? 'Hide password' : 'Show password'}
+        className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-[#8d7f73] transition hover:text-[#ae6c4a]"
+        onClick={() => setVisible((current) => !current)}
+        type="button"
+      >
+        {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
+    </div>
   );
 }
 
@@ -247,18 +263,44 @@ function SecondaryButton({
   );
 }
 
-function AuthCard({ children, title, description }: { children: ReactNode; title: string; description: string }) {
+function AuthCard({
+  children,
+  description,
+  onNavigate,
+  title,
+}: {
+  children: ReactNode;
+  description: string;
+  onNavigate?: (href: string, replace?: boolean) => void;
+  title: string;
+}) {
   return (
-    <div className="mx-auto grid min-h-screen max-w-5xl items-center px-5 py-16">
-      <div className="grid overflow-hidden rounded-[28px] border border-[#ddcfbe] bg-white/90 shadow-[0_28px_80px_rgba(92,80,72,0.12)] backdrop-blur lg:grid-cols-[0.95fr_1.05fr]">
+    <div className="relative min-h-screen w-full overflow-x-hidden bg-[#EEEBE4] px-4 py-6 sm:px-5 sm:py-8">
+      {onNavigate ? (
+        <div className="mx-auto flex w-full max-w-5xl justify-end">
+          <SecondaryButton className="px-4 py-2.5 text-xs sm:text-sm" onClick={() => onNavigate('/')} type="button">
+            Back to website
+          </SecondaryButton>
+        </div>
+      ) : null}
+      <div className="mx-auto grid min-h-[calc(100vh-3rem)] max-w-5xl items-center py-4 sm:min-h-[calc(100vh-4rem)] sm:py-6">
+        <div className="grid overflow-hidden rounded-[28px] border border-[#ddcfbe] bg-white/90 shadow-[0_28px_80px_rgba(92,80,72,0.12)] backdrop-blur lg:grid-cols-[0.95fr_1.05fr]">
         <section className="bg-[#f8f3ec] px-6 py-10 sm:px-10 sm:py-12">
-          <div className="inline-flex rounded-full border border-[#d9c6b2] bg-[#efe2d1] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#a96544]">
-            Bangla Voice AI
+          <div className="flex items-center gap-3">
+            <img
+              src={brandLogo}
+              alt="BANGLA SPEECH AI logo"
+              className="h-10 w-auto shrink-0 mix-blend-multiply sm:h-11"
+            />
+            <span className="text-xs font-bold uppercase tracking-[0.18em] text-[#4F4740]">
+              BANGLA SPEECH AI
+            </span>
           </div>
           <h1 className="mt-6 max-w-md text-4xl font-bold leading-tight text-[#2f343b]">{title}</h1>
           <p className="mt-4 max-w-lg text-sm leading-7 text-[#64584f] sm:text-base">{description}</p>
         </section>
         <section className="px-6 py-8 sm:px-10 sm:py-12">{children}</section>
+      </div>
       </div>
     </div>
   );
@@ -607,6 +649,7 @@ function LoginPage({
 
   return (
     <AuthCard
+      onNavigate={onNavigate}
       title="Sign in to access Bangla voice samples."
       description="Customer accounts gate sample access, keep verification state, and track package and token usage."
     >
@@ -615,7 +658,7 @@ function LoginPage({
 
       <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
         <TextInput autoComplete="username" placeholder="Work email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
-        <TextInput autoComplete="current-password" placeholder="Password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+        <PasswordInput autoComplete="current-password" placeholder="Password" value={password} onChange={(event) => setPassword(event.target.value)} />
         {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
         <PrimaryButton className="w-full justify-center" disabled={submitting} type="submit">
           {submitting ? 'Signing in...' : 'Sign in'}
@@ -693,6 +736,7 @@ function SignupPage({
 
   return (
     <AuthCard
+      onNavigate={onNavigate}
       title="Create a verified customer account."
       description="Starter accounts begin on the free package and unlock samples after email and phone verification."
     >
@@ -703,8 +747,8 @@ function SignupPage({
           <TextInput placeholder="Country code" value={form.countryCode} onChange={(event) => setForm((current) => ({ ...current, countryCode: event.target.value }))} />
           <TextInput placeholder="Mobile number" value={form.mobileNumber} onChange={(event) => setForm((current) => ({ ...current, mobileNumber: event.target.value }))} />
         </div>
-        <TextInput autoComplete="new-password" placeholder="Password" type="password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
-        <TextInput autoComplete="new-password" placeholder="Confirm password" type="password" value={form.confirmPassword} onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))} />
+        <PasswordInput autoComplete="new-password" placeholder="Password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
+        <PasswordInput autoComplete="new-password" placeholder="Confirm password" value={form.confirmPassword} onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))} />
         {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
         {verificationInfo.emailPreview || verificationInfo.phonePreview ? (
           <InlineMessage>
@@ -750,7 +794,7 @@ function ForgotPasswordPage({ onNavigate }: { onNavigate: (href: string, replace
   };
 
   return (
-    <AuthCard title="Reset your password." description="Use your email address to begin the reset flow.">
+    <AuthCard description="Use your email address to begin the reset flow." onNavigate={onNavigate} title="Reset your password.">
       <h2 className="text-2xl font-bold text-[#2f343b]">Forgot password</h2>
       <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
         <TextInput autoComplete="email" placeholder="Work email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
@@ -803,11 +847,11 @@ function ResetPasswordPage({
   };
 
   return (
-    <AuthCard title="Choose a new password." description="Complete your password reset and continue to your dashboard.">
+    <AuthCard description="Complete your password reset and continue to your dashboard." onNavigate={onNavigate} title="Choose a new password.">
       <h2 className="text-2xl font-bold text-[#2f343b]">Reset password</h2>
       <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
-        <TextInput autoComplete="new-password" placeholder="New password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
-        <TextInput autoComplete="new-password" placeholder="Confirm password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
+        <PasswordInput autoComplete="new-password" placeholder="New password" value={password} onChange={(event) => setPassword(event.target.value)} />
+        <PasswordInput autoComplete="new-password" placeholder="Confirm password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
         {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
         <PrimaryButton className="w-full justify-center" disabled={submitting} type="submit">
           {submitting ? 'Resetting...' : 'Reset password'}
@@ -885,7 +929,7 @@ function VerifyEmailPage({
   };
 
   return (
-    <AuthCard title="Verify your email." description="Email verification is required before sample access is enabled.">
+    <AuthCard description="Email verification is required before sample access is enabled." onNavigate={onNavigate} title="Verify your email.">
       <h2 className="text-2xl font-bold text-[#2f343b]">Email verification</h2>
       <form className="mt-8 space-y-4" onSubmit={handleVerify}>
         <TextInput placeholder="6-digit code" value={otp} onChange={(event) => setOtp(event.target.value)} />
@@ -961,7 +1005,7 @@ function VerifyPhonePage({
   };
 
   return (
-    <AuthCard title="Verify your phone number." description="Phone verification completes account activation for sample usage and dashboard access.">
+    <AuthCard description="Phone verification completes account activation for sample usage and dashboard access." onNavigate={onNavigate} title="Verify your phone number.">
       <h2 className="text-2xl font-bold text-[#2f343b]">Phone verification</h2>
       <form className="mt-8 space-y-4" onSubmit={handleVerify}>
         <TextInput placeholder="6-digit code" value={otp} onChange={(event) => setOtp(event.target.value)} />
@@ -1022,7 +1066,6 @@ export function CustomerAccountPage({
   const [planSubmitting, setPlanSubmitting] = useState(false);
   const searchParams = new URLSearchParams(search);
   const sectionParam = searchParams.get('section');
-  const isManageAccountView = searchParams.get('view') === 'manage';
   const activeSection: AccountSection = validAccountSections.has(sectionParam as AccountSection)
     ? (sectionParam as AccountSection)
     : 'profile';
@@ -1176,22 +1219,8 @@ export function CustomerAccountPage({
         <DashboardCard label="Phone status" value={user.phoneVerified ? 'Verified' : 'Pending'} />
       </div>
 
-      <div className={`mt-8 grid gap-6 ${isManageAccountView ? 'xl:grid-cols-[260px_1fr]' : ''}`}>
-        {isManageAccountView ? (
-          <aside className="rounded-[28px] border border-[#ddcfbe] bg-white/88 p-5 shadow-[0_18px_50px_rgba(55,58,64,0.08)] xl:sticky xl:top-24 xl:self-start">
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8d5d45]">Account menu</div>
-            <div className="mt-4 grid gap-2">
-              <SectionNavButton active={activeSection === 'profile'} label="Profile details" onClick={() => onNavigate(buildManagedAccountHref('profile'))} />
-              <SectionNavButton active={activeSection === 'plan'} label="Manage plan" onClick={() => onNavigate(buildManagedAccountHref('plan'))} />
-              <SectionNavButton active={activeSection === 'tokens'} label="Token balance" onClick={() => onNavigate(buildManagedAccountHref('tokens'))} />
-              <SectionNavButton active={activeSection === 'credits'} label="Add credits" onClick={() => onNavigate(buildManagedAccountHref('credits'))} />
-              <SectionNavButton active={activeSection === 'payments'} label="Payment history" onClick={() => onNavigate(buildManagedAccountHref('payments'))} />
-              <SectionNavButton active={activeSection === 'security'} label="Security" onClick={() => onNavigate(buildManagedAccountHref('security'))} />
-            </div>
-          </aside>
-        ) : null}
-
-        <div className={isManageAccountView ? '' : 'mx-auto w-full max-w-4xl'}>
+      <div className="mt-8">
+        <div className="mx-auto w-full max-w-4xl">
           {activeSection === 'profile' ? (
             <section className="rounded-[28px] border border-[#ddcfbe] bg-white/88 p-6 shadow-[0_18px_50px_rgba(55,58,64,0.08)]">
             <h2 className="text-xl font-bold text-[#2f343b]">Profile details</h2>
@@ -1401,24 +1430,21 @@ export function CustomerAccountPage({
             <h2 className="text-xl font-bold text-[#2f343b]">Security</h2>
             <p className="mt-2 text-sm leading-7 text-[#64584f]">Change your password using the current password as confirmation.</p>
             <form className="mt-6 space-y-4" onSubmit={handlePasswordSubmit}>
-              <TextInput
+              <PasswordInput
                 autoComplete="current-password"
                 placeholder="Current password"
-                type="password"
                 value={passwordForm.currentPassword}
                 onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))}
               />
-              <TextInput
+              <PasswordInput
                 autoComplete="new-password"
                 placeholder="New password"
-                type="password"
                 value={passwordForm.newPassword}
                 onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))}
               />
-              <TextInput
+              <PasswordInput
                 autoComplete="new-password"
                 placeholder="Confirm new password"
-                type="password"
                 value={passwordForm.confirmPassword}
                 onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))}
               />
@@ -1444,22 +1470,5 @@ function DashboardCard({ label, value }: { label: string; value: string }) {
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8d5d45]">{label}</div>
       <div className="mt-3 text-3xl font-bold text-[#2f343b]">{value}</div>
     </div>
-  );
-}
-
-function SectionNavButton({ active = false, label, onClick }: { active?: boolean; label: string; onClick: () => void }) {
-  return (
-    <button
-      className={cx(
-        'w-full rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition',
-        active
-          ? 'border-[#C39680] bg-[#EFE2D1] text-[#AE6C4A]'
-          : 'border-[#E1D3C3] bg-[#FAF7F1] text-[#4F4740] hover:border-[#C39680] hover:text-[#AE6C4A]',
-      )}
-      onClick={onClick}
-      type="button"
-    >
-      {label}
-    </button>
   );
 }

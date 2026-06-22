@@ -60,7 +60,7 @@ function toCustomerUserResponse(user: Awaited<ReturnType<typeof getHydratedCusto
     createdAt: user.created_at,
     email: user.email,
     emailVerified: Boolean(user.email_verified_at),
-    id: user.id,
+    id: Number(user.id),
     mobileNumber: user.mobile_number,
     packageType: user.package_code,
     phoneVerified: Boolean(user.phone_verified_at),

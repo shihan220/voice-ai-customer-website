@@ -37,8 +37,8 @@ import {
   verifyPassword,
 } from '../services/customers.ts';
 
-const emailOtpPurposeText = 'Your Bangla Voice AI email verification code';
-const phoneOtpPurposeText = 'Your Bangla Voice AI phone verification code';
+const emailOtpPurposeText = 'Your BANGLA SPEECH AI email verification code';
+const phoneOtpPurposeText = 'Your BANGLA SPEECH AI phone verification code';
 const authLimiter = createJsonRateLimiter({
   maxDevelopment: 50,
   maxProduction: 10,
@@ -57,7 +57,7 @@ function isProductionLike() {
 function buildCustomerSession(user: { email: string; id: number }) {
   return {
     email: user.email,
-    id: user.id,
+    id: Number(user.id),
   };
 }
 
@@ -200,10 +200,10 @@ export function createAuthRouter() {
         user: {
           email: user.email,
           emailVerified: false,
-          id: user.id,
+          id: Number(user.id),
           packageType: user.package_code,
           phoneVerified: false,
-          tokenBalance: user.token_balance,
+          tokenBalance: Number(user.token_balance),
         },
         verification: {
           email: emailDelivery,
@@ -240,7 +240,7 @@ export function createAuthRouter() {
         user: {
           email: eligibleUser.email,
           emailVerified: Boolean(eligibleUser.email_verified_at),
-          id: eligibleUser.id,
+          id: Number(eligibleUser.id),
           packageType: eligibleUser.package_code,
           phoneVerified: Boolean(eligibleUser.phone_verified_at),
           tokenBalance: Number(eligibleUser.token_balance),
@@ -323,7 +323,7 @@ export function createAuthRouter() {
         user: {
           email: eligibleUser.email,
           emailVerified: Boolean(eligibleUser.email_verified_at),
-          id: eligibleUser.id,
+          id: Number(eligibleUser.id),
           packageType: eligibleUser.package_code,
           phoneVerified: Boolean(eligibleUser.phone_verified_at),
           tokenBalance: Number(eligibleUser.token_balance),
@@ -404,7 +404,7 @@ export function createAuthRouter() {
         user: {
           email: eligibleUser.email,
           emailVerified: Boolean(eligibleUser.email_verified_at),
-          id: eligibleUser.id,
+          id: Number(eligibleUser.id),
           packageType: eligibleUser.package_code,
           phoneVerified: Boolean(eligibleUser.phone_verified_at),
           tokenBalance: Number(eligibleUser.token_balance),
@@ -449,7 +449,7 @@ export function createAuthRouter() {
 
         await transporter.sendMail({
           from: smtpConfig.from,
-          subject: 'Reset your Bangla Voice AI password',
+          subject: 'Reset your BANGLA SPEECH AI password',
           text: `Reset your password using this link: ${resetUrl.toString()}`,
           to: user.email,
         });
@@ -506,7 +506,7 @@ export function createAuthRouter() {
         user: {
           email: updatedUser.email,
           emailVerified: Boolean(updatedUser.email_verified_at),
-          id: updatedUser.id,
+          id: Number(updatedUser.id),
           packageType: updatedUser.package_code,
           phoneVerified: Boolean(updatedUser.phone_verified_at),
           tokenBalance: Number(updatedUser.token_balance),

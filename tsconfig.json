@@ -29,5 +29,10 @@
     "backend/**/*.d.ts",
     "frontend/vite.config.ts",
     "admin-frontend/vite.config.ts"
+  ],
+  "exclude": [
+    "backend/models.ts",
+    "backend/storage.ts",
+    "backend/routes/admin-panel.ts"
   ]
 }

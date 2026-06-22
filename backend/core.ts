@@ -16,7 +16,7 @@ import {
   type VoiceSampleRecord,
 } from './db.ts';
 
-export const port = Number(process.env.PORT ?? 5174);
+export const port = Number(process.env.PORT ?? 5181);
 export const backendRoot = fileURLToPath(new URL('.', import.meta.url));
 export const projectRoot = path.resolve(backendRoot, '..');
 export const mediaRoot = path.resolve(process.env.VOICE_MEDIA_ROOT ?? path.join(backendRoot, 'media'));
@@ -130,7 +130,7 @@ export function getSmtpConfig() {
 }
 
 export function getFrontendUrl() {
-  return normalizeText(process.env.FRONTEND_URL) ?? `http://127.0.0.1:5173`;
+  return normalizeText(process.env.FRONTEND_URL) ?? `http://127.0.0.1:5175`;
 }
 
 export function getAdminFrontendUrl() {
@@ -168,6 +168,10 @@ export function getAllowedCorsOrigins() {
     for (const origin of [
       'http://127.0.0.1:5173',
       'http://localhost:5173',
+      'http://127.0.0.1:5175',
+      'http://localhost:5175',
+      'http://127.0.0.1:5176',
+      'http://localhost:5176',
       'http://127.0.0.1:5181',
       'http://localhost:5181',
     ]) {

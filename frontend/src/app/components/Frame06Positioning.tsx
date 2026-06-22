@@ -15,21 +15,39 @@ export function Frame06Positioning() {
     {
       icon: Sparkles,
       title: 'Bangla Voice Studio',
-      description: 'creators, UGC, avatars, dubbing',
-      color: '#E3BB97'
+      description:
+        'A production-ready Bangladeshi Bangla voice workspace for creators, UGC teams, dubbing workflows, and avatar content.',
+      points: [
+        'Built for native Bangla tone and Banglish-ready delivery.',
+        'Use it for short-form content, branded videos, explainer voiceovers, and creator campaigns.',
+        'Works as a clean starting point for teams that need premium sample creation before full deployment.',
+      ],
+      color: '#E3BB97',
     },
     {
       icon: Phone,
       title: 'Bangla AI Sales Voice',
-      description: 'calls, support, lead qualification',
-      color: '#DF9E64'
+      description:
+        'An AI voice workflow for sales calls, lead qualification, support handling, and business phone conversations in Bangladeshi Bangla.',
+      points: [
+        'Designed for inbound and outbound customer communication with a more local, human-sounding delivery.',
+        'Useful for sales teams, support desks, appointment handling, follow-up calls, and corporate call flows.',
+        'Supports business use cases where the voice model needs to handle real customer interaction instead of generic TTS playback.',
+      ],
+      color: '#DF9E64',
     },
     {
       icon: Code,
       title: 'Bangla Voice API',
-      description: 'AI agents, SaaS, platforms, enterprise',
-      color: '#AE6C4A'
-    }
+      description:
+        'API access for companies that want to connect Bangla Speech AI directly into their own systems, call flows, and customer-facing products.',
+      points: [
+        'We provide an API key so your team can integrate the voice model into your company phone number and business workflow.',
+        'Use the API to generate Bangla speech for sales calls, corporate calls, AI agents, and other customer-handling call scenarios.',
+        'Suitable for SaaS platforms, internal tools, enterprise products, and operational systems that need programmable voice delivery.',
+      ],
+      color: '#AE6C4A',
+    },
   ];
 
   return (
@@ -112,8 +130,8 @@ export function Frame06Positioning() {
                 </h3>
 
                 {/* Description */}
-                <p 
-                  className="flex-1 text-sm lg:text-[15px]"
+                <p
+                  className="text-sm lg:text-[15px]"
                   style={{ 
                     color: '#373A40',
                     opacity: '0.7',
@@ -122,6 +140,27 @@ export function Frame06Positioning() {
                 >
                   {product.description}
                 </p>
+
+                <div className="mt-4 space-y-3">
+                  {product.points.map((point) => (
+                    <div key={point} className="flex items-start gap-3">
+                      <span
+                        className="mt-1.5 h-2 w-2 flex-shrink-0 rounded-full"
+                        style={{ backgroundColor: product.color }}
+                      />
+                      <p
+                        className="text-sm lg:text-[14px]"
+                        style={{
+                          color: '#373A40',
+                          opacity: '0.74',
+                          lineHeight: '1.65',
+                        }}
+                      >
+                        {point}
+                      </p>
+                    </div>
+                  ))}
+                </div>
 
                 {/* Decorative accent bar */}
                 <div 

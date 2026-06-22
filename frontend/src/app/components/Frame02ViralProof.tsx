@@ -607,7 +607,7 @@ export function Frame02ViralProof() {
           </div>
 
           <div className="flex flex-wrap gap-2 lg:gap-3">
-            {['Facebook', 'TikTok', 'YouTube Shorts', 'Reels'].map((platform) => (
+            {['Short-form campaigns', 'Paid ad creatives', 'Organic content', 'Launch distribution'].map((platform) => (
               <div 
                 key={platform}
                 className="px-4 py-2 rounded-full"

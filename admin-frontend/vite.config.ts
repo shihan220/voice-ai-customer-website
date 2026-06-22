@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
-const backendPort = process.env.PORT ?? '5174';
+const backendPort = process.env.PORT ?? '5181';
 const backendUrl = `http://127.0.0.1:${backendPort}`;
 
 export default defineConfig({

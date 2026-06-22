@@ -91,8 +91,15 @@ export function createApp() {
     }),
   );
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
-  app.use(customerSessionMiddleware);
   app.use(['/api/admin', '/admin'], adminSessionMiddleware);
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api/admin') || req.path.startsWith('/admin')) {
+      next();
+      return;
+    }
+
+    customerSessionMiddleware(req, res, next);
+  });
 
   app.use('/media', express.static(mediaRoot));
   app.use('/admin', express.static(adminDistRoot, { index: false }));

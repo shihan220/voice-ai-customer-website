@@ -62,7 +62,7 @@ function toAdminUserResponse(row: UserRecord) {
     createdAt: row.created_at,
     email: row.email,
     emailVerifiedAt: row.email_verified_at,
-    id: row.id,
+    id: Number(row.id),
     mobileE164: row.mobile_e164,
     mobileNumber: row.mobile_number,
     packageCode: row.package_code,
@@ -80,7 +80,7 @@ function toPaymentResponse(row: PaymentRecord) {
     completedAt: row.completed_at,
     createdAt: row.created_at,
     currency: row.currency,
-    id: row.id,
+    id: Number(row.id),
     metadata: row.metadata,
     packageCode: row.package_code,
     paymentType: row.payment_type,
@@ -90,7 +90,7 @@ function toPaymentResponse(row: PaymentRecord) {
     status: row.status,
     tokenAmount: row.token_amount === null ? null : Number(row.token_amount),
     updatedAt: row.updated_at,
-    userId: row.user_id,
+    userId: Number(row.user_id),
   };
 }
 
@@ -98,13 +98,13 @@ function toTokenTransactionResponse(row: TokenTransactionRecord) {
   return {
     balanceAfter: Number(row.balance_after),
     createdAt: row.created_at,
-    id: row.id,
+    id: Number(row.id),
     notes: row.notes,
-    packageUpgradeId: row.package_upgrade_id,
-    paymentId: row.payment_id,
+    packageUpgradeId: row.package_upgrade_id === null ? null : Number(row.package_upgrade_id),
+    paymentId: row.payment_id === null ? null : Number(row.payment_id),
     tokenDelta: Number(row.token_delta),
     transactionType: row.transaction_type,
-    userId: row.user_id,
+    userId: Number(row.user_id),
   };
 }
 
@@ -113,12 +113,12 @@ function toPackageUpgradeResponse(row: PackageUpgradeRecord) {
     createdAt: row.created_at,
     fromPackageCode: row.from_package_code,
     grantedTokenAmount: row.granted_token_amount === null ? null : Number(row.granted_token_amount),
-    id: row.id,
-    paymentId: row.payment_id,
+    id: Number(row.id),
+    paymentId: row.payment_id === null ? null : Number(row.payment_id),
     status: row.status,
     toPackageCode: row.to_package_code,
     updatedAt: row.updated_at,
-    userId: row.user_id,
+    userId: Number(row.user_id),
   };
 }
 
@@ -127,12 +127,12 @@ function toAdminActionResponse(row: AdminActionRecord) {
     actionType: row.action_type,
     adminEmail: row.admin_email,
     createdAt: row.created_at,
-    id: row.id,
+    id: Number(row.id),
     metadata: row.metadata,
-    packageUpgradeId: row.package_upgrade_id,
-    paymentId: row.payment_id,
-    targetUserId: row.target_user_id,
-    tokenTransactionId: row.token_transaction_id,
+    packageUpgradeId: row.package_upgrade_id === null ? null : Number(row.package_upgrade_id),
+    paymentId: row.payment_id === null ? null : Number(row.payment_id),
+    targetUserId: row.target_user_id === null ? null : Number(row.target_user_id),
+    tokenTransactionId: row.token_transaction_id === null ? null : Number(row.token_transaction_id),
   };
 }
 
@@ -165,8 +165,22 @@ export function createAdminRouter() {
       return;
     }
 
-    req.session.adminUser = { email: credentials.email };
-    res.json({ adminEmail: credentials.email, authenticated: true });
+    req.session.regenerate((error) => {
+      if (error) {
+        res.status(500).json({ error: 'Failed to initialize admin session.' });
+        return;
+      }
+
+      req.session.adminUser = { email: credentials.email };
+      req.session.save((saveError) => {
+        if (saveError) {
+          res.status(500).json({ error: 'Failed to save admin session.' });
+          return;
+        }
+
+        res.json({ adminEmail: credentials.email, authenticated: true });
+      });
+    });
   });
 
   router.post('/api/admin/logout', (req, res) => {
@@ -825,187 +839,16 @@ export function createAdminRouter() {
     }
   });
 
-  router.post('/api/admin/send-sample', requireAdmin, async (req, res) => {
-    let logId: number | null = null;
-
-    try {
-      const smtpStatus = getSmtpStatus();
-      const smtpConfig = getSmtpConfig();
-
-      if (!smtpStatus.configured || !smtpConfig) {
-        res.status(503).json({
-          error: smtpStatus.message,
-        });
-        return;
-      }
-
-      const requestId = toOptionalNumber(req.body.requestId);
-      const voiceCardId = toOptionalNumber(req.body.voiceCardId);
-      const recipientEmail = requireText(req.body.recipientEmail, 'Recipient email is required.');
-      const subject = requireText(req.body.subject, 'Email subject is required.');
-      const message = requireText(req.body.message, 'Email message is required.');
-      const deliveryMode = normalizeText(req.body.deliveryMode) ?? 'link';
-
-      if (!requestId || !voiceCardId) {
-        res.status(400).json({ error: 'Choose both a sample request and a public voice card.' });
-        return;
-      }
-
-      if (!isValidEmail(recipientEmail)) {
-        res.status(400).json({ error: 'Enter a valid recipient email address.' });
-        return;
-      }
-
-      if (!validDeliveryModes.has(deliveryMode)) {
-        res.status(400).json({ error: 'Invalid delivery mode.' });
-        return;
-      }
-
-      const [sampleRequest, voiceCard] = await Promise.all([
-        fetchSampleRequestById(requestId),
-        fetchVoiceCardById(voiceCardId),
-      ]);
-
-      if (!sampleRequest) {
-        res.status(404).json({ error: 'Sample request not found.' });
-        return;
-      }
-
-      if (!voiceCard) {
-        res.status(404).json({ error: 'Voice card not found.' });
-        return;
-      }
-
-      if (!voiceCard.audio_file) {
-        res.status(400).json({ error: 'The selected voice card does not have a public audio file yet.' });
-        return;
-      }
-
-      const audioAbsolutePath = path.join(mediaRoot, voiceCard.audio_file);
-
-      try {
-        await fs.access(audioAbsolutePath);
-      } catch {
-        res.status(400).json({
-          error: 'The selected public voice card audio file could not be found. Add or replace the audio in Public Voice Cards first.',
-        });
-        return;
-      }
-
-      const logResult = await pool.query<SampleEmailLogRecord>(
-        `
-          INSERT INTO sample_email_logs (
-            request_id,
-            voice_card_id,
-            voice_sample_id,
-            recipient_email,
-            subject,
-            message,
-            delivery_mode,
-            status
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          RETURNING *
-        `,
-        [requestId, voiceCardId, null, recipientEmail, subject, message, deliveryMode, 'pending'],
-      );
-
-      logId = logResult.rows[0].id;
-
-      const transporter = nodemailer.createTransport({
-        auth: {
-          pass: smtpConfig.pass,
-          user: smtpConfig.user,
-        },
-        connectionTimeout: 15000,
-        greetingTimeout: 15000,
-        host: smtpConfig.host,
-        port: smtpConfig.port,
-        requireTLS: smtpConfig.requireTls,
-        secure: smtpConfig.secure,
-        socketTimeout: 20000,
-      });
-
-      const audioPublicUrl = new URL(`/media/${voiceCard.audio_file}`, getBaseUrl(req)).toString();
-      const englishMeaningBlock = voiceCard.english_meaning
-        ? `\nEnglish meaning:\n${voiceCard.english_meaning}`
-        : '';
-      const emailBody = [
-        message,
-        '',
-        `Voice card: ${voiceCard.name}`,
-        `Bangla caption: ${voiceCard.script_text}`,
-        englishMeaningBlock ? englishMeaningBlock.trim() : '',
-        `Audio link: ${audioPublicUrl}`,
-      ]
-        .filter(Boolean)
-        .join('\n\n')
-        .trim();
-
-      await transporter.sendMail({
-        attachments:
-          deliveryMode === 'attachment'
-            ? [
-                {
-                  filename: path.basename(voiceCard.audio_file),
-                  path: audioAbsolutePath,
-                },
-              ]
-            : [],
-        from: smtpConfig.from,
-        html: `
-          <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #2f343b;">
-            <p>${message.replace(/\n/g, '<br />')}</p>
-            <hr style="border: 0; border-top: 1px solid #e5d9cc; margin: 20px 0;" />
-            <p><strong>Voice card:</strong> ${voiceCard.name}</p>
-            <p><strong>Bangla caption:</strong><br />${voiceCard.script_text}</p>
-            ${voiceCard.english_meaning ? `<p><strong>English meaning:</strong><br />${voiceCard.english_meaning}</p>` : ''}
-            <p><strong>Audio link:</strong><br /><a href="${audioPublicUrl}">${audioPublicUrl}</a></p>
-          </div>
-        `.trim(),
-        subject,
-        text: emailBody,
-        to: recipientEmail,
-      });
-
-      await pool.query(
-        `
-          UPDATE sample_email_logs
-          SET status = $2, sent_at = NOW(), error_message = NULL
-          WHERE id = $1
-        `,
-        [logId, 'sent' satisfies EmailLogStatus],
-      );
-
-      await markRequestStatus(requestId, 'sent');
-
-      res.json({
-        message: 'Sample email sent successfully.',
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to send sample email.';
-
-      if (logId) {
-        await pool.query(
-          `
-            UPDATE sample_email_logs
-            SET status = $2, error_message = $3
-            WHERE id = $1
-          `,
-          [logId, 'failed' satisfies EmailLogStatus, errorMessage],
-        );
-      }
-
-      res.status(500).json({ error: errorMessage });
-    }
-  });
-
   router.get('/admin', (req, res) => {
     res.redirect(req.session.adminUser ? '/admin/dashboard' : '/admin/login');
   });
 
-  router.get('/admin/login', async (_req, res) => {
+  router.get('/admin/login', async (req, res) => {
     await serveAdminShell(res);
+  });
+
+  router.get('/admin/send-sample', (req, res) => {
+    res.redirect(req.session.adminUser ? '/admin/dashboard' : '/admin/login');
   });
 
   router.get('/admin/voice-samples', (_req, res) => {
@@ -1020,7 +863,6 @@ export function createAdminRouter() {
       '/admin/payments',
       '/admin/activity',
       '/admin/voice-cards',
-      '/admin/send-sample',
     ],
     async (req, res) => {
     if (!req.session.adminUser) {

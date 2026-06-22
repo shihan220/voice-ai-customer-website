@@ -6,7 +6,7 @@ import { ensureSchema } from './db.ts';
 const app = createApp();
 
 app.listen(port, () => {
-  console.log(`Bangla Voice API running at http://127.0.0.1:${port}`);
+  console.log(`BANGLA SPEECH AI API running at http://127.0.0.1:${port}`);
   console.log(`Serving media from ${mediaRoot}`);
 
   ensureRuntimeDirectories()
