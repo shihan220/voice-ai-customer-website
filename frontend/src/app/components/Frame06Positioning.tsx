@@ -51,7 +51,7 @@ export function Frame06Positioning() {
   ];
 
   return (
-    <div className="w-full relative overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
+    <div className="relative w-full overflow-hidden px-4 py-16 sm:px-8 sm:py-20 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
       <DecorativeBanglaLetters letters={decorativeLetters} />
       <div className="w-full flex flex-col relative z-10 justify-center max-w-7xl mx-auto">
         <div className="mb-10 grid gap-5 lg:mb-12 lg:grid-cols-[0.95fr_1.05fr] lg:items-end">
@@ -69,7 +69,7 @@ export function Frame06Positioning() {
           </div>
 
           <h2 
-            className="mb-4 text-3xl lg:text-[48px]"
+            className="mb-4 text-[30px] sm:text-3xl lg:text-[48px]"
             style={{ 
               lineHeight: '1.2',
               fontWeight: '700',
@@ -82,7 +82,7 @@ export function Frame06Positioning() {
           </div>
 
           <p 
-            className="text-base lg:text-[20px] lg:justify-self-end"
+            className="text-sm leading-7 sm:text-base lg:text-[20px] lg:justify-self-end"
             style={{ 
               color: '#373A40',
               opacity: '0.75',

@@ -54,10 +54,6 @@ export function UserAccountMenu({
           <User className="h-4 w-4" />
           My Account
         </DropdownMenuItem>
-        <DropdownMenuItem className="rounded-xl px-3 py-2 text-[#4F4740] focus:bg-[#EFE2D1] focus:text-[#AE6C4A]" onSelect={() => onNavigate('/account?section=profile')}>
-          <Settings className="h-4 w-4" />
-          Profile Details
-        </DropdownMenuItem>
         <DropdownMenuItem className="rounded-xl px-3 py-2 text-[#4F4740] focus:bg-[#EFE2D1] focus:text-[#AE6C4A]" onSelect={() => onNavigate('/account?section=tokens')}>
           <WalletCards className="h-4 w-4" />
           Token Balance

@@ -19,7 +19,7 @@ export function Frame03B2B({ onPilotClick }: Frame03B2BProps) {
   const buyers = ['E-commerce', 'EdTech', 'Real Estate', 'Clinics', 'BPO', 'Call Centers'];
 
   return (
-    <div className="w-full relative overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#CAC4B6' }}>
+    <div className="relative w-full overflow-hidden px-4 py-16 sm:px-8 sm:py-20 lg:px-10 lg:py-28" style={{ backgroundColor: '#CAC4B6' }}>
       <DecorativeBanglaLetters letters={decorativeLetters} tone="#6B5243" />
       <div className="absolute left-0 top-0 h-full w-1/3 bg-[#EEEBE4]/20" />
       <div className="relative z-10 mx-auto max-w-7xl">
@@ -38,7 +38,7 @@ export function Frame03B2B({ onPilotClick }: Frame03B2BProps) {
             </div>
 
             <h2 
-              className="mb-3 text-4xl lg:text-[52px]"
+              className="mb-3 text-3xl sm:text-4xl lg:text-[52px]"
               style={{ 
                 lineHeight: '1.2',
                 fontWeight: '700',
@@ -49,7 +49,7 @@ export function Frame03B2B({ onPilotClick }: Frame03B2BProps) {
             </h2>
 
             <p 
-              className="mb-10 text-lg lg:text-[20px]"
+              className="mb-8 text-base sm:mb-10 sm:text-lg lg:text-[20px]"
               style={{ 
                 color: '#373A40',
                 opacity: '0.8',
@@ -65,11 +65,10 @@ export function Frame03B2B({ onPilotClick }: Frame03B2BProps) {
                 {flow.map((step, i) => (
                   <div key={step} className="flex items-center gap-4">
                     <div 
-                      className="rounded-xl px-6 py-4 sm:flex-shrink-0"
+                      className="min-w-[120px] rounded-xl px-4 py-4 sm:min-w-[140px] sm:px-6 sm:flex-shrink-0"
                       style={{ 
                         backgroundColor: i === 1 ? '#AE6C4A' : '#EEEBE4',
                         color: i === 1 ? '#EEEBE4' : '#373A40',
-                        minWidth: '140px',
                         border: i === 1 ? 'none' : '2px solid #D2CCBE'
                       }}
                     >
@@ -103,7 +102,7 @@ export function Frame03B2B({ onPilotClick }: Frame03B2BProps) {
               </div>
             </div>
             <div 
-              className="rounded-2xl p-6 lg:p-8 mt-8 relative overflow-hidden"
+              className="relative mt-8 overflow-hidden rounded-2xl p-5 sm:p-6 lg:p-8"
               style={{ 
                 backgroundColor: '#EEEBE4',
                 border: '3px solid #D2CCBE'
@@ -139,7 +138,7 @@ export function Frame03B2B({ onPilotClick }: Frame03B2BProps) {
                     </div>
 
                     <p 
-                      className="mb-4 text-lg lg:text-[20px]"
+                      className="mb-4 text-base sm:text-lg lg:text-[20px]"
                       style={{ 
                         lineHeight: '1.6',
                         color: '#373A40',
@@ -198,11 +197,10 @@ export function Frame03B2B({ onPilotClick }: Frame03B2BProps) {
           <button 
             type="button"
             onClick={onPilotClick}
-            className="self-start px-6 py-3 lg:px-8 lg:py-4 rounded-xl transition-all hover:scale-105"
+            className="self-start rounded-xl px-5 py-3 text-sm transition-all hover:scale-105 sm:px-6 sm:text-base lg:px-8 lg:py-4"
             style={{ 
               backgroundColor: '#AE6C4A',
               color: '#EEEBE4',
-              fontSize: '16px',
               fontWeight: '700',
               boxShadow: '0 8px 24px rgba(174, 108, 74, 0.3)'
             }}

@@ -72,7 +72,7 @@ const decorativeLetters: DecorativeBanglaLetter[] = [
 export function Frame07FAQ() {
   return (
     <div
-      className="relative w-full overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28"
+      className="relative w-full overflow-hidden px-4 py-16 sm:px-8 sm:py-20 lg:px-10 lg:py-28"
       style={{ backgroundColor: '#E3DFD4' }}
     >
       <DecorativeBanglaLetters letters={decorativeLetters} />
@@ -92,7 +92,7 @@ export function Frame07FAQ() {
             </div>
 
             <h2
-              className="mb-4 text-3xl lg:text-[48px]"
+              className="mb-4 text-[30px] sm:text-3xl lg:text-[48px]"
               style={{
                 lineHeight: '1.2',
                 fontWeight: '700',
@@ -104,7 +104,7 @@ export function Frame07FAQ() {
           </div>
 
           <p
-            className="max-w-[560px] text-base lg:justify-self-end lg:text-[20px]"
+            className="max-w-[560px] text-sm leading-7 sm:text-base lg:justify-self-end lg:text-[20px]"
             style={{
               color: '#373A40',
               opacity: '0.75',

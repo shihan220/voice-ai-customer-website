@@ -32,7 +32,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
   ];
 
   return (
-    <div className="w-full relative overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
+    <div className="relative w-full overflow-hidden px-4 py-16 sm:px-8 sm:py-20 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
       <DecorativeBanglaLetters letters={decorativeLetters} />
       <div className="relative z-10 mx-auto grid max-w-7xl items-center gap-10 lg:grid-cols-[1.08fr_0.92fr]">
         <div>
@@ -49,7 +49,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
           </div>
 
           <h2 
-            className="mb-3 text-4xl lg:text-[56px]"
+            className="mb-3 text-3xl sm:text-4xl lg:text-[56px]"
             style={{ 
               lineHeight: '1.2',
               fontWeight: '700',
@@ -60,7 +60,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
           </h2>
 
           <p 
-            className="mb-10 text-lg lg:text-[20px]"
+            className="mb-8 text-base sm:mb-10 sm:text-lg lg:text-[20px]"
             style={{ 
               color: '#373A40',
               opacity: '0.75',
@@ -70,7 +70,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
             For UGC creators, faceless channels, agencies, avatars, and dubbing.
           </p>
 
-          <div className="mb-10 overflow-x-auto pb-4 lg:mb-12 lg:pb-0">
+          <div className="mb-8 overflow-x-auto pb-4 sm:mb-10 lg:mb-12 lg:pb-0">
             <div className="flex items-center gap-3 whitespace-nowrap">
               {pipeline.map((step, i) => {
                 const Icon = step.icon;
@@ -100,7 +100,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
 
           <div className="mb-8">
             <div 
-              className="uppercase tracking-wider mb-4 text-[10px] lg:text-[11px]"
+              className="mb-4 uppercase tracking-wider text-[10px] lg:text-[11px]"
               style={{ 
                 fontWeight: '600',
                 color: '#373A40',
@@ -137,7 +137,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
             }}
           >
             <p 
-              className="mb-4 text-base lg:text-[18px]"
+              className="mb-4 text-sm sm:text-base lg:text-[18px]"
               style={{ 
                 color: '#373A40',
                 fontWeight: '500'
@@ -148,11 +148,10 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
             <button 
               type="button"
               onClick={onSampleClick}
-              className="px-6 py-3 lg:px-8 lg:py-3 rounded-xl transition-all hover:scale-105"
+              className="rounded-xl px-5 py-3 text-sm transition-all hover:scale-105 sm:px-6 sm:text-base lg:px-8 lg:py-3"
               style={{ 
                 backgroundColor: '#AE6C4A',
                 color: '#EEEBE4',
-                fontSize: '16px',
                 fontWeight: '700'
               }}
             >
@@ -162,7 +161,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
         </div>
 
         <div 
-          className="relative min-h-[420px] overflow-hidden rounded-2xl p-8 shadow-[0_24px_80px_rgba(174,108,74,0.22)] lg:p-12"
+          className="relative min-h-[320px] overflow-hidden rounded-2xl p-6 shadow-[0_24px_80px_rgba(174,108,74,0.22)] sm:min-h-[380px] sm:p-8 lg:min-h-[420px] lg:p-12"
           style={{ 
             background: `linear-gradient(180deg, ${String('#DF9E64')} 0%, ${String('#AE6C4A')} 100%)`
           }}

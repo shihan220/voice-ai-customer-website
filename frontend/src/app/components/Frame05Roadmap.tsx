@@ -71,7 +71,7 @@ export function Frame05Roadmap({
   onPlanSelect: (planCode: 'starter' | 'gold' | 'platinum') => void;
 }) {
   return (
-    <div className="relative w-full overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#E3DFD4' }}>
+    <div className="relative w-full overflow-hidden px-4 py-16 sm:px-8 sm:py-20 lg:px-10 lg:py-28" style={{ backgroundColor: '#E3DFD4' }}>
       <DecorativeBanglaLetters letters={decorativeLetters} />
 
       <div className="relative mx-auto max-w-7xl">
@@ -90,7 +90,7 @@ export function Frame05Roadmap({
             </div>
 
             <h2
-              className="text-4xl lg:text-[56px]"
+              className="text-3xl sm:text-4xl lg:text-[56px]"
               style={{
                 lineHeight: '1.2',
                 fontWeight: '700',
@@ -101,7 +101,7 @@ export function Frame05Roadmap({
             </h2>
           </div>
 
-          <p className="max-w-2xl text-lg leading-8 text-[#373A40]/75 lg:justify-self-end">
+          <p className="max-w-2xl text-base leading-7 text-[#373A40]/75 sm:text-lg sm:leading-8 lg:justify-self-end">
             Choose the package that matches your current stage, from early voice testing to premium customer-facing deployments.
           </p>
         </div>

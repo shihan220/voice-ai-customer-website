@@ -91,65 +91,126 @@ function Header({
   onLogout: () => Promise<void> | void;
   session: CustomerSessionResponse;
 }) {
+  const navLinks = [
+    { href: '/#viral-proof', label: 'Demo' },
+    { href: '/#b2b-agent', label: 'Sales Agent' },
+    { href: '/#pricing', label: 'Pricing' },
+    { href: '/#positioning', label: 'Products' },
+    { href: '/#faq', label: 'FAQ' },
+  ];
+
   return (
     <header className="sticky top-0 z-40 border-b border-[#d9cbbd] bg-[#f8f3ec]/92 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-5 py-4 sm:px-8 lg:px-10">
-        <a className="flex items-center gap-3" href="/">
-          <img
-            src={brandLogo}
-            alt="BANGLA SPEECH AI logo"
-            className="h-10 w-auto shrink-0 mix-blend-multiply sm:h-11"
-          />
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#995842]">BANGLA SPEECH AI</div>
-            <div className="text-sm font-semibold text-[#373A40]">Bangladeshi Bangla AI Voice</div>
-          </div>
-        </a>
-
-        <nav className="hidden items-center gap-5 text-sm font-semibold text-[#5d544d] md:flex">
-          <a className="transition hover:text-[#ae6c4a]" href="/#viral-proof">Demo</a>
-          <a className="transition hover:text-[#ae6c4a]" href="/#b2b-agent">Sales Agent</a>
-          <a className="transition hover:text-[#ae6c4a]" href="/#pricing">Pricing</a>
-          <a className="transition hover:text-[#ae6c4a]" href="/#positioning">Products</a>
-          <a className="transition hover:text-[#ae6c4a]" href="/#faq">FAQ</a>
-        </nav>
-
-        <div className="flex items-center gap-3">
-          {loading ? (
-            <div className="rounded-full border border-[#d2ccbe] bg-white/80 px-4 py-2 text-sm font-medium text-[#6a5f57]">
-              Loading...
-            </div>
-          ) : session.authenticated && session.user ? (
-            <>
-              <div className="rounded-full border border-[#d2ccbe] bg-white/85 px-4 py-2 text-sm font-semibold text-[#373A40] shadow-[0_12px_30px_rgba(55,58,64,0.08)]">
-                Tokens Left: {session.user.tokenBalance.toLocaleString()}
-              </div>
-              <UserAccountMenu
-                onLogout={onLogout}
-                onNavigate={(href) => {
-                  window.history.pushState({}, '', href);
-                  window.dispatchEvent(new PopStateEvent('popstate'));
-                }}
-                user={session.user}
+      <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-10">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center justify-between gap-3">
+            <a className="flex min-w-0 items-center gap-3" href="/">
+              <img
+                src={brandLogo}
+                alt="BANGLA SPEECH AI logo"
+                className="h-10 w-auto shrink-0 mix-blend-multiply sm:h-11"
               />
-            </>
-          ) : (
-            <>
-              <a
-                className="rounded-full border border-[#d2ccbe] bg-white/85 px-4 py-2 text-sm font-semibold text-[#5a514a] transition hover:border-[#c39680] hover:text-[#ae6c4a]"
-                href="/login"
-              >
-                Login
+              <div className="min-w-0">
+                <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#995842] sm:text-[11px]">BANGLA SPEECH AI</div>
+                <div className="truncate text-xs font-semibold text-[#373A40] sm:text-sm">Bangladeshi Bangla AI Voice</div>
+              </div>
+            </a>
+
+            <div className="flex shrink-0 items-center gap-2 sm:gap-3 md:hidden">
+              {loading ? (
+                <div className="rounded-full border border-[#d2ccbe] bg-white/80 px-3 py-2 text-xs font-medium text-[#6a5f57] sm:px-4 sm:text-sm">
+                  Loading...
+                </div>
+              ) : session.authenticated && session.user ? (
+                <>
+                  <div className="max-w-[150px] rounded-full border border-[#d2ccbe] bg-white/85 px-3 py-2 text-xs font-semibold text-[#373A40] shadow-[0_12px_30px_rgba(55,58,64,0.08)] sm:max-w-none sm:px-4 sm:text-sm">
+                    <span className="block truncate">Tokens Left: {session.user.tokenBalance.toLocaleString()}</span>
+                  </div>
+                  <UserAccountMenu
+                    onLogout={onLogout}
+                    onNavigate={(href) => {
+                      window.history.pushState({}, '', href);
+                      window.dispatchEvent(new PopStateEvent('popstate'));
+                    }}
+                    user={session.user}
+                  />
+                </>
+              ) : (
+                <>
+                  <a
+                    className="rounded-full border border-[#d2ccbe] bg-white/85 px-3 py-2 text-xs font-semibold text-[#5a514a] transition hover:border-[#c39680] hover:text-[#ae6c4a] sm:px-4 sm:text-sm"
+                    href="/login"
+                  >
+                    Login
+                  </a>
+                  <a
+                    className="rounded-full bg-[#ae6c4a] px-3 py-2 text-xs font-semibold text-[#f8f3ec] transition hover:brightness-95 sm:px-4 sm:text-sm"
+                    href="/signup"
+                  >
+                    Sign Up
+                  </a>
+                </>
+              )}
+            </div>
+          </div>
+
+          <nav className="hidden items-center gap-5 text-sm font-semibold text-[#5d544d] md:flex">
+            {navLinks.map((link) => (
+              <a key={link.href} className="transition hover:text-[#ae6c4a]" href={link.href}>
+                {link.label}
               </a>
-              <a
-                className="rounded-full bg-[#ae6c4a] px-4 py-2 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95"
-                href="/signup"
-              >
-                Sign Up
-              </a>
-            </>
-          )}
+            ))}
+          </nav>
+
+          <div className="hidden items-center gap-3 md:flex">
+            {loading ? (
+              <div className="rounded-full border border-[#d2ccbe] bg-white/80 px-4 py-2 text-sm font-medium text-[#6a5f57]">
+                Loading...
+              </div>
+            ) : session.authenticated && session.user ? (
+              <>
+                <div className="rounded-full border border-[#d2ccbe] bg-white/85 px-4 py-2 text-sm font-semibold text-[#373A40] shadow-[0_12px_30px_rgba(55,58,64,0.08)]">
+                  Tokens Left: {session.user.tokenBalance.toLocaleString()}
+                </div>
+                <UserAccountMenu
+                  onLogout={onLogout}
+                  onNavigate={(href) => {
+                    window.history.pushState({}, '', href);
+                    window.dispatchEvent(new PopStateEvent('popstate'));
+                  }}
+                  user={session.user}
+                />
+              </>
+            ) : (
+              <>
+                <a
+                  className="rounded-full border border-[#d2ccbe] bg-white/85 px-4 py-2 text-sm font-semibold text-[#5a514a] transition hover:border-[#c39680] hover:text-[#ae6c4a]"
+                  href="/login"
+                >
+                  Login
+                </a>
+                <a
+                  className="rounded-full bg-[#ae6c4a] px-4 py-2 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95"
+                  href="/signup"
+                >
+                  Sign Up
+                </a>
+              </>
+            )}
+          </div>
         </div>
+
+        <nav className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 text-sm font-semibold text-[#5d544d] md:hidden [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }}>
+          {navLinks.map((link) => (
+            <a
+              key={link.href}
+              className="shrink-0 rounded-full border border-[#d8cbbe] bg-white/80 px-3 py-2 text-xs transition hover:border-[#c39680] hover:text-[#ae6c4a]"
+              href={link.href}
+            >
+              {link.label}
+            </a>
+          ))}
+        </nav>
       </div>
     </header>
   );

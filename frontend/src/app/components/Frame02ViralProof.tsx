@@ -328,7 +328,7 @@ export function Frame02ViralProof() {
   };
 
   return (
-    <div className="w-full relative overflow-hidden px-6 py-20 sm:px-8 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
+    <div className="relative w-full overflow-hidden px-4 py-16 sm:px-8 sm:py-20 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
       <DecorativeBanglaLetters letters={decorativeLetters} />
       <div className="relative z-10 mx-auto grid max-w-7xl items-start gap-10 lg:grid-cols-[0.82fr_1.18fr]">
         <div className="lg:sticky lg:top-24">
@@ -345,7 +345,7 @@ export function Frame02ViralProof() {
           </div>
 
           <h2 
-            className="mb-3 text-4xl lg:text-[56px]"
+            className="mb-3 text-3xl sm:text-4xl lg:text-[56px]"
             style={{ 
               lineHeight: '1.2',
               fontWeight: '700',
@@ -356,7 +356,7 @@ export function Frame02ViralProof() {
           </h2>
 
           <p 
-            className="mb-8 text-lg lg:text-[20px]"
+            className="mb-8 text-base sm:text-lg lg:text-[20px]"
             style={{ 
               color: '#373A40',
               opacity: '0.75',
@@ -367,17 +367,17 @@ export function Frame02ViralProof() {
           </p>
 
           <div 
-            className="relative overflow-hidden rounded-2xl p-8 shadow-[0_24px_70px_rgba(55,58,64,0.12)]"
+            className="relative overflow-hidden rounded-2xl p-5 shadow-[0_24px_70px_rgba(55,58,64,0.12)] sm:p-8"
             style={{ 
               background: `linear-gradient(135deg, ${String('#E3BB97')} 0%, ${String('#E3DFD4')} 100%)`,
               border: '1px solid #D2CCBE'
             }}
           >
             <div className="absolute right-6 top-6 h-20 w-20 rounded-full bg-[#EEEBE4]/35 blur-2xl" />
-            <div className="relative z-10 flex items-center justify-between gap-6">
+            <div className="relative z-10 flex flex-col items-start justify-between gap-5 sm:flex-row sm:items-center sm:gap-6">
               <div>
                 <div 
-                  className="text-7xl lg:text-9xl mb-2 lg:mb-4"
+                  className="mb-2 text-6xl sm:text-7xl lg:mb-4 lg:text-9xl"
                   style={{ color: '#AE6C4A', fontWeight: '800' }}
                 >
                   ?
@@ -396,14 +396,14 @@ export function Frame02ViralProof() {
               </div>
 
               <div 
-                className="text-center transform rotate-12 px-6 py-4 lg:px-8 lg:py-6 rounded-2xl border-4"
+                className="text-center transform rotate-12 rounded-2xl border-4 px-5 py-4 sm:px-6 lg:px-8 lg:py-6"
                 style={{ 
                   borderColor: '#AE6C4A',
                   backgroundColor: 'transparent'
                 }}
               >
                 <div 
-                  className="text-3xl lg:text-[42px]"
+                  className="text-[28px] sm:text-3xl lg:text-[42px]"
                   style={{ 
                     fontWeight: '800',
                     color: '#AE6C4A',
@@ -421,9 +421,9 @@ export function Frame02ViralProof() {
 
         <div className="min-w-0">
           <div className="mb-10 min-w-0 overflow-hidden">
-            <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div
-                className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.12em]"
+                className="inline-flex max-w-full flex-wrap items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.12em]"
                 style={{
                   backgroundColor: voiceSource === 'api' ? '#E3DFD4' : '#F6F2EA',
                   borderColor: '#D2CCBE',
@@ -441,7 +441,7 @@ export function Frame02ViralProof() {
                 ) : null}
               </div>
 
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-2 self-end sm:self-auto">
               <button
                 type="button"
                 onClick={() => goToSlide(carouselIndex - 1)}
@@ -469,7 +469,7 @@ export function Frame02ViralProof() {
               onMouseLeave={() => setIsCarouselPaused(false)}
               onFocus={() => setIsCarouselPaused(true)}
               onBlur={() => setIsCarouselPaused(false)}
-              className="flex snap-x snap-mandatory gap-5 overflow-x-auto scroll-smooth lg:gap-6 [&::-webkit-scrollbar]:hidden"
+              className="flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-smooth lg:gap-6 [&::-webkit-scrollbar]:hidden"
               style={{
                 scrollbarWidth: 'none',
                 overscrollBehaviorX: 'contain',
