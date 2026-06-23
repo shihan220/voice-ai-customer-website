@@ -67,7 +67,7 @@ function createSearch(params: URLSearchParams) {
 
 function parseLeadIntent(search: string): LeadDialogMode | null {
   const lead = new URLSearchParams(search).get('lead');
-  return lead === 'sample' || lead === 'pilot' ? lead : null;
+  return lead === 'pilot' ? lead : null;
 }
 
 function statusLabel(value: string) {
@@ -118,7 +118,6 @@ function Header({
   );
   const verificationHref = session.user?.emailVerified ? '/verify-phone' : '/verify-email';
   const verificationLabel = session.user?.emailVerified ? 'Verify phone' : 'Verify email';
-  const canOpenDashboard = Boolean(session.authenticated && session.user && !verificationPending);
 
   return (
     <header className="sticky top-0 z-40 border-b border-[#d9cbbd] bg-[#f8f3ec]/92 backdrop-blur">
@@ -216,13 +215,6 @@ function Header({
               </>
             ) : session.authenticated && session.user ? (
               <>
-                <button
-                  className="rounded-full bg-[#ae6c4a] px-4 py-2 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95"
-                  onClick={() => onNavigate('/dashboard')}
-                  type="button"
-                >
-                  Create audio
-                </button>
                 <div className="rounded-full border border-[#d2ccbe] bg-white/85 px-4 py-2 text-sm font-semibold text-[#373A40] shadow-[0_12px_30px_rgba(55,58,64,0.08)]">
                   Minutes Left: {session.user.tokenBalance.toLocaleString()}
                 </div>
@@ -255,15 +247,6 @@ function Header({
         </div>
 
         <nav className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 text-sm font-semibold text-[#5d544d] md:hidden [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }}>
-          {canOpenDashboard ? (
-            <button
-              className="shrink-0 rounded-full bg-[#ae6c4a] px-3 py-2 text-xs font-semibold text-[#f8f3ec] transition hover:brightness-95"
-              onClick={() => onNavigate('/dashboard')}
-              type="button"
-            >
-              Create audio
-            </button>
-          ) : null}
           {navLinks.map((link) => (
             <a
               key={link.href}
@@ -394,6 +377,14 @@ export default function App() {
       return;
     }
 
+    const params = new URLSearchParams(location.search);
+    const sampleIntent = params.get('lead') === 'sample';
+
+    if (sampleIntent) {
+      navigate('/dashboard', true);
+      return;
+    }
+
     const leadIntent = parseLeadIntent(location.search);
 
     if (!leadIntent) {
@@ -403,7 +394,6 @@ export default function App() {
     setLeadMode(leadIntent);
     setLeadOpen(true);
 
-    const params = new URLSearchParams(location.search);
     params.delete('lead');
     const nextSearch = createSearch(params);
     window.history.replaceState({}, '', `${location.pathname}${nextSearch}`);
@@ -422,23 +412,42 @@ export default function App() {
     [],
   );
 
-  const openVerifiedLead = (mode: LeadDialogMode) => {
+  const openCreateWorkspace = () => {
     if (!session.authenticated) {
-      navigate(`/signup?next=lead&mode=${mode}`);
+      navigate('/signup?next=lead&mode=sample');
       return;
     }
 
     if (!currentUser?.emailVerified) {
-      navigate(`/verify-email?next=lead&mode=${mode}`);
+      navigate('/verify-email?next=lead&mode=sample');
       return;
     }
 
     if (!currentUser.phoneVerified) {
-      navigate(`/verify-phone?next=lead&mode=${mode}`);
+      navigate('/verify-phone?next=lead&mode=sample');
       return;
     }
 
-    setLeadMode(mode);
+    navigate('/dashboard');
+  };
+
+  const openPilotLead = () => {
+    if (!session.authenticated) {
+      navigate('/signup?next=lead&mode=pilot');
+      return;
+    }
+
+    if (!currentUser?.emailVerified) {
+      navigate('/verify-email?next=lead&mode=pilot');
+      return;
+    }
+
+    if (!currentUser.phoneVerified) {
+      navigate('/verify-phone?next=lead&mode=pilot');
+      return;
+    }
+
+    setLeadMode('pilot');
     setLeadOpen(true);
   };
 
@@ -588,9 +597,9 @@ export default function App() {
         </div>
       ) : null}
       <LandingPage
-        onPilotClick={() => openVerifiedLead('pilot')}
+        onPilotClick={openPilotLead}
         onPlanSelect={handlePlanSelect}
-        onSampleClick={() => openVerifiedLead('sample')}
+        onSampleClick={openCreateWorkspace}
       />
       <footer className="border-t border-[#d8cbbd] bg-[#f8f3ec] px-5 py-8 text-center text-sm text-[#6a5f57] sm:px-8 lg:px-10">
         BANGLA SPEECH AI · {session.authenticated && currentUser ? `${statusLabel(currentUser.packageType)} package` : 'Customer-facing website'}

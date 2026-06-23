@@ -269,9 +269,13 @@ function buildAccountHref(section?: string | null) {
 }
 
 function buildLeadHref(mode?: string | null) {
+  if (mode === 'sample') {
+    return '/dashboard';
+  }
+
   const params = new URLSearchParams();
 
-  if (mode === 'sample' || mode === 'pilot') {
+  if (mode === 'pilot') {
     params.set('lead', mode);
   }
 
