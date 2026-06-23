@@ -25,6 +25,7 @@ import {
   getLatestPendingPhoneVerification,
   getUserByEmail,
   getUserById,
+  getUserByMobileE164,
   hashOpaqueToken,
   hashPassword,
   incrementEmailVerificationAttempts,
@@ -49,6 +50,7 @@ const otpLimiter = createJsonRateLimiter({
   maxProduction: 6,
   windowMs: 10 * 60 * 1000,
 });
+const maxOtpVerificationAttempts = 5;
 
 function isProductionLike() {
   return process.env.NODE_ENV === 'production';
@@ -166,9 +168,22 @@ export function createAuthRouter() {
         return;
       }
 
+      const normalizedPhone = normalizePhone(countryCode, mobileNumber);
+
+      if (!normalizedPhone) {
+        res.status(400).json({ error: 'Enter a valid country code and mobile number.' });
+        return;
+      }
+
       const existingUser = await getUserByEmail(email);
       if (existingUser) {
         res.status(409).json({ error: 'An account with this email already exists.' });
+        return;
+      }
+
+      const existingPhoneUser = await getUserByMobileE164(normalizedPhone);
+      if (existingPhoneUser) {
+        res.status(409).json({ error: 'An account with this mobile number already exists.' });
         return;
       }
 
@@ -186,7 +201,6 @@ export function createAuthRouter() {
 
       const emailOtp = generateOtpCode();
       const phoneOtp = generateOtpCode();
-      const normalizedPhone = normalizePhone(countryCode, mobileNumber);
 
       await Promise.all([
         createEmailVerification(user.id, user.email, emailOtp),
@@ -214,6 +228,11 @@ export function createAuthRouter() {
         },
       });
     } catch (error) {
+      if (error instanceof Error && error.message.includes('idx_users_mobile_e164_unique')) {
+        res.status(409).json({ error: 'An account with this mobile number already exists.' });
+        return;
+      }
+
       res.status(400).json({
         error: error instanceof Error ? error.message : 'Failed to create account.',
       });
@@ -311,6 +330,11 @@ export function createAuthRouter() {
         return;
       }
 
+      if (Number(verification.attempts) >= maxOtpVerificationAttempts) {
+        res.status(429).json({ error: 'Too many verification attempts. Request a new code.' });
+        return;
+      }
+
       await incrementEmailVerificationAttempts(verification.id);
 
       if (verification.otp_hash !== hashOpaqueToken(otp)) {
@@ -390,6 +414,11 @@ export function createAuthRouter() {
 
       if (verification.otp_expires_at <= new Date()) {
         res.status(400).json({ error: 'The phone verification code has expired.' });
+        return;
+      }
+
+      if (Number(verification.attempts) >= maxOtpVerificationAttempts) {
+        res.status(429).json({ error: 'Too many verification attempts. Request a new code.' });
         return;
       }
 

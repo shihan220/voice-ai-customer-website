@@ -370,8 +370,15 @@ export function createUserRouter() {
         return;
       }
 
-      const amountRaw = Number(req.body.amount ?? 1);
-      const amount = Number.isFinite(amountRaw) ? Math.max(1, Math.floor(amountRaw)) : 1;
+      const hasExplicitAmount = Object.prototype.hasOwnProperty.call(req.body, 'amount');
+      const amountRaw = hasExplicitAmount ? Number(req.body.amount) : 1;
+
+      if (!Number.isFinite(amountRaw) || amountRaw <= 0) {
+        res.status(400).json({ error: 'Provide a positive token usage amount.' });
+        return;
+      }
+
+      const amount = Math.floor(amountRaw);
       const notes = normalizeText(req.body.notes) ?? normalizeText(req.body.reason) ?? 'Sample usage';
 
       if (!user.email_verified_at) {
