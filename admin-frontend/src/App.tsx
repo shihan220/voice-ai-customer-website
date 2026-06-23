@@ -9,6 +9,15 @@ import {
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from 'react';
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 type AdminSession = {
   adminEmail: string | null;
@@ -91,6 +100,22 @@ type DashboardPayload = {
     samplesSent: number;
     totalRequests: number;
   };
+};
+
+type SalesRange = 'daily' | 'weekly' | 'monthly' | 'yearly';
+
+type SalesAnalyticsPayload = {
+  paymentSummary: {
+    currency: string;
+    pendingCount: number;
+    successfulCount: number;
+    successfulRevenue: number;
+  };
+  salesSeries: Array<{
+    period: string;
+    revenue: number;
+    salesCount: number;
+  }>;
 };
 
 type AdminUser = {
@@ -236,6 +261,12 @@ const customerFilters: Array<{ label: string; value: CustomerFilter }> = [
   { label: 'Gold', value: 'gold' },
   { label: 'Platinum', value: 'platinum' },
 ];
+const salesRanges: Array<{ label: string; value: SalesRange }> = [
+  { label: 'Daily', value: 'daily' },
+  { label: 'Weekly', value: 'weekly' },
+  { label: 'Monthly', value: 'monthly' },
+  { label: 'Yearly', value: 'yearly' },
+];
 
 function readLocation(): AppLocation {
   return {
@@ -296,6 +327,29 @@ function formatDate(value: string | null) {
 
 function statusLabel(value: string) {
   return value.replace(/_/g, ' ');
+}
+
+function formatRevenue(value: number, currency: string) {
+  if (!currency || currency === 'N/A') {
+    return value.toLocaleString(undefined, {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+    });
+  }
+
+  try {
+    return new Intl.NumberFormat(undefined, {
+      currency,
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+      style: 'currency',
+    }).format(value);
+  } catch {
+    return `${value.toLocaleString(undefined, {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+    })} ${currency}`;
+  }
 }
 
 function cx(...values: Array<string | false | null | undefined>) {
@@ -670,8 +724,12 @@ function AdminShell({
 
 function DashboardPage() {
   const [data, setData] = useState<DashboardPayload | null>(null);
+  const [salesData, setSalesData] = useState<SalesAnalyticsPayload | null>(null);
+  const [salesRange, setSalesRange] = useState<SalesRange>('monthly');
   const [error, setError] = useState('');
+  const [salesError, setSalesError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [salesLoading, setSalesLoading] = useState(true);
 
   useEffect(() => {
     const load = async () => {
@@ -691,6 +749,24 @@ function DashboardPage() {
     void load();
   }, []);
 
+  useEffect(() => {
+    const loadSales = async () => {
+      setSalesLoading(true);
+      setSalesError('');
+
+      try {
+        const payload = await apiRequest<SalesAnalyticsPayload>(`/api/admin/dashboard/sales?range=${salesRange}`);
+        setSalesData(payload);
+      } catch (nextError) {
+        setSalesError(nextError instanceof Error ? nextError.message : 'Failed to load sales analytics.');
+      } finally {
+        setSalesLoading(false);
+      }
+    };
+
+    void loadSales();
+  }, [salesRange]);
+
   if (loading) {
     return <PageLoading label="Loading dashboard..." />;
   }
@@ -704,7 +780,7 @@ function DashboardPage() {
       <PageHeading
         eyebrow="Overview"
         title="Admin dashboard"
-        description="Track incoming requests, website voice cards, and sent client emails without touching the public frontend design."
+        description="Track request volume, payment status, and sales performance without touching the public frontend design."
       />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -712,72 +788,130 @@ function DashboardPage() {
         <StatCard label="New requests" value={data.stats.newRequests} />
         <StatCard label="Samples ready" value={data.stats.samplesReady} />
         <StatCard label="Samples sent" value={data.stats.samplesSent} />
+        <StatCard label="Pending payments" value={salesData?.paymentSummary.pendingCount ?? 0} />
+        <StatCard label="Successful payments" value={salesData?.paymentSummary.successfulCount ?? 0} />
+        <StatCard
+          detail={salesData?.paymentSummary.currency && salesData.paymentSummary.currency !== 'N/A' ? salesData.paymentSummary.currency : 'No currency yet'}
+          label="Successful sales"
+          value={formatRevenue(salesData?.paymentSummary.successfulRevenue ?? 0, salesData?.paymentSummary.currency ?? 'N/A')}
+        />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Panel title="Recent requests" subtitle="Latest customer submissions saved from the website">
-          {data.recentRequests.length === 0 ? (
-            <EmptyState label="No sample requests have been submitted yet." />
-          ) : (
-            <div className="overflow-hidden rounded-2xl border border-[#eadfce]">
-              <table className="min-w-full divide-y divide-[#eadfce] text-left text-sm">
-                <thead className="bg-[#f8f2ea] text-[#6c6058]">
-                  <tr>
-                    <th className="px-4 py-3 font-semibold">Client</th>
-                    <th className="px-4 py-3 font-semibold">Service</th>
-                    <th className="px-4 py-3 font-semibold">Status</th>
-                    <th className="px-4 py-3 font-semibold">Created</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#f0e7db] bg-white/90">
-                  {data.recentRequests.map((request) => (
-                    <tr key={request.id}>
-                      <td className="px-4 py-3">
-                        <div className="font-semibold text-[#2f343b]">{request.clientName}</div>
-                        <div className="text-xs text-[#7a6f66]">{request.email}</div>
-                      </td>
-                      <td className="px-4 py-3 text-[#5a514a]">{request.selectedService ?? 'Not set'}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={request.status} />
-                      </td>
-                      <td className="px-4 py-3 text-[#5a514a]">{formatDate(request.createdAt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-
-        <Panel title="Recent sent emails" subtitle="Last sample deliveries and delivery outcomes">
-          {data.recentEmails.length === 0 ? (
-            <EmptyState label="No sample emails have been logged yet." />
-          ) : (
-            <div className="space-y-3">
-              {data.recentEmails.map((email) => (
-                <div key={email.id} className="rounded-2xl border border-[#eadfce] bg-white/90 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <div className="font-semibold text-[#2f343b]">{email.subject}</div>
-                      <div className="text-sm text-[#6f645c]">
-                        {email.clientName ?? 'Unknown client'} • {email.recipientEmail}
-                      </div>
-                    </div>
-                    <StatusBadge status={email.status} />
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-3 text-xs text-[#7a6f66]">
-                    <span>{email.sampleTitle ?? 'Voice card not linked'}</span>
-                    <span>{email.deliveryMode}</span>
-                    <span>{formatDate(email.sentAt ?? email.createdAt)}</span>
-                  </div>
-                  {email.errorMessage ? <InlineMessage tone="error">{email.errorMessage}</InlineMessage> : null}
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
-      </div>
+      <SalesAnalyticsPanel
+        data={salesData}
+        error={salesError}
+        loading={salesLoading}
+        range={salesRange}
+        onRangeChange={setSalesRange}
+      />
     </section>
+  );
+}
+
+function SalesAnalyticsPanel({
+  data,
+  error,
+  loading,
+  onRangeChange,
+  range,
+}: {
+  data: SalesAnalyticsPayload | null;
+  error: string;
+  loading: boolean;
+  onRangeChange: (range: SalesRange) => void;
+  range: SalesRange;
+}) {
+  const currency = data?.paymentSummary.currency ?? 'N/A';
+  const hasSales = Boolean(data && data.salesSeries.length > 0);
+
+  return (
+    <Panel
+      title="Sales tracking"
+      subtitle="Revenue from completed Gold, Platinum, and extra-token payments only."
+    >
+      <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="text-sm leading-6 text-[#6d625a]">
+          {currency === 'N/A'
+            ? 'No successful payment currency has been recorded yet.'
+            : `Showing successful sales in ${currency}. No currency conversion is applied.`}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {salesRanges.map((item) => (
+            <button
+              key={item.value}
+              className={cx(
+                'rounded-full px-4 py-2 text-sm font-semibold transition',
+                range === item.value
+                  ? 'bg-[#ae6c4a] text-white shadow-[0_12px_30px_rgba(174,108,74,0.24)]'
+                  : 'border border-[#d8cbbe] bg-white/80 text-[#5e534b] hover:border-[#cdb6a1] hover:text-[#a96544]',
+              )}
+              onClick={() => onRangeChange(item.value)}
+              type="button"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? <PageLoading label="Loading sales analytics..." /> : null}
+      {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+      {!loading && !error && !hasSales ? <EmptyState label="No successful sales yet." /> : null}
+      {!loading && !error && hasSales && data ? (
+        <div className="h-[360px] rounded-[24px] border border-[#eadfce] bg-[#fbf7f1] p-3 sm:p-5">
+          <ResponsiveContainer height="100%" width="100%">
+            <AreaChart data={data.salesSeries} margin={{ bottom: 8, left: 0, right: 12, top: 16 }}>
+              <defs>
+                <linearGradient id="salesRevenueFill" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="5%" stopColor="#ae6c4a" stopOpacity={0.28} />
+                  <stop offset="95%" stopColor="#ae6c4a" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#e8dcca" strokeDasharray="4 4" vertical={false} />
+              <XAxis
+                dataKey="period"
+                minTickGap={18}
+                tick={{ fill: '#766a60', fontSize: 12 }}
+                tickLine={false}
+              />
+              <YAxis
+                tick={{ fill: '#766a60', fontSize: 12 }}
+                tickFormatter={(value) => formatRevenue(Number(value), currency)}
+                tickLine={false}
+                width={92}
+              />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) {
+                    return null;
+                  }
+
+                  const item = payload[0]?.payload as SalesAnalyticsPayload['salesSeries'][number] | undefined;
+
+                  return (
+                    <div className="rounded-2xl border border-[#d8cbbe] bg-white px-4 py-3 text-sm shadow-[0_18px_40px_rgba(92,80,72,0.14)]">
+                      <div className="font-semibold text-[#2f343b]">{label}</div>
+                      <div className="mt-1 text-[#6d625a]">
+                        Revenue: {formatRevenue(Number(item?.revenue ?? 0), currency)}
+                      </div>
+                      <div className="text-[#6d625a]">Sales: {Number(item?.salesCount ?? 0).toLocaleString()}</div>
+                    </div>
+                  );
+                }}
+              />
+              <Area
+                activeDot={{ fill: '#ae6c4a', r: 5, stroke: '#fbf7f1', strokeWidth: 2 }}
+                dataKey="revenue"
+                fill="url(#salesRevenueFill)"
+                stroke="#ae6c4a"
+                strokeWidth={3}
+                type="monotone"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      ) : null}
+    </Panel>
   );
 }
 
@@ -2221,11 +2355,22 @@ function PanelInset({ children, title }: { children: ReactNode; title: string })
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number }) {
+function StatCard({
+  detail,
+  label,
+  value,
+}: {
+  detail?: string;
+  label: string;
+  value: number | string;
+}) {
   return (
     <div className="rounded-[24px] border border-[#e1d4c4] bg-white/88 p-5 shadow-[0_18px_48px_rgba(92,80,72,0.08)]">
       <div className="text-sm font-medium text-[#6d625a]">{label}</div>
-      <div className="mt-3 text-4xl font-bold text-[#2f343b]">{value}</div>
+      <div className="mt-3 text-4xl font-bold text-[#2f343b]">
+        {typeof value === 'number' ? value.toLocaleString() : value}
+      </div>
+      {detail ? <div className="mt-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#8a7667]">{detail}</div> : null}
     </div>
   );
 }

@@ -183,6 +183,127 @@ function toTtsPronunciationRuleResponse(row: TtsPronunciationRuleRecord) {
   };
 }
 
+type SalesRange = 'daily' | 'weekly' | 'monthly' | 'yearly';
+
+const validSalesRanges = new Set<SalesRange>(['daily', 'weekly', 'monthly', 'yearly']);
+
+function isSalesRange(value: string | null): value is SalesRange {
+  return Boolean(value && validSalesRanges.has(value as SalesRange));
+}
+
+function getSalesBucketConfig(range: SalesRange) {
+  const saleTimestamp = 'COALESCE(completed_at, updated_at, created_at)';
+
+  if (range === 'daily') {
+    return {
+      bucketExpression: `DATE_TRUNC('hour', ${saleTimestamp})`,
+      periodFormat: 'DD/MM/YYYY HH24:MI',
+    };
+  }
+
+  if (range === 'weekly') {
+    return {
+      bucketExpression: `DATE_TRUNC('day', ${saleTimestamp})`,
+      periodFormat: 'DD/MM/YYYY',
+    };
+  }
+
+  if (range === 'yearly') {
+    return {
+      bucketExpression: `DATE_TRUNC('month', ${saleTimestamp})`,
+      periodFormat: 'MM/YYYY',
+    };
+  }
+
+  return {
+    bucketExpression: `DATE_TRUNC('week', ${saleTimestamp})`,
+    periodFormat: 'DD/MM/YYYY',
+  };
+}
+
+async function getAdminSalesAnalytics(range: SalesRange) {
+  const { bucketExpression, periodFormat } = getSalesBucketConfig(range);
+
+  const [summaryResult, primaryCurrencyResult] = await Promise.all([
+    pool.query<{
+      pending_count: string;
+      successful_count: string;
+    }>(`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'pending')::text AS pending_count,
+        COUNT(*) FILTER (WHERE status = 'completed')::text AS successful_count
+      FROM payments
+      WHERE amount > 0
+        AND (
+          (payment_type = 'package_upgrade' AND package_code IN ('gold', 'platinum'))
+          OR payment_type = 'extra_tokens'
+        )
+    `),
+    pool.query<{
+      currency: string;
+      successful_revenue: string;
+    }>(`
+      SELECT
+        currency,
+        COALESCE(SUM(amount), 0)::text AS successful_revenue
+      FROM payments
+      WHERE status = 'completed'
+        AND amount > 0
+        AND (
+          (payment_type = 'package_upgrade' AND package_code IN ('gold', 'platinum'))
+          OR payment_type = 'extra_tokens'
+        )
+      GROUP BY currency
+      ORDER BY SUM(amount) DESC, currency ASC
+      LIMIT 1
+    `),
+  ]);
+
+  const primaryCurrency = primaryCurrencyResult.rows[0]?.currency ?? 'N/A';
+  const successfulRevenue = Number(primaryCurrencyResult.rows[0]?.successful_revenue ?? 0);
+  const seriesResult = primaryCurrency === 'N/A'
+    ? { rows: [] as Array<{ period: string; revenue: string; sales_count: string }> }
+    : await pool.query<{
+        period: string;
+        revenue: string;
+        sales_count: string;
+      }>(
+        `
+          SELECT
+            TO_CHAR(${bucketExpression}, '${periodFormat}') AS period,
+            COALESCE(SUM(amount), 0)::text AS revenue,
+            COUNT(*)::text AS sales_count
+          FROM payments
+          WHERE status = 'completed'
+            AND amount > 0
+            AND currency = $1
+            AND (
+              (payment_type = 'package_upgrade' AND package_code IN ('gold', 'platinum'))
+              OR payment_type = 'extra_tokens'
+            )
+          GROUP BY ${bucketExpression}
+          ORDER BY ${bucketExpression} ASC
+        `,
+        [primaryCurrency],
+      );
+
+  const summary = summaryResult.rows[0];
+
+  return {
+    paymentSummary: {
+      currency: primaryCurrency,
+      pendingCount: Number(summary?.pending_count ?? 0),
+      successfulCount: Number(summary?.successful_count ?? 0),
+      successfulRevenue,
+    },
+    salesSeries: seriesResult.rows.map((row) => ({
+      period: row.period,
+      revenue: Number(row.revenue),
+      salesCount: Number(row.sales_count),
+    })),
+  };
+}
+
 export function createAdminRouter() {
   const router = Router();
 
@@ -531,6 +652,22 @@ export function createAdminRouter() {
       res.status(500).json({
         error: error instanceof Error ? error.message : 'Failed to load admin dashboard.',
       });
+    }
+  });
+
+  router.get('/api/admin/dashboard/sales', requireAdmin, async (req, res) => {
+    try {
+      const requestedRange = normalizeText(req.query.range);
+      const range = requestedRange ?? 'monthly';
+
+      if (!isSalesRange(range)) {
+        res.status(400).json({ error: 'Choose a valid sales analytics range: daily, weekly, monthly, or yearly.' });
+        return;
+      }
+
+      res.json(await getAdminSalesAnalytics(range));
+    } catch {
+      res.status(500).json({ error: 'Failed to load sales analytics.' });
     }
   });
 
