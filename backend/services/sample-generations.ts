@@ -9,15 +9,7 @@ import {
   type TokenTransactionRecord,
   type UserRecord,
 } from '../db.ts';
-
-const developmentFallbackByService: Record<string, string> = {
-  avatar: 'voices/public/office-receptionist.wav',
-  sales: 'voices/public/ai-self-service-agent.wav',
-  support: 'voices/public/ecommerce-support.wav',
-  ugc: 'voices/public/business-consultant.wav',
-};
-
-const defaultFallbackAudioFile = 'voices/public/ai-self-service-agent.wav';
+import { generateSampleAudio } from './voice-provider.ts';
 const maxBillableWords = 150;
 const maxScriptLength = 1200;
 
@@ -82,15 +74,6 @@ export function countBillableWords(scriptText: string) {
   return words.length;
 }
 
-function resolveFallbackAudioFile(selectedService: string) {
-  if (process.env.NODE_ENV === 'production') {
-    throw withStatus('Sample preview generation is not configured for this environment.', 503);
-  }
-
-  const normalizedService = normalizeText(selectedService)?.toLowerCase() ?? '';
-  return developmentFallbackByService[normalizedService] ?? defaultFallbackAudioFile;
-}
-
 async function assertAudioFileExists(audioFile: string) {
   const absolutePath = path.join(mediaRoot, audioFile);
   try {
@@ -141,8 +124,11 @@ export async function createPreviewGeneration(input: PreviewInput): Promise<Prev
     throw new Error('Select a use case before generating a preview.');
   }
 
-  const audioFile = resolveFallbackAudioFile(selectedService);
-  await assertAudioFileExists(audioFile);
+  const generatedAudio = await generateSampleAudio({
+    scriptText,
+    selectedService,
+  });
+  await assertAudioFileExists(generatedAudio.audioFile);
 
   const request = await insertSampleRequest({
     ...input,
@@ -163,10 +149,19 @@ export async function createPreviewGeneration(input: PreviewInput): Promise<Prev
         source_kind,
         status
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'fallback', 'preview')
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'preview')
       RETURNING *
     `,
-    [input.userId, request.id, scriptText, selectedService, wordCount, wordCount, audioFile],
+    [
+      input.userId,
+      request.id,
+      scriptText,
+      selectedService,
+      wordCount,
+      wordCount,
+      generatedAudio.audioFile,
+      generatedAudio.sourceKind,
+    ],
   );
 
   return {
@@ -218,8 +213,12 @@ export async function regeneratePreviewGeneration(input: {
     throw new Error('Select a use case before regenerating a preview.');
   }
 
-  const audioFile = resolveFallbackAudioFile(selectedService);
-  await assertAudioFileExists(audioFile);
+  const generatedAudio = await generateSampleAudio({
+    sampleId: existing.id,
+    scriptText,
+    selectedService,
+  });
+  await assertAudioFileExists(generatedAudio.audioFile);
 
   const result = await pool.query<SampleGenerationRecord>(
     `
@@ -230,13 +229,23 @@ export async function regeneratePreviewGeneration(input: {
         word_count = $5,
         token_cost = $6,
         audio_file = $7,
+        source_kind = $8,
         regeneration_attempts_used = regeneration_attempts_used + 1,
         updated_at = NOW()
       WHERE id = $1
         AND user_id = $2
       RETURNING *
     `,
-    [input.sampleId, input.userId, scriptText, selectedService, wordCount, wordCount, audioFile],
+    [
+      input.sampleId,
+      input.userId,
+      scriptText,
+      selectedService,
+      wordCount,
+      wordCount,
+      generatedAudio.audioFile,
+      generatedAudio.sourceKind,
+    ],
   );
 
   const sample = result.rows[0];
