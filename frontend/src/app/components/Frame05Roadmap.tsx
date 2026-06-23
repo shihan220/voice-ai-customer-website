@@ -8,7 +8,7 @@ const pricingPlans = [
     buttonLabel: 'Start Basic',
     description: 'A clean starting point for teams that want to test Bangladeshi Bangla voice before moving into premium usage.',
     features: [
-      '10,000 monthly generation minutes',
+      '1,000 monthly generation minutes',
       'Auto-refill every month',
       'Basic sample access',
       'Best for trying the platform',

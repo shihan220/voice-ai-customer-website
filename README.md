@@ -65,6 +65,7 @@ Required environment variables are documented in `.env.example`. The main ones a
 
 - `DATABASE_URL`
 - `PORT`
+- `PRIVATE_MEDIA_ROOT`
 - `FRONTEND_URL`
 - `ADMIN_FRONTEND_URL`
 - `BACKEND_URL`

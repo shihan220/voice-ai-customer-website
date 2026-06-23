@@ -7,3 +7,5 @@ frontend/dist/
 backend/media/voices/inbox/*
 !backend/media/voices/inbox/.gitkeep
 backend/media/tts-jobs/*
+backend/private-media/*
+!backend/private-media/.gitkeep

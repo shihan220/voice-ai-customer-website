@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import {
+  createJsonRateLimiter,
   multer,
   normalizeText,
   requireText,
@@ -26,6 +27,24 @@ import {
 } from '../services/tts-jobs.ts';
 
 const maxPdfFileSizeBytes = 10 * 1024 * 1024;
+const ttsPreviewLimiter = createJsonRateLimiter({
+  maxDevelopment: 20,
+  maxProduction: 5,
+  message: 'Too many preview requests. Please try again later.',
+  windowMs: 15 * 60 * 1000,
+});
+const ttsGenerationLimiter = createJsonRateLimiter({
+  maxDevelopment: 12,
+  maxProduction: 4,
+  message: 'Too many audio generation requests. Please try again later.',
+  windowMs: 15 * 60 * 1000,
+});
+const ttsDownloadLimiter = createJsonRateLimiter({
+  maxDevelopment: 80,
+  maxProduction: 30,
+  message: 'Too many audio download requests. Please try again later.',
+  windowMs: 10 * 60 * 1000,
+});
 
 const pdfUpload = multer({
   fileFilter: (_req, file, callback) => {
@@ -55,6 +74,20 @@ function resolveStatusCode(error: unknown) {
   }
 
   return 400;
+}
+
+function safeTtsErrorMessage(error: unknown, fallback: string) {
+  const statusCode = resolveStatusCode(error);
+
+  if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+    return `PDF files must stay under ${Math.floor(maxPdfFileSizeBytes / (1024 * 1024))} MB.`;
+  }
+
+  if (error instanceof Error && statusCode < 500) {
+    return error.message;
+  }
+
+  return fallback;
 }
 
 async function runPdfUpload(req: Parameters<Router['post']>[1] extends never ? never : any, res: any) {
@@ -116,7 +149,7 @@ function toTtsJobPayload(job: TtsGenerationJobRecord, options?: { includeInputTe
 export function createTtsRouter() {
   const router = Router();
 
-  router.post('/api/tts/jobs/text/preview', requireCustomer, async (req, res) => {
+  router.post('/api/tts/jobs/text/preview', requireCustomer, ttsPreviewLimiter, async (req, res) => {
     try {
       const user = await getHydratedCustomer(req.session.customerUser!.id);
 
@@ -140,12 +173,12 @@ export function createTtsRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to queue the text preview job.',
+        error: safeTtsErrorMessage(error, 'Voice generation failed. Please try again.'),
       });
     }
   });
 
-  router.post('/api/tts/jobs/text', requireCustomer, async (req, res) => {
+  router.post('/api/tts/jobs/text', requireCustomer, ttsGenerationLimiter, async (req, res) => {
     try {
       const user = await getHydratedCustomer(req.session.customerUser!.id);
 
@@ -169,12 +202,12 @@ export function createTtsRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to queue the text generation job.',
+        error: safeTtsErrorMessage(error, 'Voice generation failed. Please try again.'),
       });
     }
   });
 
-  router.post('/api/tts/jobs/pdf/preview', requireCustomer, async (req, res) => {
+  router.post('/api/tts/jobs/pdf/preview', requireCustomer, ttsPreviewLimiter, async (req, res) => {
     try {
       await runPdfUpload(req, res);
 
@@ -207,18 +240,13 @@ export function createTtsRouter() {
       });
     } catch (error) {
       const statusCode = resolveStatusCode(error);
-      const fallbackMessage =
-        error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE'
-          ? `PDF files must stay under ${Math.floor(maxPdfFileSizeBytes / (1024 * 1024))} MB.`
-          : 'Failed to queue the PDF preview job.';
-
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : fallbackMessage,
+        error: safeTtsErrorMessage(error, 'Voice generation failed. Please try again.'),
       });
     }
   });
 
-  router.post('/api/tts/jobs/pdf', requireCustomer, async (req, res) => {
+  router.post('/api/tts/jobs/pdf', requireCustomer, ttsGenerationLimiter, async (req, res) => {
     try {
       await runPdfUpload(req, res);
 
@@ -251,13 +279,8 @@ export function createTtsRouter() {
       });
     } catch (error) {
       const statusCode = resolveStatusCode(error);
-      const fallbackMessage =
-        error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE'
-          ? `PDF files must stay under ${Math.floor(maxPdfFileSizeBytes / (1024 * 1024))} MB.`
-          : 'Failed to queue the PDF generation job.';
-
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : fallbackMessage,
+        error: safeTtsErrorMessage(error, 'Voice generation failed. Please try again.'),
       });
     }
   });
@@ -302,7 +325,7 @@ export function createTtsRouter() {
     }
   });
 
-  router.post('/api/tts/jobs/:id/retry', requireCustomer, async (req, res) => {
+  router.post('/api/tts/jobs/:id/retry', requireCustomer, ttsGenerationLimiter, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
 
@@ -320,12 +343,12 @@ export function createTtsRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to retry the audio generation job.',
+        error: safeTtsErrorMessage(error, 'Voice generation failed. Please try again.'),
       });
     }
   });
 
-  router.post('/api/tts/jobs/:id/start', requireCustomer, async (req, res) => {
+  router.post('/api/tts/jobs/:id/start', requireCustomer, ttsGenerationLimiter, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
 
@@ -343,7 +366,7 @@ export function createTtsRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to start the full audio generation job.',
+        error: safeTtsErrorMessage(error, 'Voice generation failed. Please try again.'),
       });
     }
   });
@@ -370,7 +393,7 @@ export function createTtsRouter() {
     }
   });
 
-  router.get('/api/tts/jobs/:id/preview', requireCustomer, async (req, res) => {
+  router.get('/api/tts/jobs/:id/preview', requireCustomer, ttsDownloadLimiter, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
 
@@ -391,12 +414,12 @@ export function createTtsRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to load the preview audio.',
+        error: safeTtsErrorMessage(error, 'Failed to load the preview audio.'),
       });
     }
   });
 
-  router.get('/api/tts/jobs/:id/download', requireCustomer, async (req, res) => {
+  router.get('/api/tts/jobs/:id/download', requireCustomer, ttsDownloadLimiter, async (req, res) => {
     try {
       const jobId = Number(req.params.id);
       const format = req.query.format === 'mp3' ? 'mp3' : req.query.format === 'wav' ? 'wav' : null;
@@ -424,7 +447,7 @@ export function createTtsRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to download the generated audio.',
+        error: safeTtsErrorMessage(error, 'Failed to download the generated audio.'),
       });
     }
   });

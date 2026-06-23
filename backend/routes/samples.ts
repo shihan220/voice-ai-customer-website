@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { isValidEmail, normalizeText, requireText } from '../core.ts';
+import { createJsonRateLimiter, isValidEmail, normalizeText, requireText } from '../core.ts';
 import { type SampleGenerationRecord } from '../db.ts';
 import { requireCustomer } from './customer-auth.ts';
 import {
@@ -15,6 +15,25 @@ import {
   markSampleDownloaded,
   regeneratePreviewGeneration,
 } from '../services/sample-generations.ts';
+
+const samplePreviewLimiter = createJsonRateLimiter({
+  maxDevelopment: 20,
+  maxProduction: 6,
+  message: 'Too many sample preview requests. Please try again later.',
+  windowMs: 15 * 60 * 1000,
+});
+const sampleFinalizeLimiter = createJsonRateLimiter({
+  maxDevelopment: 30,
+  maxProduction: 10,
+  message: 'Too many sample finalization requests. Please try again later.',
+  windowMs: 15 * 60 * 1000,
+});
+const sampleDownloadLimiter = createJsonRateLimiter({
+  maxDevelopment: 80,
+  maxProduction: 30,
+  message: 'Too many sample download requests. Please try again later.',
+  windowMs: 10 * 60 * 1000,
+});
 
 function toSamplePayload(sample: SampleGenerationRecord) {
   return {
@@ -53,7 +72,7 @@ function resolveStatusCode(error: unknown) {
 export function createSamplesRouter() {
   const router = Router();
 
-  router.post('/api/samples/generate-preview', requireCustomer, async (req, res) => {
+  router.post('/api/samples/generate-preview', requireCustomer, samplePreviewLimiter, async (req, res) => {
     try {
       const user = await getHydratedCustomer(req.session.customerUser!.id);
 
@@ -104,7 +123,7 @@ export function createSamplesRouter() {
     }
   });
 
-  router.post('/api/samples/regenerate-preview', requireCustomer, async (req, res) => {
+  router.post('/api/samples/regenerate-preview', requireCustomer, samplePreviewLimiter, async (req, res) => {
     try {
       const user = await getHydratedCustomer(req.session.customerUser!.id);
 
@@ -150,7 +169,7 @@ export function createSamplesRouter() {
     }
   });
 
-  router.post('/api/samples/finalize', requireCustomer, async (req, res) => {
+  router.post('/api/samples/finalize', requireCustomer, sampleFinalizeLimiter, async (req, res) => {
     try {
       const sampleId = Number(req.body.sampleId);
 
@@ -175,7 +194,7 @@ export function createSamplesRouter() {
     }
   });
 
-  router.get('/api/samples/:id/download', requireCustomer, async (req, res) => {
+  router.get('/api/samples/:id/download', requireCustomer, sampleDownloadLimiter, async (req, res) => {
     try {
       const sampleId = Number(req.params.id);
 

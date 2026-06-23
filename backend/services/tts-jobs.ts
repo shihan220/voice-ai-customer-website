@@ -5,8 +5,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { PoolClient } from 'pg';
 import {
-  mediaRoot,
   normalizeText,
+  privateMediaRoot,
   ttsJobsMediaDirectory,
 } from '../core.ts';
 import {
@@ -29,6 +29,9 @@ const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
 const defaultFfmpegPath = 'ffmpeg';
 const defaultTtsChunkMaxChars = 1_200;
 const maxInputCharacters = 120_000;
+const maxActivePreviewJobsPerUser = 2;
+const maxActiveGenerationJobsPerUser = 1;
+const maxActiveTtsJobsPerUser = 3;
 const chunkPauseMs = 220;
 const headingPauseMs = 900;
 const listItemPauseMs = 450;
@@ -78,6 +81,10 @@ function withStatus(message: string, statusCode: number) {
   const error = new Error(message);
   (error as Error & { statusCode?: number }).statusCode = statusCode;
   return error;
+}
+
+function safeGenerationFailureMessage() {
+  return 'Voice generation failed. Please try again.';
 }
 
 function getStatusCode(error: unknown, fallback = 400) {
@@ -198,13 +205,13 @@ function getJobPaths(job: Pick<TtsGenerationJobRecord, 'id' | 'source_name' | 's
   return {
     jobDirectory,
     mp3AbsolutePath: path.join(jobDirectory, `${safeStem}.mp3`),
-    mp3RelativePath: path.relative(mediaRoot, path.join(jobDirectory, `${safeStem}.mp3`)),
+    mp3RelativePath: path.relative(privateMediaRoot, path.join(jobDirectory, `${safeStem}.mp3`)),
     previewAbsolutePath: path.join(jobDirectory, `${safeStem}-preview.wav`),
-    previewRelativePath: path.relative(mediaRoot, path.join(jobDirectory, `${safeStem}-preview.wav`)),
+    previewRelativePath: path.relative(privateMediaRoot, path.join(jobDirectory, `${safeStem}-preview.wav`)),
     tempDirectory,
     userDirectory,
     wavAbsolutePath: path.join(jobDirectory, `${safeStem}.wav`),
-    wavRelativePath: path.relative(mediaRoot, path.join(jobDirectory, `${safeStem}.wav`)),
+    wavRelativePath: path.relative(privateMediaRoot, path.join(jobDirectory, `${safeStem}.wav`)),
   };
 }
 
@@ -1183,6 +1190,17 @@ async function convertWavToMp3(inputPath: string, outputPath: string, bitrateKbp
   ]);
 }
 
+function resolvePrivateTtsPath(relativePath: string) {
+  const resolvedPath = path.resolve(privateMediaRoot, relativePath);
+  const allowedRoot = path.resolve(ttsJobsMediaDirectory);
+
+  if (resolvedPath !== allowedRoot && !resolvedPath.startsWith(`${allowedRoot}${path.sep}`)) {
+    throw withStatus('Audio output path is invalid.', 500);
+  }
+
+  return resolvedPath;
+}
+
 function getOwnedDownloadPath(job: Pick<TtsGenerationJobRecord, 'mp3_file' | 'wav_file'>, format: 'mp3' | 'wav') {
   const relativePath = format === 'mp3' ? job.mp3_file : job.wav_file;
 
@@ -1190,7 +1208,7 @@ function getOwnedDownloadPath(job: Pick<TtsGenerationJobRecord, 'mp3_file' | 'wa
     throw withStatus(`${format.toUpperCase()} output is not available for this job yet.`, 409);
   }
 
-  return path.join(mediaRoot, relativePath);
+  return resolvePrivateTtsPath(relativePath);
 }
 
 function getOwnedPreviewPath(job: Pick<TtsGenerationJobRecord, 'preview_file'>) {
@@ -1198,7 +1216,7 @@ function getOwnedPreviewPath(job: Pick<TtsGenerationJobRecord, 'preview_file'>) 
     throw withStatus('Preview audio is not available for this job yet.', 409);
   }
 
-  return path.join(mediaRoot, job.preview_file);
+  return resolvePrivateTtsPath(job.preview_file);
 }
 
 async function assertFileExists(filePath: string, message: string) {
@@ -1673,9 +1691,13 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
     const previewAudioSeconds = await getAudioDurationSeconds(jobPaths.previewAbsolutePath);
     await completePreviewJob(job.id, jobPaths.previewRelativePath, previewAudioSeconds);
   } catch (error) {
-    const statusCode = getStatusCode(error, 500);
-    const message = error instanceof Error ? error.message : 'TTS preview generation failed.';
-    await markJobFailed(job.id, `${message}${statusCode >= 500 ? '' : ''}`);
+    console.error('TTS preview generation failed.', {
+      error,
+      jobId: job.id,
+      statusCode: getStatusCode(error, 500),
+      userId: job.user_id,
+    });
+    await markJobFailed(job.id, safeGenerationFailureMessage());
   } finally {
     await fs.rm(jobPaths.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
   }
@@ -1722,9 +1744,13 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
 
     await completeJobAndDeductUsage(job.id, jobPaths.wavRelativePath, mp3RelativePath, generatedAudioSeconds, billableMinutes);
   } catch (error) {
-    const statusCode = getStatusCode(error, 500);
-    const message = error instanceof Error ? error.message : 'TTS generation failed.';
-    await markJobFailed(job.id, `${message}${statusCode >= 500 ? '' : ''}`);
+    console.error('TTS generation failed.', {
+      error,
+      jobId: job.id,
+      statusCode: getStatusCode(error, 500),
+      userId: job.user_id,
+    });
+    await markJobFailed(job.id, safeGenerationFailureMessage());
   } finally {
     await fs.rm(jobPaths.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
   }
@@ -1841,6 +1867,45 @@ async function getLockedUser(client: PoolClient, userId: number) {
   return result.rows[0] ?? null;
 }
 
+async function countActiveTtsJobs(client: PoolClient, userId: number, statuses: string[]) {
+  const result = await client.query<{ count: string }>(
+    `
+      SELECT COUNT(*)::text AS count
+      FROM tts_generation_jobs
+      WHERE user_id = $1
+        AND status = ANY($2::text[])
+    `,
+    [userId, statuses],
+  );
+
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+async function assertUserCanQueueMoreTtsJobs(
+  client: PoolClient,
+  userId: number,
+  targetStatus: 'preview_queued' | 'queued',
+) {
+  const activePreviewStatuses = ['preview_queued', 'preview_processing'];
+  const activeGenerationStatuses = ['queued', 'processing'];
+  const activeStatuses = [...activePreviewStatuses, ...activeGenerationStatuses];
+  const activePreviewCount = await countActiveTtsJobs(client, userId, activePreviewStatuses);
+  const activeGenerationCount = await countActiveTtsJobs(client, userId, activeGenerationStatuses);
+  const activeTotalCount = await countActiveTtsJobs(client, userId, activeStatuses);
+
+  if (activeTotalCount >= maxActiveTtsJobsPerUser) {
+    throw withStatus('Too many audio jobs are already running. Wait for one to finish before starting another.', 429);
+  }
+
+  if (targetStatus === 'preview_queued' && activePreviewCount >= maxActivePreviewJobsPerUser) {
+    throw withStatus('Too many previews are already running. Wait for a preview to finish before starting another.', 429);
+  }
+
+  if (targetStatus === 'queued' && activeGenerationCount >= maxActiveGenerationJobsPerUser) {
+    throw withStatus('A full audio generation is already running. Wait for it to finish before starting another.', 429);
+  }
+}
+
 function assertUserCanQueueTtsJob(user: UserRecord) {
   if (user.account_status !== 'active') {
     throw withStatus('This account is disabled.', 403);
@@ -1889,6 +1954,7 @@ async function createQueuedTtsGenerationJob(
     }
 
     const currentBalance = assertUserCanQueueTtsJob(user);
+    await assertUserCanQueueMoreTtsJobs(client, user.id, initialStatus);
     const stage = initialStatus === 'preview_queued' ? 'preview_queued' : 'queued';
 
     const jobResult = await client.query<TtsGenerationJobRecord>(
@@ -1992,6 +2058,7 @@ export async function startTtsGenerationFromPreview(jobId: number, userId: numbe
     }
 
     const currentBalance = assertUserCanQueueTtsJob(user);
+    await assertUserCanQueueMoreTtsJobs(client, userId, 'queued');
 
     const startResult = await client.query<TtsGenerationJobRecord>(
       `
@@ -2068,21 +2135,27 @@ export async function retryTtsGenerationJob(jobId: number, userId: number) {
     }
 
     const currentBalance = assertUserCanQueueTtsJob(user);
+    const retryStatus = job.full_generation_requested_at ? 'queued' : 'preview_queued';
+    const retryStage = retryStatus === 'queued' ? 'queued' : 'preview_queued';
+    await assertUserCanQueueMoreTtsJobs(client, userId, retryStatus);
 
     const retryResult = await client.query<TtsGenerationJobRecord>(
       `
         UPDATE tts_generation_jobs
         SET
-          status = 'queued',
-          processing_stage = 'queued',
+          status = $3,
+          processing_stage = $4,
           error_message = NULL,
           wav_file = NULL,
           mp3_file = NULL,
+          preview_file = CASE WHEN $3 = 'preview_queued' THEN NULL ELSE preview_file END,
+          preview_audio_seconds = CASE WHEN $3 = 'preview_queued' THEN NULL ELSE preview_audio_seconds END,
           generated_audio_seconds = NULL,
           billable_minutes = NULL,
           token_cost = 0,
           token_transaction_id = NULL,
           completed_at = NULL,
+          preview_generated_at = CASE WHEN $3 = 'preview_queued' THEN NULL ELSE preview_generated_at END,
           downloaded_at = NULL,
           cancellation_requested_at = NULL,
           cancelled_at = NULL,
@@ -2092,7 +2165,7 @@ export async function retryTtsGenerationJob(jobId: number, userId: number) {
           AND user_id = $2
         RETURNING *
       `,
-      [jobId, userId],
+      [jobId, userId, retryStatus, retryStage],
     );
 
     await client.query('COMMIT');

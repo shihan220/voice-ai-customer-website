@@ -38,6 +38,7 @@ Minimum local variables:
 ```bash
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/bangla_voice_ai
 PORT=5181
+PRIVATE_MEDIA_ROOT=backend/private-media
 FRONTEND_URL=http://127.0.0.1:5175
 BACKEND_URL=http://127.0.0.1:5181
 FRONTEND_BACKEND_URL=http://127.0.0.1:5181
@@ -97,7 +98,7 @@ It also verifies the default Premium MP3 320 kbps + WAV preset, WAV-only mode wi
 ## Notes
 
 - Keep SMTP and Twilio unset for local OTP preview behavior.
-- Generated final audio is stored under `backend/media/tts-jobs/` and is ignored by git.
+- Generated final audio is stored under `backend/private-media/tts-jobs/`, served only through authenticated owner-checked API routes, and ignored by git.
 - Uploaded PDFs are not kept after extraction.
 - PDF support is text extraction only; scanned PDFs are rejected.
 - Long text is chunked by the backend and merged into final WAV/MP3 files.
