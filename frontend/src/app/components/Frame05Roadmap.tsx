@@ -8,11 +8,11 @@ const pricingPlans = [
     buttonLabel: 'Start Basic',
     description: 'A clean starting point for teams that want to test Bangladeshi Bangla voice before moving into premium usage.',
     features: [
-      '1,000 monthly refill tokens',
+      '10,000 monthly generation minutes',
       'Auto-refill every month',
       'Basic sample access',
       'Best for trying the platform',
-      'No extra token purchase unless upgraded',
+      'No extra minute purchase unless upgraded',
     ],
   },
   {
@@ -22,9 +22,9 @@ const pricingPlans = [
     buttonLabel: 'Choose Gold',
     description: 'A stronger commercial package for businesses that need premium access, repeat usage, and paid top-ups.',
     features: [
-      '10,000 fixed tokens',
+      '10,000 fixed generation minutes',
       'Premium database access',
-      'Can buy extra tokens',
+      'Can buy extra minutes',
       'Pay with card or bKash',
       'Best for regular users',
     ],
@@ -36,9 +36,9 @@ const pricingPlans = [
     buttonLabel: 'Go Platinum',
     description: 'A premium offer for agencies and larger companies managing high-volume customer voice workflows.',
     features: [
-      '100,000 fixed tokens',
+      '100,000 fixed generation minutes',
       'Premium database access',
-      'Can buy extra tokens',
+      'Can buy extra minutes',
       'Pay with card or bKash',
       'Best for heavy/high-volume users',
       'Priority/high-volume access',

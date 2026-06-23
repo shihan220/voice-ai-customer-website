@@ -7,6 +7,10 @@ This repository contains the Bangla Speech AI customer website, admin panel, and
 - `admin-frontend/` - admin login, dashboard, public voice card management, customer list, payments, and request review
 - `backend/` - Express API, PostgreSQL schema/bootstrap, media serving, customer auth, admin auth, and payment integrations
 
+Customer TTS local handover notes live in `docs/local-tts-handover.md`.
+
+Customer TTS generation calls Keypillar privately from the backend with `format=wav`. Download quality presets are handled only by this website backend after WAV generation: the backend either keeps WAV only or converts the final WAV to MP3 at the selected bitrate with ffmpeg.
+
 ## Running the code
 
 Install dependencies from the repository root:
@@ -64,10 +68,17 @@ Required environment variables are documented in `.env.example`. The main ones a
 - `FRONTEND_URL`
 - `ADMIN_FRONTEND_URL`
 - `BACKEND_URL`
+- `FRONTEND_BACKEND_URL`
 - `ADMIN_EMAIL`
 - `ADMIN_PASSWORD`
 - `ADMIN_SESSION_SECRET`
 - `CUSTOMER_SESSION_SECRET`
+- `KEYPILLAR_TTS_API_KEY`
+- `KEYPILLAR_TTS_BASE_URL`
+- `KEYPILLAR_TTS_ENDPOINT`
+- `KEYPILLAR_TTS_VOICE_ID`
+- `KEYPILLAR_TTS_FORMAT`
+- `FFMPEG_PATH`
 
 Optional integrations:
 
@@ -85,6 +96,18 @@ npm run typecheck
 npm run build
 npm audit --json
 npm run verify:local:runtime
+```
+
+The customer TTS flow also has an end-to-end local verifier. Start the backend with a valid server-side `KEYPILLAR_TTS_API_KEY`, keep SMTP/Twilio unset for development OTP previews, and run:
+
+```bash
+npm run verify:local:tts
+```
+
+If the backend is running on a non-default port:
+
+```bash
+BACKEND_URL=http://127.0.0.1:5182 npm run verify:local:tts
 ```
 
 Health checks:

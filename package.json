@@ -14,6 +14,7 @@
     "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev -- --host 127.0.0.1 --port 5175 --strictPort\"",
     "verify:db:fresh": "tsx backend/scripts/verify-fresh-db.ts",
     "verify:local:runtime": "tsx backend/scripts/verify-local-runtime.ts",
+    "verify:local:tts": "tsx backend/scripts/verify-local-tts.ts",
     "db:import:voices": "tsx backend/scripts/import-voices.ts",
     "db:seed:voices": "tsx backend/scripts/seed-voices.ts"
   },
@@ -56,6 +57,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.1.0",
     "@types/nodemailer": "^8.0.0",
+    "@types/pdf-parse": "^1.1.5",
     "argon2": "^0.44.0",
     "canvas-confetti": "1.9.4",
     "class-variance-authority": "0.7.1",
@@ -78,6 +80,7 @@
     "multer": "^2.2.0",
     "next-themes": "0.4.6",
     "nodemailer": "^9.0.1",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.21.0",
     "react-day-picker": "8.10.1",
     "react-dnd": "16.0.1",

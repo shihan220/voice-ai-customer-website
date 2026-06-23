@@ -1,5 +1,18 @@
-import { Eye, EyeOff } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  Clock3,
+  Eye,
+  EyeOff,
+  FileAudio2,
+  Loader2,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  X,
+} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import brandLogo from '../assets/bangla-speech-ai-logo.png';
 
 export type CustomerUser = {
@@ -8,6 +21,7 @@ export type CustomerUser = {
   createdAt: string;
   email: string;
   emailVerified: boolean;
+  fullName: string | null;
   id: number;
   mobileNumber: string | null;
   packageType: 'starter' | 'gold' | 'platinum';
@@ -69,6 +83,79 @@ type TokenLedgerItem = {
   transactionType: string;
 };
 
+type TtsGenerationJob = {
+  billableMinutes: number | null;
+  cancelReason: string | null;
+  cancellationRequestedAt: string | null;
+  cancelledAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  downloadedAt: string | null;
+  errorMessage: string | null;
+  fullGenerationRequestedAt: string | null;
+  generatedAudioSeconds: number | null;
+  id: number;
+  inputText?: string;
+  mp3BitrateKbps: number | null;
+  mp3DownloadUrl: string | null;
+  previewAudioSeconds: number | null;
+  previewAudioUrl: string | null;
+  previewGeneratedAt: string | null;
+  processingStage: string | null;
+  providerVoice: string;
+  qualityPreset: TtsQualityPreset;
+  sourceName: string | null;
+  sourceType: 'pdf' | 'text';
+  status:
+    | 'cancelled'
+    | 'cancelling'
+    | 'completed'
+    | 'failed'
+    | 'preview_processing'
+    | 'preview_queued'
+    | 'preview_ready'
+    | 'processing'
+    | 'queued';
+  tokenCost: number;
+  updatedAt: string;
+  wavDownloadUrl: string | null;
+  wordCount: number;
+};
+
+type TtsQualityPreset = 'high_mp3_wav' | 'premium_mp3_wav' | 'standard_mp3_wav' | 'wav_only';
+
+const ttsQualityOptions: Array<{
+  description: string;
+  label: string;
+  mp3BitrateKbps: number | null;
+  value: TtsQualityPreset;
+}> = [
+  {
+    description: 'Best customer download package.',
+    label: 'Premium MP3 320 kbps + WAV',
+    mp3BitrateKbps: 320,
+    value: 'premium_mp3_wav',
+  },
+  {
+    description: 'Smaller MP3 with high-quality WAV retained.',
+    label: 'High MP3 192 kbps + WAV',
+    mp3BitrateKbps: 192,
+    value: 'high_mp3_wav',
+  },
+  {
+    description: 'Compact MP3 with WAV retained.',
+    label: 'Standard MP3 128 kbps + WAV',
+    mp3BitrateKbps: 128,
+    value: 'standard_mp3_wav',
+  },
+  {
+    description: 'Only stores the original generated WAV.',
+    label: 'WAV only',
+    mp3BitrateKbps: null,
+    value: 'wav_only',
+  },
+];
+
 type InlineMessageProps = {
   children: ReactNode;
   tone?: 'error' | 'neutral' | 'success';
@@ -83,6 +170,7 @@ export type CustomerRoute =
   | '/verify-email'
   | '/verify-phone'
   | '/dashboard'
+  | `/dashboard/jobs/${number}`
   | '/account'
   | '/payment/success';
 
@@ -140,7 +228,9 @@ async function apiRequest<T>(input: string, init: RequestInit = {}) {
 }
 
 function readCurrentRoute(): { pathname: CustomerRoute; search: string } {
-  const pathname = publicRoutes.has(window.location.pathname as CustomerRoute)
+  const pathname = /^\/dashboard\/jobs\/\d+$/.test(window.location.pathname)
+    ? (window.location.pathname as CustomerRoute)
+    : publicRoutes.has(window.location.pathname as CustomerRoute)
     ? (window.location.pathname as CustomerRoute)
     : '/';
 
@@ -203,8 +293,58 @@ function InlineMessage({ children, tone = 'neutral' }: InlineMessageProps) {
   );
 }
 
+function StatePanel({
+  action,
+  description,
+  icon,
+  tone = 'neutral',
+  title,
+}: {
+  action?: ReactNode;
+  description: ReactNode;
+  icon?: ReactNode;
+  title: string;
+  tone?: 'error' | 'neutral' | 'success';
+}) {
+  return (
+    <div
+      className={cx(
+        'rounded-[24px] border p-5',
+        tone === 'error' && 'border-[#d8b7a6] bg-[#fbefea] text-[#8d4f37]',
+        tone === 'success' && 'border-[#c6d8c9] bg-[#eef8ee] text-[#375f3c]',
+        tone === 'neutral' && 'border-[#eadfce] bg-[#faf7f1] text-[#5a514a]',
+      )}
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+        {icon ? (
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/75 text-current">
+            {icon}
+          </div>
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <div className="text-base font-semibold text-[#2f343b]">{title}</div>
+          <div className="mt-1 text-sm leading-6">{description}</div>
+          {action ? <div className="mt-4 flex flex-wrap gap-3">{action}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LocalDevelopmentNotice({ channel }: { channel: 'email' | 'phone' }) {
+  const deliveryLabel = channel === 'email' ? 'email delivery' : 'SMS delivery';
+
+  return (
+    <InlineMessage>
+      <strong className="font-semibold text-[#2f343b]">Local development mode.</strong> Real {deliveryLabel} is not
+      configured here, so the backend shows a temporary OTP for local testing. Use the OTP shown below to continue.
+    </InlineMessage>
+  );
+}
+
 const textInputClassName =
   'w-full rounded-2xl border border-[#d8cbbe] bg-white px-4 py-3 text-sm text-[#2f343b] outline-none transition placeholder:text-[#9a8e83] focus:border-[#ae6c4a] focus:ring-2 focus:ring-[#e8c6ad]';
+const textAreaClassName = `${textInputClassName} min-h-[220px] resize-y`;
 
 function TextInput({
   className,
@@ -214,6 +354,18 @@ function TextInput({
     <input
       {...props}
       className={cx(textInputClassName, className)}
+    />
+  );
+}
+
+function TextArea({
+  className,
+  ...props
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { className?: string }) {
+  return (
+    <textarea
+      {...props}
+      className={cx(textAreaClassName, className)}
     />
   );
 }
@@ -251,7 +403,7 @@ function PrimaryButton({
     <button
       {...props}
       className={cx(
-        'rounded-full bg-[#ae6c4a] px-5 py-3 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-70',
+        'inline-flex items-center justify-center gap-2 rounded-full bg-[#ae6c4a] px-5 py-3 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-70',
         className,
       )}
     />
@@ -266,10 +418,78 @@ function SecondaryButton({
     <button
       {...props}
       className={cx(
-        'rounded-full border border-[#d8cbbe] bg-white/80 px-5 py-3 text-sm font-semibold text-[#5a514a] transition hover:border-[#c7b09e] hover:text-[#a96544] disabled:cursor-not-allowed disabled:opacity-70',
+        'inline-flex items-center justify-center gap-2 rounded-full border border-[#d8cbbe] bg-white/80 px-5 py-3 text-sm font-semibold text-[#5a514a] transition hover:border-[#c7b09e] hover:text-[#a96544] disabled:cursor-not-allowed disabled:opacity-70',
         className,
       )}
     />
+  );
+}
+
+function ConfirmationDialog({
+  cancelLabel = 'Keep editing',
+  children,
+  confirmLabel,
+  destructive = false,
+  loading = false,
+  onCancel,
+  onConfirm,
+  title,
+}: {
+  cancelLabel?: string;
+  children: ReactNode;
+  confirmLabel: string;
+  destructive?: boolean;
+  loading?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+  title: string;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#181410]/45 px-4 py-5 backdrop-blur-sm sm:items-center">
+      <section
+        aria-modal="true"
+        className="w-full max-w-lg rounded-[28px] border border-[#ddcfbe] bg-[#fffaf4] p-5 shadow-[0_28px_80px_rgba(24,20,16,0.28)] sm:p-6"
+        role="dialog"
+      >
+        <div className="flex items-start gap-4">
+          <div
+            className={cx(
+              'flex h-11 w-11 shrink-0 items-center justify-center rounded-full',
+              destructive ? 'bg-[#fbefea] text-[#8d4f37]' : 'bg-[#efe2d1] text-[#8d5d45]',
+            )}
+          >
+            {destructive ? <AlertTriangle className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-xl font-bold text-[#2f343b]">{title}</h2>
+            <div className="mt-2 text-sm leading-7 text-[#64584f]">{children}</div>
+          </div>
+          <button
+            aria-label="Close confirmation"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#d8cbbe] bg-white text-[#5a514a] transition hover:border-[#c7b09e] hover:text-[#a96544]"
+            disabled={loading}
+            onClick={onCancel}
+            type="button"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <SecondaryButton disabled={loading} onClick={onCancel} type="button">
+            {cancelLabel}
+          </SecondaryButton>
+          <PrimaryButton
+            className={cx(destructive && 'bg-[#8d4f37]')}
+            disabled={loading}
+            onClick={onConfirm}
+            type="button"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : destructive ? <X className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            {confirmLabel}
+          </PrimaryButton>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -481,7 +701,7 @@ export function CustomerPaymentSuccessPage({
             </div>
             <div className="mt-3 text-sm leading-7 text-[#64584f]">
               {payment.status === 'completed'
-                ? 'Your payment has been confirmed and the package or token balance has been updated.'
+                ? 'Your payment has been confirmed and the package or minute balance has been updated.'
                 : payment.status === 'pending'
                   ? 'Your payment is still processing. This page refreshes automatically while the backend waits for final confirmation.'
                   : 'This payment did not complete successfully. Review the status and try again if needed.'}
@@ -707,6 +927,7 @@ function SignupPage({
     confirmPassword: '',
     countryCode: '+880',
     email: '',
+    fullName: '',
     mobileNumber: '',
     password: '',
   });
@@ -757,6 +978,7 @@ function SignupPage({
     >
       <h2 className="text-2xl font-bold text-[#2f343b]">Sign up</h2>
       <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
+        <TextInput autoComplete="name" placeholder="Full name" required value={form.fullName} onChange={(event) => setForm((current) => ({ ...current, fullName: event.target.value }))} />
         <TextInput autoComplete="email" placeholder="Work email" type="email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} />
         <div className="grid gap-4 sm:grid-cols-[150px_1fr]">
           <TextInput placeholder="Country code" value={form.countryCode} onChange={(event) => setForm((current) => ({ ...current, countryCode: event.target.value }))} />
@@ -891,8 +1113,43 @@ function VerifyEmailPage({
   const section = params.get('section');
   const mode = params.get('mode');
   const [otp, setOtp] = useState('');
+  const [localDevelopmentCode, setLocalDevelopmentCode] = useState(false);
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const sendEmailCode = useCallback(async () => {
+    const payload = await apiRequest<{ verification: { preview: string | null } }>('/api/auth/send-email-otp', {
+      method: 'POST',
+    });
+
+    return {
+      localPreview: Boolean(payload.verification.preview),
+      message: payload.verification.preview ? `Email OTP for local testing: ${payload.verification.preview}` : 'Email code sent.',
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    void (async () => {
+      try {
+        const result = await sendEmailCode();
+        if (active) {
+          setLocalDevelopmentCode(result.localPreview);
+          setMessage(result.message);
+        }
+      } catch (error) {
+        if (active) {
+          setLocalDevelopmentCode(false);
+          setMessage(error instanceof Error ? error.message : 'Failed to send email code.');
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [sendEmailCode]);
 
   const handleVerify = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -935,11 +1192,11 @@ function VerifyEmailPage({
 
   const handleResend = async () => {
     setMessage('');
+    setLocalDevelopmentCode(false);
     try {
-      const payload = await apiRequest<{ verification: { preview: string | null } }>('/api/auth/send-email-otp', {
-        method: 'POST',
-      });
-      setMessage(payload.verification.preview ? `Development email OTP: ${payload.verification.preview}` : 'Email code sent.');
+      const result = await sendEmailCode();
+      setLocalDevelopmentCode(result.localPreview);
+      setMessage(result.message);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to resend email code.');
     }
@@ -950,6 +1207,7 @@ function VerifyEmailPage({
       <h2 className="text-2xl font-bold text-[#2f343b]">Email verification</h2>
       <form className="mt-8 space-y-4" onSubmit={handleVerify}>
         <TextInput placeholder="6-digit code" value={otp} onChange={(event) => setOtp(event.target.value)} />
+        {localDevelopmentCode ? <LocalDevelopmentNotice channel="email" /> : null}
         {message ? <InlineMessage tone="neutral">{message}</InlineMessage> : null}
         <PrimaryButton className="w-full justify-center" disabled={submitting} type="submit">
           {submitting ? 'Verifying...' : 'Verify email'}
@@ -977,8 +1235,43 @@ function VerifyPhonePage({
   const section = params.get('section');
   const mode = params.get('mode');
   const [otp, setOtp] = useState('');
+  const [localDevelopmentCode, setLocalDevelopmentCode] = useState(false);
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const sendPhoneCode = useCallback(async () => {
+    const payload = await apiRequest<{ verification: { preview: string | null } }>('/api/auth/send-phone-otp', {
+      method: 'POST',
+    });
+
+    return {
+      localPreview: Boolean(payload.verification.preview),
+      message: payload.verification.preview ? `Phone OTP for local testing: ${payload.verification.preview}` : 'Phone code sent.',
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    void (async () => {
+      try {
+        const result = await sendPhoneCode();
+        if (active) {
+          setLocalDevelopmentCode(result.localPreview);
+          setMessage(result.message);
+        }
+      } catch (error) {
+        if (active) {
+          setLocalDevelopmentCode(false);
+          setMessage(error instanceof Error ? error.message : 'Failed to send phone code.');
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [sendPhoneCode]);
 
   const handleVerify = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1012,11 +1305,11 @@ function VerifyPhonePage({
 
   const handleResend = async () => {
     setMessage('');
+    setLocalDevelopmentCode(false);
     try {
-      const payload = await apiRequest<{ verification: { preview: string | null } }>('/api/auth/send-phone-otp', {
-        method: 'POST',
-      });
-      setMessage(payload.verification.preview ? `Development phone OTP: ${payload.verification.preview}` : 'Phone code sent.');
+      const result = await sendPhoneCode();
+      setLocalDevelopmentCode(result.localPreview);
+      setMessage(result.message);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to resend phone code.');
     }
@@ -1027,6 +1320,7 @@ function VerifyPhonePage({
       <h2 className="text-2xl font-bold text-[#2f343b]">Phone verification</h2>
       <form className="mt-8 space-y-4" onSubmit={handleVerify}>
         <TextInput placeholder="6-digit code" value={otp} onChange={(event) => setOtp(event.target.value)} />
+        {localDevelopmentCode ? <LocalDevelopmentNotice channel="phone" /> : null}
         {message ? <InlineMessage tone="neutral">{message}</InlineMessage> : null}
         <PrimaryButton className="w-full justify-center" disabled={submitting} type="submit">
           {submitting ? 'Verifying...' : 'Verify phone'}
@@ -1039,9 +1333,1316 @@ function VerifyPhonePage({
   );
 }
 
+type DashboardTab = 'create' | 'history';
+
+function countWordsForDashboardPreview(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return 0;
+  }
+
+  return trimmed.split(/\s+/).filter(Boolean).length;
+}
+
+function estimateMinutesFromWords(wordCount: number) {
+  return wordCount > 0 ? Math.max(1, Math.ceil(wordCount / 150)) : 0;
+}
+
+function estimateProcessingSecondsFromWords(wordCount: number, qualityPreset: TtsQualityPreset) {
+  if (wordCount <= 0) {
+    return 0;
+  }
+
+  const estimatedChunks = Math.max(1, Math.ceil(wordCount / 175));
+  const estimatedAudioMinutes = estimateMinutesFromWords(wordCount);
+  const mp3ConversionSeconds = qualityPreset === 'wav_only' ? 0 : Math.max(8, estimatedAudioMinutes * 5);
+
+  return Math.max(35, Math.ceil(20 + estimatedChunks * 22 + mp3ConversionSeconds));
+}
+
+function estimatePreviewSecondsFromWords(wordCount: number) {
+  if (wordCount <= 0) {
+    return 35;
+  }
+
+  const previewWordCount = Math.min(wordCount, 85);
+  return Math.max(30, Math.ceil(18 + Math.ceil(previewWordCount / 90) * 18));
+}
+
+function formatDuration(seconds: number | null) {
+  if (seconds === null) {
+    return 'Not available';
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+
+  if (minutes <= 0) {
+    return `${remainingSeconds}s`;
+  }
+
+  return `${minutes}m ${String(remainingSeconds).padStart(2, '0')}s`;
+}
+
+function formatCountdown(seconds: number) {
+  const normalizedSeconds = Math.max(0, Math.ceil(seconds));
+  const minutes = Math.floor(normalizedSeconds / 60);
+  const remainingSeconds = normalizedSeconds % 60;
+
+  if (minutes <= 0) {
+    return `0:${String(remainingSeconds).padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
+}
+
+function getTtsQualityOption(value: TtsQualityPreset) {
+  return ttsQualityOptions.find((option) => option.value === value) ?? ttsQualityOptions[0];
+}
+
+function isActiveTtsJob(job: TtsGenerationJob) {
+  return (
+    job.status === 'queued' ||
+    job.status === 'processing' ||
+    job.status === 'preview_queued' ||
+    job.status === 'preview_processing' ||
+    job.status === 'cancelling'
+  );
+}
+
+function canCancelTtsJob(job: TtsGenerationJob) {
+  return job.status === 'queued' || job.status === 'processing' || job.status === 'preview_queued' || job.status === 'preview_processing';
+}
+
+function isPreviewTtsJob(job: TtsGenerationJob) {
+  return job.status === 'preview_queued' || job.status === 'preview_processing';
+}
+
+function formatMinuteEstimate(minutes: number) {
+  if (minutes <= 0) {
+    return 'No billable minutes yet';
+  }
+
+  return `${minutes.toLocaleString()} minute${minutes === 1 ? '' : 's'}`;
+}
+
+function getBillingExplanation(qualityPreset: TtsQualityPreset) {
+  const quality = getTtsQualityOption(qualityPreset);
+
+  if (quality.value === 'wav_only') {
+    return 'Preview is free. Full generation is billed only after the WAV finishes successfully.';
+  }
+
+  return `Preview is free. Full generation is billed only after the WAV and ${quality.mp3BitrateKbps} kbps MP3 finish successfully.`;
+}
+
+function getActiveJobEstimateSeconds(job: TtsGenerationJob) {
+  if (isPreviewTtsJob(job)) {
+    return estimatePreviewSecondsFromWords(job.wordCount);
+  }
+
+  if (job.status === 'cancelling') {
+    return Math.max(30, estimatePreviewSecondsFromWords(Math.min(job.wordCount, 120)));
+  }
+
+  return estimateProcessingSecondsFromWords(job.wordCount, job.qualityPreset);
+}
+
+function getStageProgressWindow(job: TtsGenerationJob) {
+  if (job.status === 'queued' || job.status === 'preview_queued') {
+    return { max: 15, min: 5 };
+  }
+
+  if (job.status === 'cancelling') {
+    return { max: 98, min: 92 };
+  }
+
+  switch (job.processingStage) {
+    case 'starting':
+    case 'preparing_preview':
+      return { max: 25, min: 12 };
+    case 'calling_provider':
+      return { max: 82, min: 22 };
+    case 'merging_wav':
+      return { max: 90, min: 82 };
+    case 'converting_mp3':
+      return { max: 96, min: 90 };
+    default:
+      return { max: 82, min: 18 };
+  }
+}
+
+function getFriendlyProcessingStage(job: TtsGenerationJob) {
+  if (job.status === 'queued') {
+    return 'Waiting for processing to start';
+  }
+
+  if (job.status === 'preview_queued') {
+    return 'Waiting for preview generation';
+  }
+
+  if (job.status === 'cancelling') {
+    return 'Cancelling after the current audio chunk';
+  }
+
+  switch (job.processingStage) {
+    case 'preparing_preview':
+      return 'Preparing the preview';
+    case 'starting':
+      return 'Preparing the generation job';
+    case 'calling_provider':
+      return 'Generating voice from text';
+    case 'merging_wav':
+      return 'Combining WAV audio';
+    case 'converting_mp3':
+      return 'Creating MP3 download';
+    default:
+      return job.processingStage ? statusLabel(job.processingStage) : 'Processing audio';
+  }
+}
+
+function getActiveJobProgress(job: TtsGenerationJob, nowMs: number) {
+  const createdAtMs = new Date(job.createdAt).getTime();
+  const elapsedSeconds = Number.isFinite(createdAtMs)
+    ? Math.max(0, Math.floor((nowMs - createdAtMs) / 1000))
+    : 0;
+  const estimatedSeconds = getActiveJobEstimateSeconds(job);
+  const remainingSeconds = estimatedSeconds > 0 ? Math.max(0, estimatedSeconds - elapsedSeconds) : 0;
+  const { max, min } = getStageProgressWindow(job);
+  const timeDrivenPercent = estimatedSeconds > 0
+    ? Math.round(Math.min(94, Math.max(4, (elapsedSeconds / estimatedSeconds) * 94)))
+    : min;
+  const percent = Math.max(min, Math.min(max, timeDrivenPercent));
+
+  return {
+    elapsedSeconds,
+    estimatedSeconds,
+    isOverEstimate: estimatedSeconds > 0 && elapsedSeconds > estimatedSeconds,
+    percent,
+    remainingSeconds,
+  };
+}
+
+function ActiveTtsJobProgress({ job, nowMs }: { job: TtsGenerationJob; nowMs: number }) {
+  const progress = getActiveJobProgress(job, nowMs);
+  const stageLabel = getFriendlyProcessingStage(job);
+  const phaseLabel = isPreviewTtsJob(job) ? 'Free preview' : job.status === 'cancelling' ? 'Stopping job' : 'Full audio';
+
+  return (
+    <div className="mt-4 rounded-2xl border border-[#eadfce] bg-white/75 p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#efe2d1] px-3 py-1 text-xs font-semibold text-[#8d5d45]">
+              <Clock3 className="h-3.5 w-3.5" />
+              {phaseLabel}
+            </span>
+            <span className="text-sm font-semibold text-[#2f343b]">{stageLabel}</span>
+          </div>
+          <div className="mt-2 text-xs leading-5 text-[#746960]">
+            {progress.isOverEstimate
+              ? 'This is past the estimate, but it is still actively processing. Large text and provider response time can extend the wait.'
+              : `Estimated finish in ${formatCountdown(progress.remainingSeconds)}. The page refreshes this job automatically.`}
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-center text-xs text-[#64584f] sm:min-w-[330px] sm:text-right">
+          <div>
+            <div className="font-semibold text-[#2f343b]">{formatCountdown(progress.elapsedSeconds)}</div>
+            <div>Elapsed</div>
+          </div>
+          <div>
+            <div className="font-semibold text-[#2f343b]">{formatCountdown(progress.estimatedSeconds)}</div>
+            <div>Estimate</div>
+          </div>
+          <div>
+            <div className="font-semibold text-[#2f343b]">
+              {progress.isOverEstimate ? 'Still working' : formatCountdown(progress.remainingSeconds)}
+            </div>
+            <div>Remaining</div>
+          </div>
+        </div>
+      </div>
+      <div
+        aria-valuemax={100}
+        aria-valuemin={0}
+        aria-valuenow={progress.percent}
+        className="mt-4 h-3 overflow-hidden rounded-full bg-[#eadfce]"
+        role="progressbar"
+      >
+        <div
+          className="h-full rounded-full bg-[#ae6c4a] transition-[width] duration-700 ease-out"
+          style={{ width: `${progress.percent}%` }}
+        />
+      </div>
+      <div className="mt-2 flex flex-col gap-1 text-xs text-[#746960] sm:flex-row sm:items-center sm:justify-between">
+        <span>{progress.percent}% estimated progress</span>
+        <span>{isPreviewTtsJob(job) ? 'Preview uses the opening section only' : `Based on ${job.wordCount.toLocaleString()} words`}</span>
+      </div>
+    </div>
+  );
+}
+
+export function CustomerDashboardPage({
+  onNavigate,
+  onSessionRefresh,
+  user,
+}: {
+  onNavigate: (href: string, replace?: boolean) => void;
+  onSessionRefresh?: () => Promise<void> | void;
+  user: CustomerUser;
+}) {
+  const [activeTab, setActiveTab] = useState<DashboardTab>('create');
+  const [jobs, setJobs] = useState<TtsGenerationJob[]>([]);
+  const jobsRef = useRef<TtsGenerationJob[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(true);
+  const [jobsRefreshing, setJobsRefreshing] = useState(false);
+  const [jobsError, setJobsError] = useState('');
+  const [jobActionError, setJobActionError] = useState('');
+  const [cancellingJobId, setCancellingJobId] = useState<number | null>(null);
+  const [retryError, setRetryError] = useState('');
+  const [retryingJobId, setRetryingJobId] = useState<number | null>(null);
+  const [startingJobId, setStartingJobId] = useState<number | null>(null);
+  const [confirmJobAction, setConfirmJobAction] = useState<null | { job: TtsGenerationJob; type: 'cancel' | 'start' }>(null);
+  const [sourceType, setSourceType] = useState<'pdf' | 'text'>('text');
+  const [qualityPreset, setQualityPreset] = useState<TtsQualityPreset>('premium_mp3_wav');
+  const [sourceName, setSourceName] = useState('');
+  const [textInput, setTextInput] = useState('');
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfResetKey, setPdfResetKey] = useState(0);
+  const [submitError, setSubmitError] = useState('');
+  const [submitMessage, setSubmitMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const estimatedWordCount = useMemo(
+    () => (sourceType === 'text' ? countWordsForDashboardPreview(textInput) : 0),
+    [sourceType, textInput],
+  );
+  const estimatedMinuteCost = estimateMinutesFromWords(estimatedWordCount);
+  const estimatedPreviewSeconds = estimatePreviewSecondsFromWords(estimatedWordCount);
+  const estimatedProcessingSeconds = estimateProcessingSecondsFromWords(estimatedWordCount, qualityPreset);
+  const hasInsufficientMinutes = sourceType === 'text' && estimatedMinuteCost > 0 && user.tokenBalance < estimatedMinuteCost;
+  const hasActiveJobs = jobs.some(isActiveTtsJob);
+  const isInitialJobsLoading = jobsLoading && jobs.length === 0;
+  const selectedQuality = getTtsQualityOption(qualityPreset);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const loadJobs = useCallback(async () => {
+    setJobsRefreshing(true);
+
+    try {
+      const payload = await apiRequest<{ jobs: TtsGenerationJob[] }>('/api/tts/jobs');
+      const previousJobs = jobsRef.current;
+      const finishedActiveJob = payload.jobs.some((job) => {
+        if (isActiveTtsJob(job)) {
+          return false;
+        }
+
+        return previousJobs.some(
+          (existingJob) =>
+            existingJob.id === job.id &&
+            isActiveTtsJob(existingJob),
+        );
+      });
+
+      jobsRef.current = payload.jobs;
+      setJobs(payload.jobs);
+      setJobsError('');
+
+      if (finishedActiveJob) {
+        void onSessionRefresh?.();
+      }
+    } catch (nextError) {
+      setJobsError(nextError instanceof Error ? nextError.message : 'Failed to load audio generation jobs.');
+    } finally {
+      setJobsLoading(false);
+      setJobsRefreshing(false);
+    }
+  }, [onSessionRefresh]);
+
+  useEffect(() => {
+    jobsRef.current = [];
+    setJobs([]);
+    setJobsLoading(true);
+    void loadJobs();
+  }, [loadJobs, user.id]);
+
+  useEffect(() => {
+    if (!hasActiveJobs) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadJobs();
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [hasActiveJobs, loadJobs]);
+
+  useEffect(() => {
+    if (!hasActiveJobs) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [hasActiveJobs]);
+
+  const resetCreateForm = () => {
+    setSourceName('');
+    setTextInput('');
+    setPdfFile(null);
+    setPdfResetKey((current) => current + 1);
+  };
+
+  const handleRefreshJobs = () => {
+    if (jobs.length === 0) {
+      setJobsLoading(true);
+    }
+
+    void loadJobs();
+  };
+
+  const handleRetryJob = async (jobId: number) => {
+    setRetryingJobId(jobId);
+    setRetryError('');
+    setJobActionError('');
+
+    try {
+      const payload = await apiRequest<{ job: TtsGenerationJob; tokenBalance: number }>(`/api/tts/jobs/${jobId}/retry`, {
+        method: 'POST',
+      });
+
+      setJobs((currentJobs) => {
+        const nextJobs = currentJobs.map((job) => (job.id === payload.job.id ? payload.job : job));
+        jobsRef.current = nextJobs;
+        return nextJobs;
+      });
+      await Promise.all([loadJobs(), Promise.resolve(onSessionRefresh?.())]);
+    } catch (nextError) {
+      setRetryError(nextError instanceof Error ? nextError.message : 'Failed to retry the audio generation job.');
+    } finally {
+      setRetryingJobId(null);
+    }
+  };
+
+  const handleStartFullGeneration = async (jobId: number) => {
+    setStartingJobId(jobId);
+    setJobActionError('');
+
+    try {
+      const payload = await apiRequest<{ job: TtsGenerationJob; tokenBalance: number }>(`/api/tts/jobs/${jobId}/start`, {
+        method: 'POST',
+      });
+
+      setJobs((currentJobs) => {
+        const nextJobs = currentJobs.map((job) => (job.id === payload.job.id ? payload.job : job));
+        jobsRef.current = nextJobs;
+        return nextJobs;
+      });
+      await Promise.all([loadJobs(), Promise.resolve(onSessionRefresh?.())]);
+    } catch (nextError) {
+      setJobActionError(nextError instanceof Error ? nextError.message : 'Failed to start full audio generation.');
+    } finally {
+      setStartingJobId(null);
+    }
+  };
+
+  const handleCancelJob = async (jobId: number) => {
+    setCancellingJobId(jobId);
+    setJobActionError('');
+
+    try {
+      const payload = await apiRequest<{ job: TtsGenerationJob }>(`/api/tts/jobs/${jobId}/cancel`, {
+        method: 'POST',
+      });
+
+      setJobs((currentJobs) => {
+        const nextJobs = currentJobs.map((job) => (job.id === payload.job.id ? payload.job : job));
+        jobsRef.current = nextJobs;
+        return nextJobs;
+      });
+      await Promise.all([loadJobs(), Promise.resolve(onSessionRefresh?.())]);
+    } catch (nextError) {
+      setJobActionError(nextError instanceof Error ? nextError.message : 'Failed to cancel the audio generation job.');
+    } finally {
+      setCancellingJobId(null);
+    }
+  };
+
+  const requestStartFullGeneration = (job: TtsGenerationJob) => {
+    const estimatedMinutes = estimateMinutesFromWords(job.wordCount);
+
+    if (estimatedMinutes > user.tokenBalance) {
+      setJobActionError(
+        `This job is estimated at ${formatMinuteEstimate(estimatedMinutes)}, but your current balance is ${user.tokenBalance.toLocaleString()}. Add minutes before generating the full audio.`,
+      );
+      return;
+    }
+
+    setConfirmJobAction({ job, type: 'start' });
+  };
+
+  const handleConfirmedJobAction = async () => {
+    if (!confirmJobAction) {
+      return;
+    }
+
+    if (confirmJobAction.type === 'start') {
+      await handleStartFullGeneration(confirmJobAction.job.id);
+    } else {
+      await handleCancelJob(confirmJobAction.job.id);
+    }
+
+    setConfirmJobAction(null);
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setSubmitError('');
+    setSubmitMessage('');
+
+    try {
+      if (sourceType === 'text') {
+        if (!sourceName.trim()) {
+          throw new Error('Enter a title for this text generation.');
+        }
+
+        if (!textInput.trim()) {
+          throw new Error('Paste the text you want to generate.');
+        }
+
+        if (estimatedMinuteCost <= 0) {
+          throw new Error('Paste the text you want to generate.');
+        }
+
+        await apiRequest<{ job: TtsGenerationJob; tokenBalance: number }>('/api/tts/jobs/text/preview', {
+          body: JSON.stringify({
+            inputText: textInput,
+            qualityPreset,
+            sourceName,
+          }),
+          method: 'POST',
+        });
+      } else {
+        if (!pdfFile) {
+          throw new Error('Upload a PDF file to continue.');
+        }
+
+        const formData = new FormData();
+        formData.append('file', pdfFile);
+        formData.append('qualityPreset', qualityPreset);
+
+        if (sourceName.trim()) {
+          formData.append('sourceName', sourceName.trim());
+        }
+
+        await apiRequest<{ job: TtsGenerationJob; tokenBalance: number }>('/api/tts/jobs/pdf/preview', {
+          body: formData,
+          method: 'POST',
+        });
+      }
+
+      setSubmitMessage(
+        sourceType === 'text'
+          ? 'Preview job queued. Listen to the preview in history before generating the full audio.'
+          : 'PDF preview job queued. Text extraction and preview generation are now running.',
+      );
+      resetCreateForm();
+      setActiveTab('history');
+      await Promise.all([loadJobs(), Promise.resolve(onSessionRefresh?.())]);
+    } catch (nextError) {
+      setSubmitError(nextError instanceof Error ? nextError.message : 'Failed to queue the audio generation job.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-20 sm:px-5 sm:py-24">
+      <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <div className="inline-flex rounded-full border border-[#d9c6b2] bg-[#efe2d1] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#a96544]">
+            Audio Workspace
+          </div>
+          <h1 className="mt-5 text-3xl font-bold text-[#2f343b] sm:text-4xl">Create Bangla voice audio</h1>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-[#64584f] sm:text-base">
+            Start with a free preview, then approve the full WAV and MP3 generation when the voice sounds right. Billing happens only after the full audio finishes successfully.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <SecondaryButton onClick={() => onNavigate('/account')} type="button">
+            Open account
+          </SecondaryButton>
+          <SecondaryButton onClick={() => onNavigate('/')} type="button">
+            Back to website
+          </SecondaryButton>
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <DashboardCard label="Minute balance" value={user.tokenBalance.toLocaleString()} />
+        <DashboardCard label="Package" value={statusLabel(user.packageType)} />
+        <DashboardCard label="Email status" value={user.emailVerified ? 'Verified' : 'Pending'} />
+        <DashboardCard label="Phone status" value={user.phoneVerified ? 'Verified' : 'Pending'} />
+      </div>
+
+      <div className="mt-8 flex flex-wrap gap-3">
+        <button
+          className={cx(
+            'rounded-full px-5 py-3 text-sm font-semibold transition',
+            activeTab === 'create'
+              ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+              : 'border border-[#d8cbbe] bg-white/88 text-[#5a514a] hover:border-[#c7b09e] hover:text-[#a96544]',
+          )}
+          onClick={() => setActiveTab('create')}
+          type="button"
+        >
+          Create
+        </button>
+        <button
+          className={cx(
+            'rounded-full px-5 py-3 text-sm font-semibold transition',
+            activeTab === 'history'
+              ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+              : 'border border-[#d8cbbe] bg-white/88 text-[#5a514a] hover:border-[#c7b09e] hover:text-[#a96544]',
+          )}
+          onClick={() => setActiveTab('history')}
+          type="button"
+        >
+          History
+        </button>
+      </div>
+
+      {activeTab === 'create' ? (
+        <section className="mt-6 rounded-[28px] border border-[#ddcfbe] bg-white/88 p-4 shadow-[0_18px_50px_rgba(55,58,64,0.08)] sm:p-6">
+          <div className="flex flex-wrap gap-3">
+            <button
+              className={cx(
+                'rounded-full px-4 py-2 text-sm font-semibold transition',
+                sourceType === 'text'
+                  ? 'bg-[#2f343b] text-white'
+                  : 'border border-[#d8cbbe] bg-[#faf7f1] text-[#5a514a] hover:border-[#c7b09e]',
+              )}
+              onClick={() => setSourceType('text')}
+              type="button"
+            >
+              Paste text
+            </button>
+            <button
+              className={cx(
+                'rounded-full px-4 py-2 text-sm font-semibold transition',
+                sourceType === 'pdf'
+                  ? 'bg-[#2f343b] text-white'
+                  : 'border border-[#d8cbbe] bg-[#faf7f1] text-[#5a514a] hover:border-[#c7b09e]',
+              )}
+              onClick={() => setSourceType('pdf')}
+              type="button"
+            >
+              Upload PDF
+            </button>
+          </div>
+
+          <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
+            <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">
+                    {sourceType === 'text' ? 'Title' : 'Title (optional)'}
+                  </label>
+                  <TextInput
+                    placeholder={sourceType === 'text' ? 'Example: June campaign narration' : 'Optional title override'}
+                    value={sourceName}
+                    onChange={(event) => setSourceName(event.target.value)}
+                  />
+                </div>
+
+                {sourceType === 'text' ? (
+                  <div>
+                    <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Text to generate</label>
+                    <TextArea
+                      placeholder="Paste Bangla text here"
+                      value={textInput}
+                      onChange={(event) => setTextInput(event.target.value)}
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="mb-2 block text-sm font-semibold text-[#4f4740]">PDF file</label>
+                    <input
+                      key={pdfResetKey}
+                      accept="application/pdf,.pdf"
+                      className={textInputClassName}
+                      type="file"
+                      onChange={(event) => setPdfFile(event.target.files?.[0] ?? null)}
+                    />
+                    <p className="mt-2 text-sm leading-6 text-[#6f645c]">
+                      Text-based PDFs only. Scanned PDFs without extractable text will be rejected.
+                    </p>
+                  </div>
+                )}
+
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Download quality</label>
+                  <select
+                    className={textInputClassName}
+                    value={qualityPreset}
+                    onChange={(event) => setQualityPreset(event.target.value as TtsQualityPreset)}
+                  >
+                    {ttsQualityOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-sm leading-6 text-[#6f645c]">{selectedQuality.description}</p>
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-4 sm:p-5">
+                <h2 className="text-lg font-semibold text-[#2f343b]">Job estimate</h2>
+                <div className="mt-4 space-y-3 text-sm text-[#64584f]">
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Source</span>
+                    <span className="font-semibold text-[#2f343b]">{sourceType === 'text' ? 'Pasted text' : 'Uploaded PDF'}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Word count</span>
+                    <span className="font-semibold text-[#2f343b]">
+                      {sourceType === 'text' ? estimatedWordCount.toLocaleString() : pdfFile ? 'Calculated after upload' : 'Waiting for file'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Full generation estimate</span>
+                    <span className="font-semibold text-[#2f343b]">
+                      {sourceType === 'text' ? formatMinuteEstimate(estimatedMinuteCost) : pdfFile ? 'Measured after extraction' : 'Waiting for file'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Preview wait</span>
+                    <span className="font-semibold text-[#2f343b]">
+                      {sourceType === 'text' && estimatedWordCount > 0
+                        ? formatDuration(estimatedPreviewSeconds)
+                        : pdfFile
+                          ? 'Shown after extraction'
+                          : 'Waiting for input'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Full processing</span>
+                    <span className="font-semibold text-[#2f343b]">
+                      {sourceType === 'text' && estimatedProcessingSeconds > 0
+                        ? formatDuration(estimatedProcessingSeconds)
+                        : pdfFile
+                          ? 'Shown in history after extraction'
+                          : 'Waiting for input'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Voice</span>
+                    <span className="font-semibold text-[#2f343b]">keypillar-bd-female</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <span>Quality</span>
+                    <span className="text-right font-semibold text-[#2f343b]">{selectedQuality.label}</span>
+                  </div>
+                </div>
+
+                {hasInsufficientMinutes ? (
+                  <div className="mt-4">
+                    <InlineMessage>
+                      You can still create the free preview. To generate the full audio, this text is estimated at {formatMinuteEstimate(estimatedMinuteCost)} and your current balance is {user.tokenBalance.toLocaleString()}.
+                    </InlineMessage>
+                  </div>
+                ) : null}
+
+                <div className="mt-4">
+                  <InlineMessage tone="success">{getBillingExplanation(qualityPreset)}</InlineMessage>
+                </div>
+
+                {submitError ? (
+                  <div className="mt-4">
+                    <InlineMessage tone="error">{submitError}</InlineMessage>
+                  </div>
+                ) : null}
+
+                {submitMessage ? (
+                  <div className="mt-4">
+                    <InlineMessage tone="success">{submitMessage}</InlineMessage>
+                  </div>
+                ) : null}
+
+                <div className="mt-5 flex flex-wrap gap-3">
+                  <PrimaryButton
+                    className="w-full justify-center sm:w-auto"
+                    disabled={
+                      submitting ||
+                      (sourceType === 'text' && (!textInput.trim() || !sourceName.trim() || estimatedMinuteCost === 0)) ||
+                      (sourceType === 'pdf' && !pdfFile)
+                    }
+                    type="submit"
+                  >
+                    {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileAudio2 className="h-4 w-4" />}
+                    {submitting ? 'Queueing preview...' : 'Generate free preview'}
+                  </PrimaryButton>
+                  <SecondaryButton className="w-full sm:w-auto" onClick={resetCreateForm} type="button">
+                    Clear
+                  </SecondaryButton>
+                </div>
+              </div>
+            </div>
+          </form>
+        </section>
+      ) : null}
+
+      {activeTab === 'history' ? (
+        <section className="mt-6 rounded-[28px] border border-[#ddcfbe] bg-white/88 p-4 shadow-[0_18px_50px_rgba(55,58,64,0.08)] sm:p-6">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-[#2f343b]">Generation history</h2>
+              <p className="mt-2 text-sm leading-7 text-[#64584f]">
+                Latest 50 jobs. Active jobs refresh automatically every 3 seconds.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {jobsRefreshing && !isInitialJobsLoading ? (
+                <div className="rounded-full border border-[#d9c6b2] bg-white/80 px-4 py-2 text-sm font-semibold text-[#8d5d45]">
+                  Refreshing
+                </div>
+              ) : null}
+              {hasActiveJobs ? (
+                <div className="rounded-full border border-[#d9c6b2] bg-[#efe2d1] px-4 py-2 text-sm font-semibold text-[#8d5d45]">
+                  Processing in progress
+                </div>
+              ) : null}
+              <SecondaryButton
+                className="px-4 py-2.5 text-xs sm:text-sm"
+                disabled={jobsRefreshing}
+                onClick={handleRefreshJobs}
+                type="button"
+              >
+                {jobsRefreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                {jobsRefreshing ? 'Refreshing...' : 'Refresh'}
+              </SecondaryButton>
+            </div>
+          </div>
+
+          <div className="mt-5 space-y-3">
+            {isInitialJobsLoading ? (
+              <StatePanel
+                description="Checking your latest previews, active generations, and completed downloads."
+                icon={<Loader2 className="h-5 w-5 animate-spin" />}
+                title="Loading generation history"
+              />
+            ) : null}
+            {jobsError ? (
+              <StatePanel
+                action={(
+                  <SecondaryButton className="px-4 py-2.5 text-xs sm:text-sm" onClick={handleRefreshJobs} type="button">
+                    <RefreshCw className="h-4 w-4" />
+                    Try again
+                  </SecondaryButton>
+                )}
+                description={jobsError}
+                icon={<AlertTriangle className="h-5 w-5" />}
+                title="Could not load generation history"
+                tone="error"
+              />
+            ) : null}
+            {retryError ? <InlineMessage tone="error">{retryError}</InlineMessage> : null}
+            {jobActionError ? <InlineMessage tone="error">{jobActionError}</InlineMessage> : null}
+            {!jobsLoading && !jobsError && jobs.length === 0 ? (
+              <StatePanel
+                action={(
+                  <PrimaryButton onClick={() => setActiveTab('create')} type="button">
+                    <ArrowRight className="h-4 w-4" />
+                    Create first preview
+                  </PrimaryButton>
+                )}
+                description="Create a text or PDF preview first. Once you approve the preview, the final WAV and MP3 downloads will stay available here."
+                icon={<FileAudio2 className="h-5 w-5" />}
+                title="No generations yet"
+              />
+            ) : null}
+            {jobs.map((job) => (
+              <div key={job.id} className="rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-4 sm:p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <h3 className="text-lg font-semibold text-[#2f343b]">
+                        {job.sourceName || (job.sourceType === 'pdf' ? 'PDF generation' : 'Text generation')}
+                      </h3>
+                      <span
+                        className={cx(
+                          'rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em]',
+                          job.status === 'completed' && 'bg-[#e5f4e5] text-[#355f3b]',
+                          job.status === 'failed' && 'bg-[#fbefea] text-[#8d4f37]',
+                          job.status === 'cancelled' && 'bg-[#f3ede8] text-[#7a6f66]',
+                          job.status === 'preview_ready' && 'bg-[#e9f2fb] text-[#315f8f]',
+                          isActiveTtsJob(job) && 'bg-[#efe2d1] text-[#8d5d45]',
+                        )}
+                      >
+                        {statusLabel(job.status)}
+                      </span>
+                    </div>
+                    <div className="mt-2 grid gap-2 text-sm text-[#64584f] sm:grid-cols-2 lg:grid-cols-4">
+                      <div>Created: {formatDate(job.createdAt)}</div>
+                      <div>Source: {job.sourceType.toUpperCase()}</div>
+                      <div>Words: {job.wordCount.toLocaleString()}</div>
+                      <div>Minutes: {job.billableMinutes === null ? 'Not measured' : job.billableMinutes.toLocaleString()}</div>
+                    </div>
+                    <div className="mt-2 text-sm leading-6 text-[#7a6f66]">
+                      Voice: {job.providerVoice} • Quality: {getTtsQualityOption(job.qualityPreset).label}
+                      {job.generatedAudioSeconds !== null ? ` • Duration: ${formatDuration(job.generatedAudioSeconds)}` : ''}
+                      {job.processingStage ? ` • Stage: ${statusLabel(job.processingStage)}` : ''}
+                    </div>
+                    {job.inputText ? (
+                      <p className="mt-3 line-clamp-3 text-sm leading-7 text-[#5f564f]">
+                        {job.inputText}
+                      </p>
+                    ) : null}
+                    {isActiveTtsJob(job) ? <ActiveTtsJobProgress job={job} nowMs={nowMs} /> : null}
+                    {job.previewAudioUrl && job.status === 'preview_ready' ? (
+                      <div className="mt-4 rounded-2xl border border-[#eadfce] bg-white/80 p-4">
+                        <div className="text-sm font-semibold text-[#2f343b]">Preview ready</div>
+                        <div className="mt-1 text-xs text-[#746960]">
+                          Listen before generating the full WAV/MP3. The preview is not billed.
+                        </div>
+                        <audio controls className="mt-3 w-full" preload="none" src={job.previewAudioUrl}>
+                          Your browser does not support audio preview.
+                        </audio>
+                      </div>
+                    ) : null}
+                    {job.errorMessage ? (
+                      <div className="mt-4">
+                        <InlineMessage tone="error">{job.errorMessage}</InlineMessage>
+                      </div>
+                    ) : null}
+                    {job.cancelReason ? (
+                      <div className="mt-4">
+                        <InlineMessage>{job.cancelReason}</InlineMessage>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:flex-wrap lg:max-w-[320px] lg:justify-end">
+                    <SecondaryButton
+                      className="w-full px-4 py-2 text-sm sm:w-auto"
+                      onClick={() => onNavigate(`/dashboard/jobs/${job.id}`)}
+                      type="button"
+                    >
+                      Details
+                    </SecondaryButton>
+                    {job.status === 'preview_ready' ? (
+                      <PrimaryButton
+                        className="w-full px-4 py-2 text-sm sm:w-auto"
+                        disabled={startingJobId === job.id}
+                        onClick={() => requestStartFullGeneration(job)}
+                        type="button"
+                      >
+                        {startingJobId === job.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                        {startingJobId === job.id ? 'Starting...' : 'Generate full audio'}
+                      </PrimaryButton>
+                    ) : null}
+                    {canCancelTtsJob(job) ? (
+                      <SecondaryButton
+                        className="w-full px-4 py-2 text-sm sm:w-auto"
+                        disabled={cancellingJobId === job.id}
+                        onClick={() => setConfirmJobAction({ job, type: 'cancel' })}
+                        type="button"
+                      >
+                        {cancellingJobId === job.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                        {cancellingJobId === job.id ? 'Cancelling...' : 'Cancel'}
+                      </SecondaryButton>
+                    ) : null}
+                    {job.status === 'failed' ? (
+                      <SecondaryButton
+                        className="w-full px-4 py-2 text-sm sm:w-auto"
+                        disabled={retryingJobId === job.id}
+                        onClick={() => void handleRetryJob(job.id)}
+                        type="button"
+                      >
+                        {retryingJobId === job.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                        {retryingJobId === job.id ? 'Retrying...' : 'Retry'}
+                      </SecondaryButton>
+                    ) : null}
+                    {job.wavDownloadUrl ? (
+                      <a
+                        className="inline-flex w-full items-center justify-center rounded-full bg-[#ae6c4a] px-4 py-2 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95 sm:w-auto"
+                        href={job.wavDownloadUrl}
+                      >
+                        Download WAV
+                      </a>
+                    ) : null}
+                    {job.mp3DownloadUrl ? (
+                      <a
+                        className="inline-flex w-full items-center justify-center rounded-full border border-[#d8cbbe] bg-white/88 px-4 py-2 text-sm font-semibold text-[#5a514a] transition hover:border-[#c7b09e] hover:text-[#a96544] sm:w-auto"
+                        href={job.mp3DownloadUrl}
+                      >
+                        Download MP3
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {confirmJobAction ? (
+        <ConfirmationDialog
+          cancelLabel={confirmJobAction.type === 'cancel' ? 'Keep running' : 'Not yet'}
+          confirmLabel={confirmJobAction.type === 'cancel' ? 'Cancel job' : 'Generate full audio'}
+          destructive={confirmJobAction.type === 'cancel'}
+          loading={
+            confirmJobAction.type === 'cancel'
+              ? cancellingJobId === confirmJobAction.job.id
+              : startingJobId === confirmJobAction.job.id
+          }
+          onCancel={() => setConfirmJobAction(null)}
+          onConfirm={() => void handleConfirmedJobAction()}
+          title={confirmJobAction.type === 'cancel' ? 'Cancel this generation?' : 'Generate the full audio?'}
+        >
+          {confirmJobAction.type === 'cancel' ? (
+            <>
+              This job will stop at the next safe point between audio chunks. Unfinished cancelled jobs are not billed and no final downloads are created.
+            </>
+          ) : (
+            <>
+              This will start the final WAV{getTtsQualityOption(confirmJobAction.job.qualityPreset).mp3BitrateKbps ? ' and MP3' : ''} generation for{' '}
+              {confirmJobAction.job.wordCount.toLocaleString()} words. Estimated billing is{' '}
+              {formatMinuteEstimate(estimateMinutesFromWords(confirmJobAction.job.wordCount))}; minutes are deducted only after the full audio finishes successfully.
+            </>
+          )}
+        </ConfirmationDialog>
+      ) : null}
+    </div>
+  );
+}
+
+export function CustomerJobDetailsPage({
+  jobId,
+  onNavigate,
+  onSessionRefresh,
+  user,
+}: {
+  jobId: number;
+  onNavigate: (href: string, replace?: boolean) => void;
+  onSessionRefresh?: () => Promise<void> | void;
+  user: CustomerUser;
+}) {
+  const [job, setJob] = useState<TtsGenerationJob | null>(null);
+  const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [action, setAction] = useState<null | 'cancel' | 'retry' | 'start'>(null);
+  const [confirmAction, setConfirmAction] = useState<null | 'cancel' | 'start'>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const active = job ? isActiveTtsJob(job) : false;
+
+  const loadJob = useCallback(async () => {
+    try {
+      const payload = await apiRequest<{ job: TtsGenerationJob }>(`/api/tts/jobs/${jobId}`);
+      setJob(payload.job);
+      setError('');
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to load this audio job.');
+    } finally {
+      setLoading(false);
+    }
+  }, [jobId]);
+
+  useEffect(() => {
+    setLoading(true);
+    setJob(null);
+    void loadJob();
+  }, [loadJob]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadJob();
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [active, loadJob]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  const runJobAction = async (nextAction: 'cancel' | 'retry' | 'start') => {
+    setAction(nextAction);
+    setActionError('');
+
+    const endpoint =
+      nextAction === 'cancel'
+        ? `/api/tts/jobs/${jobId}/cancel`
+        : nextAction === 'retry'
+          ? `/api/tts/jobs/${jobId}/retry`
+          : `/api/tts/jobs/${jobId}/start`;
+
+    try {
+      const payload = await apiRequest<{ job: TtsGenerationJob; tokenBalance?: number }>(endpoint, {
+        method: 'POST',
+      });
+      setJob(payload.job);
+      await Promise.all([loadJob(), Promise.resolve(onSessionRefresh?.())]);
+    } catch (nextError) {
+      setActionError(nextError instanceof Error ? nextError.message : `Failed to ${nextAction} this audio job.`);
+    } finally {
+      setAction(null);
+    }
+  };
+
+  const requestDetailsStart = () => {
+    if (!job) {
+      return;
+    }
+
+    const estimatedMinutes = estimateMinutesFromWords(job.wordCount);
+
+    if (estimatedMinutes > user.tokenBalance) {
+      setActionError(
+        `This job is estimated at ${formatMinuteEstimate(estimatedMinutes)}, but your current balance is ${user.tokenBalance.toLocaleString()}. Add minutes before generating the full audio.`,
+      );
+      return;
+    }
+
+    setConfirmAction('start');
+  };
+
+  const runConfirmedDetailsAction = async () => {
+    if (!confirmAction) {
+      return;
+    }
+
+    await runJobAction(confirmAction);
+    setConfirmAction(null);
+  };
+
+  if (loading) {
+    return (
+      <div className="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-5">
+        <StatePanel
+          description="Loading status, source text, preview audio, and final downloads for this generation."
+          icon={<Loader2 className="h-5 w-5 animate-spin" />}
+          title="Loading audio job"
+        />
+      </div>
+    );
+  }
+
+  if (!job) {
+    return (
+      <div className="mx-auto max-w-6xl px-4 py-20 sm:px-5 sm:py-24">
+        <StatePanel
+          action={(
+            <SecondaryButton onClick={() => onNavigate('/dashboard')} type="button">
+              Back to dashboard
+            </SecondaryButton>
+          )}
+          description={error || 'This job may have been deleted, or it may belong to a different account.'}
+          icon={<AlertTriangle className="h-5 w-5" />}
+          title="Audio job not found"
+          tone="error"
+        />
+      </div>
+    );
+  }
+
+  const timeline = [
+    { label: 'Created', value: job.createdAt },
+    { label: 'Preview ready', value: job.previewGeneratedAt },
+    { label: 'Full generation requested', value: job.fullGenerationRequestedAt },
+    { label: 'Cancellation requested', value: job.cancellationRequestedAt },
+    { label: 'Cancelled', value: job.cancelledAt },
+    { label: 'Completed', value: job.completedAt },
+    { label: 'Downloaded', value: job.downloadedAt },
+  ].filter((item): item is { label: string; value: string } => Boolean(item.value));
+
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-20 sm:px-5 sm:py-24">
+      <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <div className="inline-flex rounded-full border border-[#d9c6b2] bg-[#efe2d1] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#a96544]">
+            Audio Job
+          </div>
+          <h1 className="mt-5 text-3xl font-bold text-[#2f343b] sm:text-4xl">
+            {job.sourceName || (job.sourceType === 'pdf' ? 'PDF generation' : 'Text generation')}
+          </h1>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-[#64584f] sm:text-base">
+            Review the source text, listen to the free preview, follow processing progress, and download the final audio files when ready.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <SecondaryButton onClick={() => onNavigate('/dashboard')} type="button">
+            Back to dashboard
+          </SecondaryButton>
+          <SecondaryButton onClick={() => onNavigate('/account?section=tokens')} type="button">
+            Minute ledger
+          </SecondaryButton>
+        </div>
+      </div>
+
+      {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+      {actionError ? <InlineMessage tone="error">{actionError}</InlineMessage> : null}
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <DashboardCard label="Status" value={statusLabel(job.status)} />
+        <DashboardCard label="Words" value={job.wordCount.toLocaleString()} />
+        <DashboardCard label="Billed minutes" value={job.billableMinutes === null ? 'Not billed' : job.billableMinutes.toLocaleString()} />
+        <DashboardCard label="Duration" value={job.generatedAudioSeconds === null ? 'Not ready' : formatDuration(job.generatedAudioSeconds)} />
+      </div>
+
+      <section className="mt-8 rounded-[28px] border border-[#ddcfbe] bg-white/88 p-4 shadow-[0_18px_50px_rgba(55,58,64,0.08)] sm:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-[#2f343b]">Status timeline</h2>
+            <p className="mt-2 text-sm leading-7 text-[#64584f]">
+              Voice: {job.providerVoice} • Quality: {getTtsQualityOption(job.qualityPreset).label}
+              {job.processingStage ? ` • Stage: ${statusLabel(job.processingStage)}` : ''}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {job.status === 'preview_ready' ? (
+              <PrimaryButton disabled={action === 'start'} onClick={requestDetailsStart} type="button">
+                {action === 'start' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                {action === 'start' ? 'Starting...' : 'Generate full audio'}
+              </PrimaryButton>
+            ) : null}
+            {canCancelTtsJob(job) ? (
+              <SecondaryButton disabled={action === 'cancel'} onClick={() => setConfirmAction('cancel')} type="button">
+                {action === 'cancel' ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                {action === 'cancel' ? 'Cancelling...' : 'Cancel'}
+              </SecondaryButton>
+            ) : null}
+            {job.status === 'failed' ? (
+              <SecondaryButton disabled={action === 'retry'} onClick={() => void runJobAction('retry')} type="button">
+                {action === 'retry' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                {action === 'retry' ? 'Retrying...' : 'Retry'}
+              </SecondaryButton>
+            ) : null}
+          </div>
+        </div>
+
+        {active ? <ActiveTtsJobProgress job={job} nowMs={nowMs} /> : null}
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          {timeline.length === 0 ? <InlineMessage>No timeline events yet.</InlineMessage> : null}
+          {timeline.map((item) => (
+            <div key={item.label} className="rounded-2xl border border-[#eadfce] bg-[#faf7f1] p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8d5d45]">{item.label}</div>
+              <div className="mt-2 text-sm font-semibold text-[#2f343b]">{formatDate(item.value)}</div>
+            </div>
+          ))}
+        </div>
+
+        {job.errorMessage ? <InlineMessage tone="error">{job.errorMessage}</InlineMessage> : null}
+        {job.cancelReason ? <InlineMessage>{job.cancelReason}</InlineMessage> : null}
+      </section>
+
+      <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <section className="rounded-[28px] border border-[#ddcfbe] bg-white/88 p-4 shadow-[0_18px_50px_rgba(55,58,64,0.08)] sm:p-6">
+          <h2 className="text-xl font-bold text-[#2f343b]">Original text</h2>
+          <div className="mt-4 max-h-[520px] overflow-auto whitespace-pre-wrap rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-5 text-sm leading-7 text-[#4f4740]">
+            {job.inputText || 'Original text is not available.'}
+          </div>
+        </section>
+
+        <section className="rounded-[28px] border border-[#ddcfbe] bg-white/88 p-4 shadow-[0_18px_50px_rgba(55,58,64,0.08)] sm:p-6">
+          <h2 className="text-xl font-bold text-[#2f343b]">Audio files</h2>
+          {job.previewAudioUrl ? (
+            <div className="mt-4 rounded-2xl border border-[#eadfce] bg-[#faf7f1] p-4">
+              <div className="font-semibold text-[#2f343b]">Preview WAV</div>
+              <div className="mt-1 text-xs text-[#746960]">
+                {job.previewAudioSeconds === null ? 'Duration not measured' : formatDuration(job.previewAudioSeconds)}
+              </div>
+              <audio controls className="mt-3 w-full" preload="none" src={job.previewAudioUrl}>
+                Your browser does not support audio preview.
+              </audio>
+            </div>
+          ) : (
+            <InlineMessage>No preview audio is available yet.</InlineMessage>
+          )}
+
+          <div className="mt-4 flex flex-col gap-3">
+            {job.wavDownloadUrl ? (
+              <a
+                className="rounded-full bg-[#ae6c4a] px-4 py-3 text-center text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95"
+                href={job.wavDownloadUrl}
+              >
+                Download WAV
+              </a>
+            ) : null}
+            {job.mp3DownloadUrl ? (
+              <a
+                className="rounded-full border border-[#d8cbbe] bg-white/88 px-4 py-3 text-center text-sm font-semibold text-[#5a514a] transition hover:border-[#c7b09e] hover:text-[#a96544]"
+                href={job.mp3DownloadUrl}
+              >
+                Download MP3
+              </a>
+            ) : null}
+            {!job.wavDownloadUrl && !job.mp3DownloadUrl ? (
+              <StatePanel
+                description="Approve the preview to generate the final audio. Downloads appear here after the full job completes."
+                icon={<FileAudio2 className="h-5 w-5" />}
+                title="Final audio is not ready yet"
+              />
+            ) : null}
+          </div>
+        </section>
+      </div>
+      {confirmAction ? (
+        <ConfirmationDialog
+          cancelLabel={confirmAction === 'cancel' ? 'Keep running' : 'Not yet'}
+          confirmLabel={confirmAction === 'cancel' ? 'Cancel job' : 'Generate full audio'}
+          destructive={confirmAction === 'cancel'}
+          loading={action === confirmAction}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={() => void runConfirmedDetailsAction()}
+          title={confirmAction === 'cancel' ? 'Cancel this generation?' : 'Generate the full audio?'}
+        >
+          {confirmAction === 'cancel' ? (
+            <>
+              This job will stop at the next safe point between audio chunks. Cancelled unfinished jobs are not billed.
+            </>
+          ) : (
+            <>
+              This starts the final generation for {job.wordCount.toLocaleString()} words using {getTtsQualityOption(job.qualityPreset).label}. Estimated billing is{' '}
+              {formatMinuteEstimate(estimateMinutesFromWords(job.wordCount))}, and minutes are deducted only after successful completion.
+            </>
+          )}
+        </ConfirmationDialog>
+      ) : null}
+    </div>
+  );
+}
+
 type AccountSection = 'credits' | 'payments' | 'plan' | 'profile' | 'security' | 'tokens';
 
 const validAccountSections = new Set<AccountSection>(['credits', 'payments', 'plan', 'profile', 'security', 'tokens']);
+
+function buildProfileFormState(user: CustomerUser) {
+  return {
+    countryCode: user.countryCode ?? '+880',
+    email: user.email,
+    fullName: user.fullName ?? '',
+    mobileNumber: user.mobileNumber ?? '',
+  };
+}
 
 export function CustomerAccountPage({
   onStartPurchase,
@@ -1061,11 +2662,8 @@ export function CustomerAccountPage({
   const [ledger, setLedger] = useState<TokenLedgerItem[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [profileForm, setProfileForm] = useState({
-    countryCode: user.countryCode ?? '+880',
-    email: user.email,
-    mobileNumber: user.mobileNumber ?? '',
-  });
+  const [profileEditing, setProfileEditing] = useState(false);
+  const [profileForm, setProfileForm] = useState(() => buildProfileFormState(user));
   const [profileMessage, setProfileMessage] = useState('');
   const [profileError, setProfileError] = useState('');
   const [profileSubmitting, setProfileSubmitting] = useState(false);
@@ -1114,17 +2712,21 @@ export function CustomerAccountPage({
   }, [load, user.id]);
 
   useEffect(() => {
-    setProfileForm({
-      countryCode: user.countryCode ?? '+880',
-      email: user.email,
-      mobileNumber: user.mobileNumber ?? '',
-    });
-  }, [user.countryCode, user.email, user.mobileNumber]);
+    setProfileForm(buildProfileFormState(user));
+  }, [user.countryCode, user.email, user.fullName, user.mobileNumber]);
 
   const currentPackage = useMemo(
     () => packages.find((item) => item.code === user.packageType) ?? null,
     [packages, user.packageType],
   );
+  const profileDisplayName = user.fullName?.trim() || 'Name not set';
+  const profileDisplayContact = [user.countryCode, user.mobileNumber].filter(Boolean).join(' ') || 'Contact not set';
+
+  const handleCancelProfileEdit = () => {
+    setProfileEditing(false);
+    setProfileForm(buildProfileFormState(user));
+    setProfileError('');
+  };
 
   const handleProfileSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1133,6 +2735,10 @@ export function CustomerAccountPage({
     setProfileMessage('');
 
     try {
+      if (!profileForm.fullName.trim()) {
+        throw new Error('Enter your name before saving.');
+      }
+
       const payload = await apiRequest<{
         message: string;
         user: CustomerUser;
@@ -1152,6 +2758,8 @@ export function CustomerAccountPage({
         phone: payload.verification.phone?.preview ?? null,
       });
       setVerificationRequired(payload.verificationRequired);
+      setProfileForm(buildProfileFormState(payload.user));
+      setProfileEditing(false);
       await onSessionRefresh?.();
     } catch (nextError) {
       setProfileError(nextError instanceof Error ? nextError.message : 'Failed to update profile.');
@@ -1220,7 +2828,7 @@ export function CustomerAccountPage({
           </div>
           <h1 className="mt-5 text-4xl font-bold text-[#2f343b]">Manage your Bangla voice account</h1>
           <p className="mt-3 max-w-2xl text-sm leading-7 text-[#64584f] sm:text-base">
-            Profile details, package status, token balance, payment history, and security controls for your customer account.
+            Profile details, package status, generation minute balance, payment history, and security controls for your customer account.
           </p>
         </div>
         <SecondaryButton onClick={() => onNavigate('/')} type="button">
@@ -1232,7 +2840,7 @@ export function CustomerAccountPage({
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <DashboardCard label="Package" value={currentPackage?.name ?? statusLabel(user.packageType)} />
-        <DashboardCard label="Token balance" value={user.tokenBalance.toLocaleString()} />
+        <DashboardCard label="Minute balance" value={user.tokenBalance.toLocaleString()} />
         <DashboardCard label="Email status" value={user.emailVerified ? 'Verified' : 'Pending'} />
         <DashboardCard label="Phone status" value={user.phoneVerified ? 'Verified' : 'Pending'} />
       </div>
@@ -1241,60 +2849,115 @@ export function CustomerAccountPage({
         <div className="mx-auto w-full max-w-4xl">
           {activeSection === 'profile' ? (
             <section className="rounded-[28px] border border-[#ddcfbe] bg-white/88 p-6 shadow-[0_18px_50px_rgba(55,58,64,0.08)]">
-            <h2 className="text-xl font-bold text-[#2f343b]">Profile details</h2>
-            <p className="mt-2 text-sm leading-7 text-[#64584f]">
-              Update the email and mobile details tied to your customer account. Changing either will require verification again.
-            </p>
-            <form className="mt-6 space-y-4" onSubmit={handleProfileSubmit}>
-              <TextInput
-                autoComplete="email"
-                placeholder="Work email"
-                type="email"
-                value={profileForm.email}
-                onChange={(event) => setProfileForm((current) => ({ ...current, email: event.target.value }))}
-              />
-              <div className="grid gap-4 sm:grid-cols-[150px_1fr]">
-                <TextInput
-                  placeholder="Country code"
-                  value={profileForm.countryCode}
-                  onChange={(event) => setProfileForm((current) => ({ ...current, countryCode: event.target.value }))}
-                />
-                <TextInput
-                  placeholder="Mobile number"
-                  value={profileForm.mobileNumber}
-                  onChange={(event) => setProfileForm((current) => ({ ...current, mobileNumber: event.target.value }))}
-                />
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-[#2f343b]">Profile details</h2>
+                  <p className="mt-2 text-sm leading-7 text-[#64584f]">
+                    Your name, email, and contact number tied to this customer account.
+                  </p>
+                </div>
+                {!profileEditing ? (
+                  <SecondaryButton
+                    onClick={() => {
+                      setProfileEditing(true);
+                      setProfileError('');
+                      setProfileMessage('');
+                    }}
+                    type="button"
+                  >
+                    Edit
+                  </SecondaryButton>
+                ) : null}
               </div>
-              {profileError ? <InlineMessage tone="error">{profileError}</InlineMessage> : null}
-              {profileMessage ? <InlineMessage tone="success">{profileMessage}</InlineMessage> : null}
-              {verificationPreview.email || verificationPreview.phone ? (
-                <InlineMessage>
-                  Development verification preview:
-                  {verificationPreview.email ? ` email OTP ${verificationPreview.email}` : ''}
-                  {verificationPreview.phone ? ` | phone OTP ${verificationPreview.phone}` : ''}
-                </InlineMessage>
-              ) : null}
-              {verificationRequired.email || verificationRequired.phone ? (
-                <div className="flex flex-wrap gap-3">
-                  {verificationRequired.email ? (
-                    <SecondaryButton onClick={() => onNavigate('/verify-email?next=account')} type="button">
-                      Verify email
-                    </SecondaryButton>
+
+              {!profileEditing ? (
+                <div className="mt-6 space-y-4">
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <ProfileDetail label="Name" value={profileDisplayName} />
+                    <ProfileDetail
+                      label="Email"
+                      value={user.email}
+                      helper={user.emailVerified ? 'Verified' : 'Verification required'}
+                    />
+                    <ProfileDetail
+                      label="Contact"
+                      value={profileDisplayContact}
+                      helper={user.phoneVerified ? 'Verified' : 'Verification required'}
+                    />
+                  </div>
+                  {profileMessage ? <InlineMessage tone="success">{profileMessage}</InlineMessage> : null}
+                  {verificationPreview.email || verificationPreview.phone ? (
+                    <InlineMessage>
+                      Development verification preview:
+                      {verificationPreview.email ? ` email OTP ${verificationPreview.email}` : ''}
+                      {verificationPreview.phone ? ` | phone OTP ${verificationPreview.phone}` : ''}
+                    </InlineMessage>
                   ) : null}
-                  {verificationRequired.phone ? (
-                    <SecondaryButton onClick={() => onNavigate('/verify-phone?next=account')} type="button">
-                      Verify phone
-                    </SecondaryButton>
+                  {verificationRequired.email || verificationRequired.phone ? (
+                    <div className="flex flex-wrap gap-3">
+                      {verificationRequired.email ? (
+                        <SecondaryButton onClick={() => onNavigate('/verify-email?next=account')} type="button">
+                          Verify email
+                        </SecondaryButton>
+                      ) : null}
+                      {verificationRequired.phone ? (
+                        <SecondaryButton onClick={() => onNavigate('/verify-phone?next=account')} type="button">
+                          Verify phone
+                        </SecondaryButton>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
               ) : null}
-              <PrimaryButton className="justify-center" disabled={profileSubmitting} type="submit">
-                {profileSubmitting ? 'Saving profile...' : 'Save profile'}
-              </PrimaryButton>
-            </form>
+
+              {profileEditing ? (
+                <form className="mt-6 space-y-4" onSubmit={handleProfileSubmit}>
+                  <TextInput
+                    autoComplete="name"
+                    placeholder="Full name"
+                    required
+                    value={profileForm.fullName}
+                    onChange={(event) => setProfileForm((current) => ({ ...current, fullName: event.target.value }))}
+                  />
+                  <TextInput
+                    autoComplete="email"
+                    placeholder="Work email"
+                    required
+                    type="email"
+                    value={profileForm.email}
+                    onChange={(event) => setProfileForm((current) => ({ ...current, email: event.target.value }))}
+                  />
+                  <div className="grid gap-4 sm:grid-cols-[150px_1fr]">
+                    <TextInput
+                      placeholder="Country code"
+                      required
+                      value={profileForm.countryCode}
+                      onChange={(event) => setProfileForm((current) => ({ ...current, countryCode: event.target.value }))}
+                    />
+                    <TextInput
+                      autoComplete="tel"
+                      placeholder="Mobile number"
+                      required
+                      value={profileForm.mobileNumber}
+                      onChange={(event) => setProfileForm((current) => ({ ...current, mobileNumber: event.target.value }))}
+                    />
+                  </div>
+                  <InlineMessage>
+                    Changing email or contact number will require verification again.
+                  </InlineMessage>
+                  {profileError ? <InlineMessage tone="error">{profileError}</InlineMessage> : null}
+                  <div className="flex flex-wrap gap-3">
+                    <PrimaryButton className="justify-center" disabled={profileSubmitting} type="submit">
+                      {profileSubmitting ? 'Saving...' : 'Save'}
+                    </PrimaryButton>
+                    <SecondaryButton disabled={profileSubmitting} onClick={handleCancelProfileEdit} type="button">
+                      Cancel
+                    </SecondaryButton>
+                  </div>
+                </form>
+              ) : null}
             </section>
           ) : null}
-
           {activeSection === 'plan' ? (
             <section className="rounded-[28px] border border-[#ddcfbe] bg-white/88 p-6 shadow-[0_18px_50px_rgba(55,58,64,0.08)]">
             <h2 className="text-xl font-bold text-[#2f343b]">Manage plan</h2>
@@ -1311,8 +2974,8 @@ export function CustomerAccountPage({
                       <div className="font-semibold text-[#2f343b]">{item.name}</div>
                       <div className="text-sm text-[#6f645c]">
                         {item.monthlyRefillTokens > 0
-                          ? `${item.monthlyRefillTokens.toLocaleString()} monthly refill tokens`
-                          : `${item.signupTokenGrant.toLocaleString()} fixed tokens`}
+                          ? `${item.monthlyRefillTokens.toLocaleString()} monthly generation minutes`
+                          : `${item.signupTokenGrant.toLocaleString()} fixed generation minutes`}
                       </div>
                     </div>
                     <span className={cx(
@@ -1336,7 +2999,7 @@ export function CustomerAccountPage({
               <div className="mt-6 rounded-[24px] border border-[#eadfce] bg-[#fff7f2] p-5">
                 <h3 className="text-lg font-semibold text-[#2f343b]">Downgrade to Starter</h3>
                 <p className="mt-2 text-sm leading-7 text-[#64584f]">
-                  Downgrading does not create an automatic refund. Premium access is removed and the token balance becomes the lower of your current balance and 1,000.
+                  Downgrading does not create an automatic refund. Premium access is removed and the minute balance becomes the lower of your current balance and the Starter allowance.
                 </p>
                 <div className="mt-4">
                   <SecondaryButton disabled={planSubmitting} onClick={() => void handleDowngrade()} type="button">
@@ -1352,15 +3015,15 @@ export function CustomerAccountPage({
             <section className="rounded-[28px] border border-[#ddcfbe] bg-white/88 p-6 shadow-[0_18px_50px_rgba(55,58,64,0.08)]">
             <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
               <div>
-                <h2 className="text-xl font-bold text-[#2f343b]">Token balance</h2>
-                <p className="mt-2 text-sm leading-7 text-[#64584f]">Live balance from your authenticated account state.</p>
+                <h2 className="text-xl font-bold text-[#2f343b]">Minute balance</h2>
+                <p className="mt-2 text-sm leading-7 text-[#64584f]">Live generated-audio minute balance from your authenticated account state.</p>
               </div>
               <div className="rounded-full border border-[#D2CCBE] bg-[#F8F3EC] px-4 py-2 text-sm font-semibold text-[#2F343B]">
-                Tokens Left: {user.tokenBalance.toLocaleString()}
+                Minutes Left: {user.tokenBalance.toLocaleString()}
               </div>
             </div>
             <div className="mt-5 space-y-3">
-              {ledger.length === 0 ? <InlineMessage>No token transactions yet.</InlineMessage> : null}
+              {ledger.length === 0 ? <InlineMessage>No minute transactions yet.</InlineMessage> : null}
               {ledger.slice(0, 10).map((entry) => (
                 <div key={entry.id} className="rounded-2xl border border-[#eadfce] bg-[#faf7f1] p-4">
                   <div className="flex items-center justify-between gap-3">
@@ -1387,7 +3050,7 @@ export function CustomerAccountPage({
             {user.packageType === 'starter' ? (
               <div className="mt-5 rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-5">
                 <p className="text-sm leading-7 text-[#64584f]">
-                  Starter accounts cannot buy extra tokens directly. Upgrade to Gold or Platinum first, then choose Stripe or bKash during checkout.
+                  Starter accounts cannot buy extra generation minutes directly. Upgrade to Gold or Platinum first, then choose Stripe or bKash during checkout.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-3">
                   <PrimaryButton onClick={() => onStartPurchase({ label: 'Gold', packageCode: 'gold' })} type="button">
@@ -1402,13 +3065,13 @@ export function CustomerAccountPage({
               <div className="mt-5 rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                   <div>
-                    <h3 className="text-lg font-semibold text-[#2f343b]">Buy 5,000 extra tokens</h3>
+                    <h3 className="text-lg font-semibold text-[#2f343b]">Buy 5,000 extra minutes</h3>
                     <p className="mt-2 text-sm leading-7 text-[#64584f]">
-                      Gold and Platinum accounts can add 5,000 tokens without changing the current package. Payment method selection stays on the existing Stripe/bKash flow.
+                      Gold and Platinum accounts can add 5,000 generation minutes without changing the current package. Payment method selection stays on the existing Stripe/bKash flow.
                     </p>
                   </div>
-                  <PrimaryButton onClick={() => onStartPurchase({ extraTokenAmount: 5000, label: '5,000 extra tokens' })} type="button">
-                    Add 5,000 tokens
+                  <PrimaryButton onClick={() => onStartPurchase({ extraTokenAmount: 5000, label: '5,000 extra minutes' })} type="button">
+                    Add 5,000 minutes
                   </PrimaryButton>
                 </div>
               </div>
@@ -1480,13 +3143,21 @@ export function CustomerAccountPage({
   );
 }
 
-export const CustomerDashboard = CustomerAccountPage;
-
 function DashboardCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-[26px] border border-[#ddcfbe] bg-white/88 p-5 shadow-[0_18px_45px_rgba(55,58,64,0.08)]">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8d5d45]">{label}</div>
-      <div className="mt-3 text-3xl font-bold text-[#2f343b]">{value}</div>
+      <div className="mt-3 break-words text-2xl font-bold text-[#2f343b] sm:text-3xl">{value}</div>
+    </div>
+  );
+}
+
+function ProfileDetail({ helper, label, value }: { helper?: string; label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-[#eadfce] bg-[#faf7f1] p-4">
+      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8d5d45]">{label}</div>
+      <div className="mt-2 break-words text-base font-semibold text-[#2f343b]">{value}</div>
+      {helper ? <div className="mt-1 text-xs text-[#746960]">{helper}</div> : null}
     </div>
   );
 }

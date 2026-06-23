@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS packages (
 
 INSERT INTO packages (package_code, name, monthly_refill_tokens, signup_token_grant, is_premium, display_order)
 VALUES
-  ('starter', 'Starter', 1000, 1000, FALSE, 0),
+  ('starter', 'Starter', 10000, 10000, FALSE, 0),
   ('gold', 'Gold', 0, 10000, TRUE, 1),
   ('platinum', 'Platinum', 0, 100000, TRUE, 2)
 ON CONFLICT (package_code) DO UPDATE
@@ -153,6 +153,7 @@ SET
 
 CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
+  full_name TEXT,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   country_code TEXT,
@@ -309,7 +310,9 @@ CREATE TABLE IF NOT EXISTS token_transactions (
       'extra_purchase',
       'usage',
       'sample_voice_finalized',
-      'admin_adjustment'
+      'admin_adjustment',
+      'tts_generation',
+      'tts_generation_refund'
     )),
   token_delta BIGINT NOT NULL,
   balance_after BIGINT NOT NULL,
@@ -348,6 +351,74 @@ CREATE INDEX IF NOT EXISTS idx_sample_generations_user_created_at
 
 CREATE INDEX IF NOT EXISTS idx_sample_generations_request_created_at
   ON sample_generations (sample_request_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS tts_generation_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  source_type TEXT NOT NULL
+    CHECK (source_type IN ('text', 'pdf')),
+  source_name TEXT,
+  input_text TEXT NOT NULL,
+  word_count INTEGER NOT NULL,
+  token_cost BIGINT NOT NULL,
+  quality_preset TEXT NOT NULL DEFAULT 'premium_mp3_wav'
+    CHECK (quality_preset IN ('premium_mp3_wav', 'high_mp3_wav', 'standard_mp3_wav', 'wav_only')),
+  mp3_bitrate_kbps INTEGER,
+  generated_audio_seconds NUMERIC(12, 3),
+  billable_minutes BIGINT,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'preview_queued', 'preview_processing', 'preview_ready', 'cancelling', 'cancelled')),
+  processing_stage TEXT,
+  provider_voice TEXT NOT NULL,
+  wav_file TEXT,
+  mp3_file TEXT,
+  preview_file TEXT,
+  preview_audio_seconds NUMERIC(12, 3),
+  error_message TEXT,
+  token_transaction_id BIGINT REFERENCES token_transactions (id) ON DELETE SET NULL,
+  downloaded_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  preview_generated_at TIMESTAMPTZ,
+  full_generation_requested_at TIMESTAMPTZ,
+  cancellation_requested_at TIMESTAMPTZ,
+  cancelled_at TIMESTAMPTZ,
+  cancel_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_user_created_at
+  ON tts_generation_jobs (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_status_created_at
+  ON tts_generation_jobs (status, created_at ASC);
+
+CREATE TABLE IF NOT EXISTS tts_usage_ledger (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  job_id BIGINT NOT NULL REFERENCES tts_generation_jobs (id) ON DELETE CASCADE,
+  billable_minutes BIGINT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tts_usage_ledger_user_created_at
+  ON tts_usage_ledger (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS tts_pronunciation_rules (
+  id BIGSERIAL PRIMARY KEY,
+  match_text TEXT NOT NULL,
+  replacement_text TEXT NOT NULL,
+  match_type TEXT NOT NULL DEFAULT 'phrase'
+    CHECK (match_type IN ('phrase', 'whole_word')),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tts_pronunciation_rules_active_created_at
+  ON tts_pronunciation_rules (is_active, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS admin_actions (
   id BIGSERIAL PRIMARY KEY,

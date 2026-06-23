@@ -6,3 +6,4 @@ frontend/dist/
 *.swp
 backend/media/voices/inbox/*
 !backend/media/voices/inbox/.gitkeep
+backend/media/tts-jobs/*

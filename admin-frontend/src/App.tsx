@@ -199,6 +199,26 @@ type VoiceCardDraft = {
   waveSeed: string;
 };
 
+type TtsPronunciationRule = {
+  createdAt: string;
+  id: number;
+  isActive: boolean;
+  matchText: string;
+  matchType: 'phrase' | 'whole_word';
+  notes: string | null;
+  replacementText: string;
+  updatedAt: string;
+};
+
+type TtsPronunciationRuleDraft = {
+  id: number | null;
+  isActive: boolean;
+  matchText: string;
+  matchType: 'phrase' | 'whole_word';
+  notes: string;
+  replacementText: string;
+};
+
 const protectedRoutes = new Set([
   '/admin/dashboard',
   '/admin/sample-requests',
@@ -206,6 +226,7 @@ const protectedRoutes = new Set([
   '/admin/payments',
   '/admin/activity',
   '/admin/voice-cards',
+  '/admin/pronunciation',
 ]);
 
 const requestStatuses: SampleRequestStatus[] = ['new', 'reviewing', 'sample_ready', 'sent', 'archived'];
@@ -308,6 +329,28 @@ function toVoiceCardDraft(card: PublicVoiceCard): VoiceCardDraft {
     order: String(card.order),
     scriptText: card.scriptText,
     waveSeed: String(card.waveSeed),
+  };
+}
+
+function createEmptyPronunciationRuleDraft(): TtsPronunciationRuleDraft {
+  return {
+    id: null,
+    isActive: true,
+    matchText: '',
+    matchType: 'phrase',
+    notes: '',
+    replacementText: '',
+  };
+}
+
+function toPronunciationRuleDraft(rule: TtsPronunciationRule): TtsPronunciationRuleDraft {
+  return {
+    id: rule.id,
+    isActive: rule.isActive,
+    matchText: rule.matchText,
+    matchType: rule.matchType,
+    notes: rule.notes ?? '',
+    replacementText: rule.replacementText,
   };
 }
 
@@ -432,6 +475,7 @@ function App() {
       {currentPath === '/admin/payments' ? <PaymentsPage /> : null}
       {currentPath === '/admin/activity' ? <ActivityPage /> : null}
       {currentPath === '/admin/voice-cards' ? <VoiceCardsPage /> : null}
+      {currentPath === '/admin/pronunciation' ? <PronunciationRulesPage /> : null}
       {!protectedRoutes.has(currentPath) ? <DashboardPage /> : null}
     </AdminShell>
   );
@@ -575,6 +619,7 @@ function AdminShell({
     { href: '/admin/payments', label: 'Payments' },
     { href: '/admin/activity', label: 'Activity' },
     { href: '/admin/voice-cards', label: 'Public Voice Cards' },
+    { href: '/admin/pronunciation', label: 'Pronunciation' },
   ];
 
   return (
@@ -1840,6 +1885,276 @@ function VoiceCardsPage() {
                   const currentCard = voiceCards.find((card) => card.id === draft.id);
                   if (currentCard) {
                     setDraft(toVoiceCardDraft(currentCard));
+                  }
+                }}
+                type="button"
+              >
+                Reset
+              </SecondaryButton>
+              <DangerButton disabled={deleting} onClick={handleDelete} type="button">
+                {deleting ? 'Deleting...' : 'Delete'}
+              </DangerButton>
+            </div>
+          </div>
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
+function PronunciationRulesPage() {
+  const [rules, setRules] = useState<TtsPronunciationRule[]>([]);
+  const [selectedId, setSelectedId] = useState<number | 'new' | null>(null);
+  const [draft, setDraft] = useState<TtsPronunciationRuleDraft>(createEmptyPronunciationRuleDraft());
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const loadRules = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const payload = await apiRequest<{ rules: TtsPronunciationRule[] }>('/api/admin/tts-pronunciation-rules');
+      setRules(payload.rules);
+
+      if (selectedId === 'new') {
+        return;
+      }
+
+      const nextSelectedId =
+        selectedId && payload.rules.some((rule) => rule.id === selectedId)
+          ? selectedId
+          : payload.rules[0]?.id ?? null;
+      const selectedRule = payload.rules.find((rule) => rule.id === nextSelectedId) ?? payload.rules[0] ?? null;
+      setSelectedId(selectedRule?.id ?? null);
+      setDraft(selectedRule ? toPronunciationRuleDraft(selectedRule) : createEmptyPronunciationRuleDraft());
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to load pronunciation rules.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadRules();
+  }, []);
+
+  const activeCount = useMemo(() => rules.filter((rule) => rule.isActive).length, [rules]);
+
+  const startCreate = () => {
+    setSelectedId('new');
+    setDraft(createEmptyPronunciationRuleDraft());
+    setError('');
+    setMessage('');
+  };
+
+  const handleSelect = (rule: TtsPronunciationRule) => {
+    setSelectedId(rule.id);
+    setDraft(toPronunciationRuleDraft(rule));
+    setError('');
+    setMessage('');
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError('');
+    setMessage('');
+
+    const payload = {
+      isActive: draft.isActive,
+      matchText: draft.matchText,
+      matchType: draft.matchType,
+      notes: draft.notes,
+      replacementText: draft.replacementText,
+    };
+
+    try {
+      if (selectedId === 'new' || draft.id === null) {
+        const response = await apiRequest<{ rule: TtsPronunciationRule }>('/api/admin/tts-pronunciation-rules', {
+          body: JSON.stringify(payload),
+          method: 'POST',
+        });
+        setRules((current) => [response.rule, ...current]);
+        setSelectedId(response.rule.id);
+        setDraft(toPronunciationRuleDraft(response.rule));
+        setMessage('Pronunciation rule created.');
+      } else {
+        const response = await apiRequest<{ rule: TtsPronunciationRule }>(`/api/admin/tts-pronunciation-rules/${draft.id}`, {
+          body: JSON.stringify(payload),
+          method: 'PATCH',
+        });
+        setRules((current) => current.map((rule) => (rule.id === response.rule.id ? response.rule : rule)));
+        setDraft(toPronunciationRuleDraft(response.rule));
+        setMessage('Pronunciation rule saved.');
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to save pronunciation rule.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (draft.id === null) {
+      setSelectedId(null);
+      setDraft(createEmptyPronunciationRuleDraft());
+      return;
+    }
+
+    if (!window.confirm(`Delete pronunciation rule "${draft.matchText}"?`)) {
+      return;
+    }
+
+    setDeleting(true);
+    setError('');
+    setMessage('');
+
+    try {
+      await apiRequest(`/api/admin/tts-pronunciation-rules/${draft.id}`, {
+        method: 'DELETE',
+      });
+      const remainingRules = rules.filter((rule) => rule.id !== draft.id);
+      const nextRule = remainingRules[0] ?? null;
+      setRules(remainingRules);
+      setSelectedId(nextRule?.id ?? null);
+      setDraft(nextRule ? toPronunciationRuleDraft(nextRule) : createEmptyPronunciationRuleDraft());
+      setMessage('Pronunciation rule deleted.');
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to delete pronunciation rule.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <section className="space-y-6">
+      <PageHeading
+        eyebrow="TTS dictionary"
+        title="Pronunciation rules"
+        description="Manage global replacements applied to customer TTS text before chunking and provider generation."
+      />
+
+      {error ? <InlineMessage tone="error">{error}</InlineMessage> : null}
+      {message ? <InlineMessage tone="success">{message}</InlineMessage> : null}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="inline-flex rounded-full border border-[#e3d7c8] bg-[#f8f2ea] px-3 py-1 text-xs font-semibold text-[#7a5f4f]">
+          {rules.length} rules
+        </div>
+        <div className="inline-flex rounded-full border border-[#e3d7c8] bg-[#f8f2ea] px-3 py-1 text-xs font-semibold text-[#7a5f4f]">
+          {activeCount} active
+        </div>
+        <PrimaryButton onClick={startCreate} type="button">
+          Add rule
+        </PrimaryButton>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,440px)]">
+        <Panel title="Rules" subtitle="Active rules are applied globally to every customer generation job">
+          {loading ? (
+            <PageLoading label="Loading pronunciation rules..." />
+          ) : rules.length === 0 ? (
+            <EmptyState label="No pronunciation rules are configured yet." />
+          ) : (
+            <div className="space-y-3">
+              {rules.map((rule) => (
+                <button
+                  key={rule.id}
+                  className={cx(
+                    'w-full rounded-2xl border p-4 text-left transition',
+                    selectedId === rule.id
+                      ? 'border-[#ae6c4a] bg-[#fff7f1] shadow-[0_14px_40px_rgba(174,108,74,0.14)]'
+                      : 'border-[#eadfce] bg-white/90 hover:border-[#d9c2ad]',
+                  )}
+                  onClick={() => handleSelect(rule)}
+                  type="button"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-[#2f343b]">{rule.matchText}</div>
+                      <div className="mt-1 text-sm text-[#6e6259]">Read as: {rule.replacementText}</div>
+                      {rule.notes ? <div className="mt-1 text-xs text-[#7a6d63]">{rule.notes}</div> : null}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <StatusBadge status={rule.isActive ? 'active' : 'inactive'} />
+                      <StatusBadge status={rule.matchType} />
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </Panel>
+
+        <Panel
+          title={selectedId === 'new' || draft.id === null ? 'Create rule' : 'Edit rule'}
+          subtitle="Use phrase for names/brands and whole word for acronyms or exact terms"
+        >
+          <div className="space-y-4">
+            <FieldLabel label="Match text">
+              <TextInput
+                onChange={(event) => setDraft((current) => ({ ...current, matchText: event.target.value }))}
+                placeholder="Brand, name, acronym, or term"
+                value={draft.matchText}
+              />
+            </FieldLabel>
+
+            <FieldLabel label="Replacement text">
+              <TextInput
+                onChange={(event) => setDraft((current) => ({ ...current, replacementText: event.target.value }))}
+                placeholder="How the voice should read it"
+                value={draft.replacementText}
+              />
+            </FieldLabel>
+
+            <FieldLabel label="Match type">
+              <SelectInput
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, matchType: event.target.value as 'phrase' | 'whole_word' }))
+                }
+                value={draft.matchType}
+              >
+                <option value="phrase">Phrase</option>
+                <option value="whole_word">Whole word</option>
+              </SelectInput>
+            </FieldLabel>
+
+            <FieldLabel label="Notes">
+              <TextAreaInput
+                onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))}
+                rows={3}
+                value={draft.notes}
+              />
+            </FieldLabel>
+
+            <label className="flex items-center gap-3 rounded-2xl border border-[#e3d7c8] bg-[#fbf7f1] px-4 py-3 text-sm font-semibold text-[#5a514a]">
+              <input
+                checked={draft.isActive}
+                className="h-4 w-4 accent-[#ae6c4a]"
+                onChange={(event) => setDraft((current) => ({ ...current, isActive: event.target.checked }))}
+                type="checkbox"
+              />
+              Active for customer generations
+            </label>
+
+            <div className="flex flex-wrap gap-3">
+              <PrimaryButton disabled={saving} onClick={handleSave} type="button">
+                {saving ? 'Saving...' : draft.id === null ? 'Create rule' : 'Save rule'}
+              </PrimaryButton>
+              <SecondaryButton
+                onClick={() => {
+                  if (draft.id === null) {
+                    setDraft(createEmptyPronunciationRuleDraft());
+                    setSelectedId(null);
+                    return;
+                  }
+
+                  const currentRule = rules.find((rule) => rule.id === draft.id);
+                  if (currentRule) {
+                    setDraft(toPronunciationRuleDraft(currentRule));
                   }
                 }}
                 type="button"

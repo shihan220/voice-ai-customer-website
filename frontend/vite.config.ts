@@ -4,8 +4,11 @@ import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 
-const backendPort = process.env.PORT ?? '5181'
-const backendUrl = `http://127.0.0.1:${backendPort}`
+const backendPort = process.env.BACKEND_PORT ?? process.env.PORT ?? '5181'
+const backendUrl =
+  process.env.FRONTEND_BACKEND_URL ??
+  process.env.BACKEND_URL ??
+  `http://127.0.0.1:${backendPort}`
 
 function figmaAssetResolver() {
   return {

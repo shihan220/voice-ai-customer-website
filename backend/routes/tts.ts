@@ -1,0 +1,433 @@
+import { Router } from 'express';
+import {
+  multer,
+  normalizeText,
+  requireText,
+} from '../core.ts';
+import type { TtsGenerationJobRecord } from '../db.ts';
+import { requireCustomer } from './customer-auth.ts';
+import {
+  applyStarterMonthlyRefillIfDue,
+  ensureStarterGrantIfEligible,
+  getUserById,
+} from '../services/customers.ts';
+import {
+  cancelTtsGenerationJob,
+  extractPdfText,
+  getOwnedTtsGenerationJob,
+  getTtsGenerationAttachmentPath,
+  getTtsGenerationPreviewPath,
+  listTtsGenerationJobsForUser,
+  markTtsGenerationJobDownloaded,
+  queueTtsPreviewJob,
+  queueTtsGenerationJob,
+  retryTtsGenerationJob,
+  startTtsGenerationFromPreview,
+} from '../services/tts-jobs.ts';
+
+const maxPdfFileSizeBytes = 10 * 1024 * 1024;
+
+const pdfUpload = multer({
+  fileFilter: (_req, file, callback) => {
+    const extension = file.originalname.toLowerCase().endsWith('.pdf');
+    const mimeType = file.mimetype.toLowerCase();
+
+    if (!extension || mimeType !== 'application/pdf') {
+      callback(new Error('Upload a PDF file.'));
+      return;
+    }
+
+    callback(null, true);
+  },
+  limits: {
+    fileSize: maxPdfFileSizeBytes,
+  },
+  storage: multer.memoryStorage(),
+});
+
+function resolveStatusCode(error: unknown) {
+  if (error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number') {
+    return error.statusCode;
+  }
+
+  if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+    return 413;
+  }
+
+  return 400;
+}
+
+async function runPdfUpload(req: Parameters<Router['post']>[1] extends never ? never : any, res: any) {
+  await new Promise<void>((resolve, reject) => {
+    pdfUpload.single('file')(req, res, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+async function getHydratedCustomer(userId: number) {
+  const user = await getUserById(userId);
+
+  if (!user) {
+    return null;
+  }
+
+  const granted = await ensureStarterGrantIfEligible(user);
+  return applyStarterMonthlyRefillIfDue(granted);
+}
+
+function toTtsJobPayload(job: TtsGenerationJobRecord, options?: { includeInputText?: boolean }) {
+  return {
+    createdAt: job.created_at,
+    downloadedAt: job.downloaded_at,
+    errorMessage: job.error_message,
+    billableMinutes: job.billable_minutes === null ? null : Number(job.billable_minutes),
+    completedAt: job.completed_at,
+    generatedAudioSeconds: job.generated_audio_seconds === null ? null : Number(job.generated_audio_seconds),
+    id: Number(job.id),
+    inputText: options?.includeInputText ? job.input_text : undefined,
+    mp3BitrateKbps: job.mp3_bitrate_kbps === null ? null : Number(job.mp3_bitrate_kbps),
+    mp3DownloadUrl: job.status === 'completed' && job.mp3_file ? `/api/tts/jobs/${job.id}/download?format=mp3` : null,
+    previewAudioSeconds: job.preview_audio_seconds === null ? null : Number(job.preview_audio_seconds),
+    previewAudioUrl: job.preview_file ? `/api/tts/jobs/${job.id}/preview` : null,
+    previewGeneratedAt: job.preview_generated_at,
+    processingStage: job.processing_stage,
+    providerVoice: job.provider_voice,
+    qualityPreset: job.quality_preset,
+    cancelReason: job.cancel_reason,
+    cancellationRequestedAt: job.cancellation_requested_at,
+    cancelledAt: job.cancelled_at,
+    fullGenerationRequestedAt: job.full_generation_requested_at,
+    sourceName: job.source_name,
+    sourceType: job.source_type,
+    status: job.status,
+    tokenCost: Number(job.token_cost),
+    updatedAt: job.updated_at,
+    wavDownloadUrl: job.status === 'completed' ? `/api/tts/jobs/${job.id}/download?format=wav` : null,
+    wordCount: Number(job.word_count),
+  };
+}
+
+export function createTtsRouter() {
+  const router = Router();
+
+  router.post('/api/tts/jobs/text/preview', requireCustomer, async (req, res) => {
+    try {
+      const user = await getHydratedCustomer(req.session.customerUser!.id);
+
+      if (!user) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+
+      const result = await queueTtsPreviewJob({
+        inputText: requireText(req.body.inputText, 'Text input is required.'),
+        qualityPreset: normalizeText(req.body.qualityPreset),
+        sourceName: normalizeText(req.body.sourceName),
+        sourceType: 'text',
+        userId: user.id,
+      });
+
+      res.status(201).json({
+        job: toTtsJobPayload(result.job, { includeInputText: true }),
+        tokenBalance: result.tokenBalance,
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to queue the text preview job.',
+      });
+    }
+  });
+
+  router.post('/api/tts/jobs/text', requireCustomer, async (req, res) => {
+    try {
+      const user = await getHydratedCustomer(req.session.customerUser!.id);
+
+      if (!user) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+
+      const result = await queueTtsGenerationJob({
+        inputText: requireText(req.body.inputText, 'Text input is required.'),
+        qualityPreset: normalizeText(req.body.qualityPreset),
+        sourceName: normalizeText(req.body.sourceName),
+        sourceType: 'text',
+        userId: user.id,
+      });
+
+      res.status(201).json({
+        job: toTtsJobPayload(result.job, { includeInputText: true }),
+        tokenBalance: result.tokenBalance,
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to queue the text generation job.',
+      });
+    }
+  });
+
+  router.post('/api/tts/jobs/pdf/preview', requireCustomer, async (req, res) => {
+    try {
+      await runPdfUpload(req, res);
+
+      const user = await getHydratedCustomer(req.session.customerUser!.id);
+
+      if (!user) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+
+      if (!req.file) {
+        res.status(400).json({ error: 'Upload a PDF file.' });
+        return;
+      }
+
+      const extractedText = await extractPdfText(req.file.buffer);
+      const sourceName = normalizeText(req.body.sourceName) ?? normalizeText(req.file.originalname);
+
+      const result = await queueTtsPreviewJob({
+        inputText: extractedText,
+        qualityPreset: normalizeText(req.body.qualityPreset),
+        sourceName,
+        sourceType: 'pdf',
+        userId: user.id,
+      });
+
+      res.status(201).json({
+        job: toTtsJobPayload(result.job, { includeInputText: true }),
+        tokenBalance: result.tokenBalance,
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      const fallbackMessage =
+        error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE'
+          ? `PDF files must stay under ${Math.floor(maxPdfFileSizeBytes / (1024 * 1024))} MB.`
+          : 'Failed to queue the PDF preview job.';
+
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : fallbackMessage,
+      });
+    }
+  });
+
+  router.post('/api/tts/jobs/pdf', requireCustomer, async (req, res) => {
+    try {
+      await runPdfUpload(req, res);
+
+      const user = await getHydratedCustomer(req.session.customerUser!.id);
+
+      if (!user) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+
+      if (!req.file) {
+        res.status(400).json({ error: 'Upload a PDF file.' });
+        return;
+      }
+
+      const extractedText = await extractPdfText(req.file.buffer);
+      const sourceName = normalizeText(req.body.sourceName) ?? normalizeText(req.file.originalname);
+
+      const result = await queueTtsGenerationJob({
+        inputText: extractedText,
+        qualityPreset: normalizeText(req.body.qualityPreset),
+        sourceName,
+        sourceType: 'pdf',
+        userId: user.id,
+      });
+
+      res.status(201).json({
+        job: toTtsJobPayload(result.job, { includeInputText: true }),
+        tokenBalance: result.tokenBalance,
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      const fallbackMessage =
+        error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE'
+          ? `PDF files must stay under ${Math.floor(maxPdfFileSizeBytes / (1024 * 1024))} MB.`
+          : 'Failed to queue the PDF generation job.';
+
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : fallbackMessage,
+      });
+    }
+  });
+
+  router.get('/api/tts/jobs', requireCustomer, async (req, res) => {
+    try {
+      const jobs = await listTtsGenerationJobsForUser(req.session.customerUser!.id);
+      res.json({
+        jobs: jobs.map((job) => toTtsJobPayload(job)),
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to load audio generation jobs.',
+      });
+    }
+  });
+
+  router.get('/api/tts/jobs/:id', requireCustomer, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+
+      if (!Number.isFinite(jobId)) {
+        res.status(400).json({ error: 'Valid job id is required.' });
+        return;
+      }
+
+      const job = await getOwnedTtsGenerationJob(jobId, req.session.customerUser!.id);
+
+      if (!job) {
+        res.status(404).json({ error: 'Audio generation job not found.' });
+        return;
+      }
+
+      res.json({
+        job: toTtsJobPayload(job, { includeInputText: true }),
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to load the audio generation job.',
+      });
+    }
+  });
+
+  router.post('/api/tts/jobs/:id/retry', requireCustomer, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+
+      if (!Number.isFinite(jobId)) {
+        res.status(400).json({ error: 'Valid job id is required.' });
+        return;
+      }
+
+      const result = await retryTtsGenerationJob(jobId, req.session.customerUser!.id);
+
+      res.json({
+        job: toTtsJobPayload(result.job, { includeInputText: true }),
+        tokenBalance: result.tokenBalance,
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to retry the audio generation job.',
+      });
+    }
+  });
+
+  router.post('/api/tts/jobs/:id/start', requireCustomer, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+
+      if (!Number.isFinite(jobId)) {
+        res.status(400).json({ error: 'Valid job id is required.' });
+        return;
+      }
+
+      const result = await startTtsGenerationFromPreview(jobId, req.session.customerUser!.id);
+
+      res.json({
+        job: toTtsJobPayload(result.job, { includeInputText: true }),
+        tokenBalance: result.tokenBalance,
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to start the full audio generation job.',
+      });
+    }
+  });
+
+  router.post('/api/tts/jobs/:id/cancel', requireCustomer, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+
+      if (!Number.isFinite(jobId)) {
+        res.status(400).json({ error: 'Valid job id is required.' });
+        return;
+      }
+
+      const job = await cancelTtsGenerationJob(jobId, req.session.customerUser!.id);
+
+      res.json({
+        job: toTtsJobPayload(job, { includeInputText: true }),
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to cancel the audio generation job.',
+      });
+    }
+  });
+
+  router.get('/api/tts/jobs/:id/preview', requireCustomer, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+
+      if (!Number.isFinite(jobId)) {
+        res.status(400).json({ error: 'Valid job id is required.' });
+        return;
+      }
+
+      const job = await getOwnedTtsGenerationJob(jobId, req.session.customerUser!.id);
+
+      if (!job) {
+        res.status(404).json({ error: 'Audio generation job not found.' });
+        return;
+      }
+
+      const filePath = await getTtsGenerationPreviewPath(job);
+      res.sendFile(filePath);
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to load the preview audio.',
+      });
+    }
+  });
+
+  router.get('/api/tts/jobs/:id/download', requireCustomer, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+      const format = req.query.format === 'mp3' ? 'mp3' : req.query.format === 'wav' ? 'wav' : null;
+
+      if (!Number.isFinite(jobId)) {
+        res.status(400).json({ error: 'Valid job id is required.' });
+        return;
+      }
+
+      if (!format) {
+        res.status(400).json({ error: 'Provide format=wav or format=mp3.' });
+        return;
+      }
+
+      const job = await getOwnedTtsGenerationJob(jobId, req.session.customerUser!.id);
+
+      if (!job) {
+        res.status(404).json({ error: 'Audio generation job not found.' });
+        return;
+      }
+
+      const filePath = await getTtsGenerationAttachmentPath(job, format);
+      await markTtsGenerationJobDownloaded(job.id, req.session.customerUser!.id);
+      res.download(filePath);
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to download the generated audio.',
+      });
+    }
+  });
+
+  return router;
+}

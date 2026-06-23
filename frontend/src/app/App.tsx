@@ -3,6 +3,8 @@ import brandLogo from '../assets/bangla-speech-ai-logo.png';
 import {
   CustomerAccountPage,
   CustomerAuthRoutes,
+  CustomerDashboardPage,
+  CustomerJobDetailsPage,
   CustomerPaymentSuccessPage,
   PaymentMethodDialog,
   type CustomerRoute,
@@ -43,8 +45,12 @@ const validRoutes = new Set<CustomerRoute>([
   '/payment/success',
 ]);
 
+function isValidRoute(pathname: string) {
+  return validRoutes.has(pathname as CustomerRoute) || /^\/dashboard\/jobs\/\d+$/.test(pathname);
+}
+
 function readLocation(): AppLocation {
-  const pathname = validRoutes.has(window.location.pathname as CustomerRoute)
+  const pathname = isValidRoute(window.location.pathname)
     ? (window.location.pathname as CustomerRoute)
     : '/';
 
@@ -89,10 +95,12 @@ async function postJson<T>(url: string, body?: unknown) {
 
 function Header({
   loading,
+  onNavigate,
   onLogout,
   session,
 }: {
   loading: boolean;
+  onNavigate: (href: string, replace?: boolean) => void;
   onLogout: () => Promise<void> | void;
   session: CustomerSessionResponse;
 }) {
@@ -103,6 +111,14 @@ function Header({
     { href: '/#positioning', label: 'Products' },
     { href: '/#faq', label: 'FAQ' },
   ];
+  const verificationPending = Boolean(
+    session.authenticated &&
+      session.user &&
+      (!session.user.emailVerified || !session.user.phoneVerified),
+  );
+  const verificationHref = session.user?.emailVerified ? '/verify-phone' : '/verify-email';
+  const verificationLabel = session.user?.emailVerified ? 'Verify phone' : 'Verify email';
+  const canOpenDashboard = Boolean(session.authenticated && session.user && !verificationPending);
 
   return (
     <header className="sticky top-0 z-40 border-b border-[#d9cbbd] bg-[#f8f3ec]/92 backdrop-blur">
@@ -126,10 +142,23 @@ function Header({
                 <div className="rounded-full border border-[#d2ccbe] bg-white/80 px-3 py-2 text-xs font-medium text-[#6a5f57] sm:px-4 sm:text-sm">
                   Loading...
                 </div>
+              ) : verificationPending ? (
+                <>
+                  <div className="rounded-full border border-[#d9c6b2] bg-[#efe2d1] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8d5d45] sm:px-4">
+                    Pending
+                  </div>
+                  <button
+                    className="rounded-full bg-[#ae6c4a] px-3 py-2 text-xs font-semibold text-[#f8f3ec] transition hover:brightness-95 sm:px-4 sm:text-sm"
+                    onClick={() => onNavigate(verificationHref)}
+                    type="button"
+                  >
+                    {verificationLabel}
+                  </button>
+                </>
               ) : session.authenticated && session.user ? (
                 <>
                   <div className="max-w-[150px] rounded-full border border-[#d2ccbe] bg-white/85 px-3 py-2 text-xs font-semibold text-[#373A40] shadow-[0_12px_30px_rgba(55,58,64,0.08)] sm:max-w-none sm:px-4 sm:text-sm">
-                    <span className="block truncate">Tokens Left: {session.user.tokenBalance.toLocaleString()}</span>
+                    <span className="block truncate">Minutes Left: {session.user.tokenBalance.toLocaleString()}</span>
                   </div>
                   <UserAccountMenu
                     onLogout={onLogout}
@@ -172,10 +201,30 @@ function Header({
               <div className="rounded-full border border-[#d2ccbe] bg-white/80 px-4 py-2 text-sm font-medium text-[#6a5f57]">
                 Loading...
               </div>
+            ) : verificationPending ? (
+              <>
+                <div className="rounded-full border border-[#d9c6b2] bg-[#efe2d1] px-4 py-2 text-sm font-semibold text-[#8d5d45]">
+                  Verification pending
+                </div>
+                <button
+                  className="rounded-full bg-[#ae6c4a] px-4 py-2 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95"
+                  onClick={() => onNavigate(verificationHref)}
+                  type="button"
+                >
+                  {verificationLabel}
+                </button>
+              </>
             ) : session.authenticated && session.user ? (
               <>
+                <button
+                  className="rounded-full bg-[#ae6c4a] px-4 py-2 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95"
+                  onClick={() => onNavigate('/dashboard')}
+                  type="button"
+                >
+                  Create audio
+                </button>
                 <div className="rounded-full border border-[#d2ccbe] bg-white/85 px-4 py-2 text-sm font-semibold text-[#373A40] shadow-[0_12px_30px_rgba(55,58,64,0.08)]">
-                  Tokens Left: {session.user.tokenBalance.toLocaleString()}
+                  Minutes Left: {session.user.tokenBalance.toLocaleString()}
                 </div>
                 <UserAccountMenu
                   onLogout={onLogout}
@@ -206,6 +255,15 @@ function Header({
         </div>
 
         <nav className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 text-sm font-semibold text-[#5d544d] md:hidden [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }}>
+          {canOpenDashboard ? (
+            <button
+              className="shrink-0 rounded-full bg-[#ae6c4a] px-3 py-2 text-xs font-semibold text-[#f8f3ec] transition hover:brightness-95"
+              onClick={() => onNavigate('/dashboard')}
+              type="button"
+            >
+              Create audio
+            </button>
+          ) : null}
           {navLinks.map((link) => (
             <a
               key={link.href}
@@ -263,10 +321,11 @@ export default function App() {
   const [leadOpen, setLeadOpen] = useState(false);
   const [purchaseSelection, setPurchaseSelection] = useState<PurchaseSelection | null>(null);
   const { error, loading, refresh, session, setSession } = useCustomerSession();
+  const currentUser = session.user;
 
   const navigate = (href: string, replace = false) => {
     const nextUrl = new URL(href, window.location.origin);
-    const nextPathname = validRoutes.has(nextUrl.pathname as CustomerRoute) ? (nextUrl.pathname as CustomerRoute) : '/';
+    const nextPathname = isValidRoute(nextUrl.pathname) ? (nextUrl.pathname as CustomerRoute) : '/';
 
     if (nextPathname === location.pathname && nextUrl.search === location.search) {
       return;
@@ -295,17 +354,40 @@ export default function App() {
       return;
     }
 
-    if ((location.pathname === '/dashboard' || location.pathname === '/account') && !session.authenticated) {
+    if (location.pathname.startsWith('/dashboard') && !session.authenticated) {
+      navigate('/login?next=dashboard', true);
+      return;
+    }
+
+    if (location.pathname === '/account' && !session.authenticated) {
       navigate('/login?next=account', true);
       return;
     }
 
+    if (location.pathname.startsWith('/dashboard') && session.authenticated && currentUser && (!currentUser.emailVerified || !currentUser.phoneVerified)) {
+      if (!currentUser.emailVerified) {
+        navigate('/verify-email?next=dashboard', true);
+        return;
+      }
+
+      navigate('/verify-phone?next=dashboard', true);
+      return;
+    }
+
     if (session.authenticated && (location.pathname === '/login' || location.pathname === '/signup')) {
+      if (!currentUser?.emailVerified) {
+        navigate('/verify-email', true);
+        return;
+      }
+
+      if (!currentUser.phoneVerified) {
+        navigate('/verify-phone', true);
+        return;
+      }
+
       navigate('/dashboard', true);
     }
-  }, [loading, location.pathname, session.authenticated]);
-
-  const currentUser = session.user;
+  }, [currentUser?.emailVerified, currentUser?.phoneVerified, loading, location.pathname, session.authenticated]);
 
   useEffect(() => {
     if (loading || location.pathname !== '/' || !session.authenticated || !currentUser?.emailVerified || !currentUser.phoneVerified) {
@@ -415,7 +497,7 @@ export default function App() {
     );
   }
 
-  if (loading && (location.pathname === '/dashboard' || location.pathname === '/account' || location.pathname === '/payment/success')) {
+  if (loading && !currentUser && (location.pathname.startsWith('/dashboard') || location.pathname === '/account' || location.pathname === '/payment/success')) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F2EFE7] px-6">
         <div className="rounded-3xl border border-[#ddcfbe] bg-white/85 px-6 py-4 text-sm font-medium text-[#5c5048] shadow-[0_20px_60px_rgba(92,80,72,0.12)]">
@@ -435,17 +517,35 @@ export default function App() {
     );
   }
 
-  if ((location.pathname === '/dashboard' || location.pathname === '/account') && currentUser) {
+  if ((location.pathname.startsWith('/dashboard') || location.pathname === '/account') && currentUser) {
+    const jobDetailsMatch = /^\/dashboard\/jobs\/(\d+)$/.exec(location.pathname);
+    const isDashboardRoute = location.pathname === '/dashboard';
+
     return (
       <>
-        <Header loading={loading} onLogout={handleLogout} session={session} />
-        <CustomerAccountPage
-          onNavigate={navigate}
-          onSessionRefresh={refresh}
-          onStartPurchase={(selection) => setPurchaseSelection(selection)}
-          search={location.search}
-          user={currentUser}
-        />
+        <Header loading={loading} onNavigate={navigate} onLogout={handleLogout} session={session} />
+        {jobDetailsMatch ? (
+          <CustomerJobDetailsPage
+            jobId={Number(jobDetailsMatch[1])}
+            onNavigate={navigate}
+            onSessionRefresh={refresh}
+            user={currentUser}
+          />
+        ) : isDashboardRoute ? (
+          <CustomerDashboardPage
+            onNavigate={navigate}
+            onSessionRefresh={refresh}
+            user={currentUser}
+          />
+        ) : (
+          <CustomerAccountPage
+            onNavigate={navigate}
+            onSessionRefresh={refresh}
+            onStartPurchase={(selection) => setPurchaseSelection(selection)}
+            search={location.search}
+            user={currentUser}
+          />
+        )}
         {purchaseSelection ? (
           <PaymentMethodDialog
             onClose={() => setPurchaseSelection(null)}
@@ -461,7 +561,27 @@ export default function App() {
 
   return (
     <>
-      <Header loading={loading} onLogout={handleLogout} session={session} />
+      <Header loading={loading} onNavigate={navigate} onLogout={handleLogout} session={session} />
+      {session.authenticated && currentUser && (!currentUser.emailVerified || !currentUser.phoneVerified) ? (
+        <div className="border-b border-[#d9c6b2] bg-[#efe2d1] px-5 py-3 text-sm text-[#7c5340] sm:px-8 lg:px-10">
+          <div className="mx-auto flex max-w-7xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              Your account is signed in, but verification is not complete yet. Finish
+              {' '}
+              {!currentUser.emailVerified ? 'email verification' : 'phone verification'}
+              {' '}
+              to unlock samples and dashboard access.
+            </div>
+            <button
+              className="rounded-full bg-[#ae6c4a] px-4 py-2 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95"
+              onClick={() => navigate(currentUser.emailVerified ? '/verify-phone' : '/verify-email')}
+              type="button"
+            >
+              Continue verification
+            </button>
+          </div>
+        </div>
+      ) : null}
       {error ? (
         <div className="border-b border-[#d8cbbd] bg-[#fbefea] px-5 py-3 text-sm text-[#8d4f37] sm:px-8 lg:px-10">
           {error}

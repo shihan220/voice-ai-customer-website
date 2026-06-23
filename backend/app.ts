@@ -17,6 +17,7 @@ import { createAuthRouter } from './routes/auth.ts';
 import { createPaymentsRouter } from './routes/payments.ts';
 import { createPublicRouter } from './routes/public.ts';
 import { createSamplesRouter } from './routes/samples.ts';
+import { createTtsRouter } from './routes/tts.ts';
 import { createUserRouter } from './routes/user.ts';
 
 export function createApp() {
@@ -109,6 +110,7 @@ export function createApp() {
   app.use(createUserRouter());
   app.use(createPaymentsRouter());
   app.use(createSamplesRouter());
+  app.use(createTtsRouter());
   app.use(createAdminRouter());
 
   return app;

@@ -10,6 +10,7 @@ import {
   type SampleRequestRecord,
   type SampleRequestStatus,
   type TokenTransactionRecord,
+  type TtsPronunciationRuleRecord,
   type UserPackageType,
   type UserRecord,
   type VoiceCardRecord,
@@ -55,6 +56,12 @@ import {
   listTokenTransactions,
   listUsers,
 } from '../services/customers.ts';
+import {
+  createTtsPronunciationRule,
+  deleteTtsPronunciationRule,
+  listTtsPronunciationRules,
+  updateTtsPronunciationRule,
+} from '../services/tts-jobs.ts';
 
 function toAdminUserResponse(row: UserRecord) {
   return {
@@ -160,6 +167,19 @@ function toAdminActionResponse(row: AdminActionRecord) {
     paymentId: row.payment_id === null ? null : Number(row.payment_id),
     targetUserId: row.target_user_id === null ? null : Number(row.target_user_id),
     tokenTransactionId: row.token_transaction_id === null ? null : Number(row.token_transaction_id),
+  };
+}
+
+function toTtsPronunciationRuleResponse(row: TtsPronunciationRuleRecord) {
+  return {
+    createdAt: row.created_at,
+    id: Number(row.id),
+    isActive: row.is_active,
+    matchText: row.match_text,
+    matchType: row.match_type,
+    notes: row.notes,
+    replacementText: row.replacement_text,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -351,6 +371,101 @@ export function createAdminRouter() {
     } catch (error) {
       res.status(500).json({
         error: error instanceof Error ? error.message : 'Failed to load admin actions.',
+      });
+    }
+  });
+
+  router.get('/api/admin/tts-pronunciation-rules', requireAdmin, async (_req, res) => {
+    try {
+      const rules = await listTtsPronunciationRules();
+
+      res.json({
+        rules: rules.map(toTtsPronunciationRuleResponse),
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to load pronunciation rules.',
+      });
+    }
+  });
+
+  router.post('/api/admin/tts-pronunciation-rules', requireAdmin, async (req, res) => {
+    try {
+      const rule = await createTtsPronunciationRule({
+        isActive: req.body.isActive !== false,
+        matchText: requireText(req.body.matchText, 'Match text is required.'),
+        matchType: normalizeText(req.body.matchType),
+        notes: normalizeText(req.body.notes),
+        replacementText: requireText(req.body.replacementText, 'Replacement text is required.'),
+      });
+
+      res.status(201).json({
+        rule: toTtsPronunciationRuleResponse(rule),
+      });
+    } catch (error) {
+      const statusCode = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number'
+        ? error.statusCode
+        : 400;
+
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to create pronunciation rule.',
+      });
+    }
+  });
+
+  router.patch('/api/admin/tts-pronunciation-rules/:id', requireAdmin, async (req, res) => {
+    try {
+      const ruleId = Number(req.params.id);
+
+      if (!Number.isFinite(ruleId)) {
+        res.status(400).json({ error: 'Invalid pronunciation rule id.' });
+        return;
+      }
+
+      const rule = await updateTtsPronunciationRule(ruleId, {
+        isActive: typeof req.body.isActive === 'boolean' ? req.body.isActive : undefined,
+        matchText: typeof req.body.matchText === 'string' ? req.body.matchText : undefined,
+        matchType: typeof req.body.matchType === 'string' ? req.body.matchType : undefined,
+        notes: typeof req.body.notes === 'string' ? req.body.notes : undefined,
+        replacementText: typeof req.body.replacementText === 'string' ? req.body.replacementText : undefined,
+      });
+
+      res.json({
+        rule: toTtsPronunciationRuleResponse(rule),
+      });
+    } catch (error) {
+      const statusCode = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number'
+        ? error.statusCode
+        : 400;
+
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to update pronunciation rule.',
+      });
+    }
+  });
+
+  router.delete('/api/admin/tts-pronunciation-rules/:id', requireAdmin, async (req, res) => {
+    try {
+      const ruleId = Number(req.params.id);
+
+      if (!Number.isFinite(ruleId)) {
+        res.status(400).json({ error: 'Invalid pronunciation rule id.' });
+        return;
+      }
+
+      const rule = await deleteTtsPronunciationRule(ruleId);
+
+      res.json({
+        deletedId: Number(rule.id),
+        message: 'Pronunciation rule deleted.',
+      });
+    } catch (error) {
+      const statusCode = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number'
+        ? error.statusCode
+        : 400;
+
+      res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to delete pronunciation rule.',
       });
     }
   });
@@ -908,6 +1023,7 @@ export function createAdminRouter() {
       '/admin/payments',
       '/admin/activity',
       '/admin/voice-cards',
+      '/admin/pronunciation',
     ],
     async (req, res) => {
     if (!req.session.adminUser) {

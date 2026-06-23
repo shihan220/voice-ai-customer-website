@@ -33,6 +33,19 @@ export type PaymentType = 'package_upgrade' | 'extra_tokens';
 export type PaymentStatus = 'pending' | 'completed' | 'failed' | 'cancelled';
 export type SampleGenerationStatus = 'preview' | 'finalized' | 'failed';
 export type SampleGenerationSourceKind = 'fallback' | 'provider';
+export type TtsGenerationJobSourceType = 'text' | 'pdf';
+export type TtsGenerationJobStatus =
+  | 'cancelled'
+  | 'cancelling'
+  | 'completed'
+  | 'failed'
+  | 'preview_processing'
+  | 'preview_queued'
+  | 'preview_ready'
+  | 'processing'
+  | 'queued';
+export type TtsGenerationQualityPreset = 'high_mp3_wav' | 'premium_mp3_wav' | 'standard_mp3_wav' | 'wav_only';
+export type TtsPronunciationRuleMatchType = 'phrase' | 'whole_word';
 export type TokenTransactionType =
   | 'signup_grant'
   | 'monthly_refill'
@@ -40,7 +53,9 @@ export type TokenTransactionType =
   | 'extra_purchase'
   | 'usage'
   | 'sample_voice_finalized'
-  | 'admin_adjustment';
+  | 'admin_adjustment'
+  | 'tts_generation'
+  | 'tts_generation_refund';
 
 const backendRoot = fileURLToPath(new URL('.', import.meta.url));
 const projectRoot = path.resolve(backendRoot, '..');
@@ -76,6 +91,7 @@ export type PackageRecord = {
 
 export type UserRecord = {
   id: number;
+  full_name: string | null;
   email: string;
   password_hash: string;
   country_code: string | null;
@@ -221,6 +237,58 @@ export type SampleGenerationRecord = {
   downloaded_at: Date | null;
   created_at: Date;
   updated_at: Date;
+};
+
+export type TtsPronunciationRuleRecord = {
+  id: number;
+  match_text: string;
+  replacement_text: string;
+  match_type: TtsPronunciationRuleMatchType;
+  is_active: boolean;
+  notes: string | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type TtsGenerationJobRecord = {
+  id: number;
+  user_id: number;
+  source_type: TtsGenerationJobSourceType;
+  source_name: string | null;
+  input_text: string;
+  word_count: number;
+  token_cost: number;
+  quality_preset: TtsGenerationQualityPreset;
+  mp3_bitrate_kbps: number | null;
+  generated_audio_seconds: number | null;
+  billable_minutes: number | null;
+  status: TtsGenerationJobStatus;
+  processing_stage: string | null;
+  provider_voice: string;
+  wav_file: string | null;
+  mp3_file: string | null;
+  preview_file: string | null;
+  preview_audio_seconds: number | null;
+  error_message: string | null;
+  token_transaction_id: number | null;
+  downloaded_at: Date | null;
+  completed_at: Date | null;
+  preview_generated_at: Date | null;
+  full_generation_requested_at: Date | null;
+  cancellation_requested_at: Date | null;
+  cancelled_at: Date | null;
+  cancel_reason: string | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type TtsUsageLedgerRecord = {
+  id: number;
+  user_id: number;
+  job_id: number;
+  billable_minutes: number;
+  reason: string;
+  created_at: Date;
 };
 
 export type SampleEmailLogRecord = {
@@ -451,6 +519,110 @@ export async function ensureSchema() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS tts_generation_jobs (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      source_type TEXT NOT NULL
+        CHECK (source_type IN ('text', 'pdf')),
+      source_name TEXT,
+      input_text TEXT NOT NULL,
+      word_count INTEGER NOT NULL,
+      token_cost BIGINT NOT NULL,
+      quality_preset TEXT NOT NULL DEFAULT 'premium_mp3_wav'
+        CHECK (quality_preset IN ('premium_mp3_wav', 'high_mp3_wav', 'standard_mp3_wav', 'wav_only')),
+      mp3_bitrate_kbps INTEGER,
+      generated_audio_seconds NUMERIC(12, 3),
+      billable_minutes BIGINT,
+      status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'preview_queued', 'preview_processing', 'preview_ready', 'cancelling', 'cancelled')),
+      processing_stage TEXT,
+      provider_voice TEXT NOT NULL,
+      wav_file TEXT,
+      mp3_file TEXT,
+      preview_file TEXT,
+      preview_audio_seconds NUMERIC(12, 3),
+      error_message TEXT,
+      token_transaction_id BIGINT REFERENCES token_transactions (id) ON DELETE SET NULL,
+      downloaded_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      preview_generated_at TIMESTAMPTZ,
+      full_generation_requested_at TIMESTAMPTZ,
+      cancellation_requested_at TIMESTAMPTZ,
+      cancelled_at TIMESTAMPTZ,
+      cancel_reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_generation_jobs
+      ADD COLUMN IF NOT EXISTS preview_file TEXT,
+      ADD COLUMN IF NOT EXISTS preview_audio_seconds NUMERIC(12, 3),
+      ADD COLUMN IF NOT EXISTS preview_generated_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS full_generation_requested_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS cancellation_requested_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_generation_jobs
+      DROP CONSTRAINT IF EXISTS tts_generation_jobs_status_check;
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_generation_jobs
+      ADD CONSTRAINT tts_generation_jobs_status_check
+      CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'preview_queued', 'preview_processing', 'preview_ready', 'cancelling', 'cancelled'));
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tts_usage_ledger (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      job_id BIGINT NOT NULL REFERENCES tts_generation_jobs (id) ON DELETE CASCADE,
+      billable_minutes BIGINT NOT NULL,
+      reason TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tts_usage_ledger_user_created_at
+      ON tts_usage_ledger (user_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_user_created_at
+      ON tts_generation_jobs (user_id, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_status_created_at
+      ON tts_generation_jobs (status, created_at ASC);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tts_pronunciation_rules (
+      id BIGSERIAL PRIMARY KEY,
+      match_text TEXT NOT NULL,
+      replacement_text TEXT NOT NULL,
+      match_type TEXT NOT NULL DEFAULT 'phrase'
+        CHECK (match_type IN ('phrase', 'whole_word')),
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tts_pronunciation_rules_active_created_at
+      ON tts_pronunciation_rules (is_active, created_at DESC);
+  `);
+
+  await pool.query(`
     ALTER TABLE token_transactions
       DROP CONSTRAINT IF EXISTS token_transactions_transaction_type_check;
   `);
@@ -465,7 +637,9 @@ export async function ensureSchema() {
         'extra_purchase',
         'usage',
         'sample_voice_finalized',
-        'admin_adjustment'
+        'admin_adjustment',
+        'tts_generation',
+        'tts_generation_refund'
       ));
   `);
 }

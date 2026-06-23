@@ -60,6 +60,7 @@ function toCustomerUserResponse(user: Awaited<ReturnType<typeof getHydratedCusto
     createdAt: user.created_at,
     email: user.email,
     emailVerified: Boolean(user.email_verified_at),
+    fullName: user.full_name,
     id: Number(user.id),
     mobileNumber: user.mobile_number,
     packageType: user.package_code,
@@ -193,6 +194,7 @@ export function createUserRouter() {
       }
 
       const nextEmail = requireText(req.body.email ?? user.email, 'Email is required.').toLowerCase();
+      const nextFullName = normalizeText(req.body.fullName) ?? user.full_name;
       const nextCountryCode = normalizeText(req.body.countryCode) ?? user.country_code;
       const nextMobileNumber = normalizeText(req.body.mobileNumber) ?? user.mobile_number;
 
@@ -238,6 +240,7 @@ export function createUserRouter() {
         countryCode: nextCountryCode,
         email: nextEmail,
         emailChanged,
+        fullName: nextFullName,
         mobileE164: nextMobileE164,
         mobileNumber: nextMobileNumber,
         phoneChanged,

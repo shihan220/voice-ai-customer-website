@@ -119,6 +119,7 @@ export async function getUserByMobileE164(mobileE164: string) {
 export async function createUser(input: {
   countryCode: string | null;
   email: string;
+  fullName?: string | null;
   mobileNumber: string | null;
   packageCode: UserPackageType;
   passwordHash: string;
@@ -133,6 +134,7 @@ export async function createUser(input: {
   const result = await pool.query<UserRecord>(
     `
       INSERT INTO users (
+        full_name,
         email,
         password_hash,
         country_code,
@@ -141,10 +143,10 @@ export async function createUser(input: {
         package_code,
         token_balance
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 0)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
       RETURNING *
     `,
-    [input.email, input.passwordHash, input.countryCode, input.mobileNumber, mobileE164, input.packageCode],
+    [input.fullName ?? null, input.email, input.passwordHash, input.countryCode, input.mobileNumber, mobileE164, input.packageCode],
   );
 
   return result.rows[0];
@@ -1170,6 +1172,7 @@ export async function updateUserProfile(input: {
   countryCode: string;
   email: string;
   emailChanged: boolean;
+  fullName: string | null;
   mobileE164: string;
   mobileNumber: string;
   phoneChanged: boolean;
@@ -1179,17 +1182,18 @@ export async function updateUserProfile(input: {
     `
       UPDATE users
       SET
-        email = $2,
-        country_code = $3,
-        mobile_number = $4,
-        mobile_e164 = $5,
-        email_verified_at = CASE WHEN $6 THEN NULL ELSE email_verified_at END,
-        phone_verified_at = CASE WHEN $7 THEN NULL ELSE phone_verified_at END,
+        full_name = $2,
+        email = $3,
+        country_code = $4,
+        mobile_number = $5,
+        mobile_e164 = $6,
+        email_verified_at = CASE WHEN $7 THEN NULL ELSE email_verified_at END,
+        phone_verified_at = CASE WHEN $8 THEN NULL ELSE phone_verified_at END,
         updated_at = NOW()
       WHERE id = $1
       RETURNING *
     `,
-    [input.userId, input.email, input.countryCode, input.mobileNumber, input.mobileE164, input.emailChanged, input.phoneChanged],
+    [input.userId, input.fullName, input.email, input.countryCode, input.mobileNumber, input.mobileE164, input.emailChanged, input.phoneChanged],
   );
 
   return result.rows[0] ?? null;

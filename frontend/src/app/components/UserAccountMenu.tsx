@@ -1,6 +1,7 @@
 import {
   CircleUserRound,
   CreditCard,
+  FileAudio2,
   History,
   LogOut,
   Settings,
@@ -50,13 +51,17 @@ export function UserAccountMenu({
           <div className="mt-1 text-xs uppercase tracking-[0.12em] text-[#8D5D45]">{statusLabel(user.packageType)} package</div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator className="bg-[#E1D3C3]" />
+        <DropdownMenuItem className="rounded-xl px-3 py-2 text-[#4F4740] focus:bg-[#EFE2D1] focus:text-[#AE6C4A]" onSelect={() => onNavigate('/dashboard')}>
+          <FileAudio2 className="h-4 w-4" />
+          Voice Workspace
+        </DropdownMenuItem>
         <DropdownMenuItem className="rounded-xl px-3 py-2 text-[#4F4740] focus:bg-[#EFE2D1] focus:text-[#AE6C4A]" onSelect={() => onNavigate('/account?section=profile')}>
           <User className="h-4 w-4" />
           My Account
         </DropdownMenuItem>
         <DropdownMenuItem className="rounded-xl px-3 py-2 text-[#4F4740] focus:bg-[#EFE2D1] focus:text-[#AE6C4A]" onSelect={() => onNavigate('/account?section=tokens')}>
           <WalletCards className="h-4 w-4" />
-          Token Balance
+          Minute Balance
         </DropdownMenuItem>
         <DropdownMenuItem className="rounded-xl px-3 py-2 text-[#4F4740] focus:bg-[#EFE2D1] focus:text-[#AE6C4A]" onSelect={() => onNavigate('/account?section=credits')}>
           <CreditCard className="h-4 w-4" />

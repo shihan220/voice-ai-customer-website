@@ -142,6 +142,7 @@ export function createAuthRouter() {
       const email = requireText(req.body.email, 'Email is required.').toLowerCase();
       const password = requireText(req.body.password, 'Password is required.');
       const confirmPassword = requireText(req.body.confirmPassword, 'Confirm password is required.');
+      const fullName = requireText(req.body.fullName, 'Full name is required.');
       const countryCode = normalizeText(req.body.countryCode);
       const mobileNumber = normalizeText(req.body.mobileNumber);
 
@@ -175,6 +176,7 @@ export function createAuthRouter() {
       const user = await createUser({
         countryCode,
         email,
+        fullName,
         mobileNumber,
         packageCode: 'starter',
         passwordHash,
@@ -200,6 +202,7 @@ export function createAuthRouter() {
         user: {
           email: user.email,
           emailVerified: false,
+          fullName: user.full_name,
           id: Number(user.id),
           packageType: user.package_code,
           phoneVerified: false,
@@ -240,6 +243,7 @@ export function createAuthRouter() {
         user: {
           email: eligibleUser.email,
           emailVerified: Boolean(eligibleUser.email_verified_at),
+          fullName: eligibleUser.full_name,
           id: Number(eligibleUser.id),
           packageType: eligibleUser.package_code,
           phoneVerified: Boolean(eligibleUser.phone_verified_at),
@@ -323,6 +327,7 @@ export function createAuthRouter() {
         user: {
           email: eligibleUser.email,
           emailVerified: Boolean(eligibleUser.email_verified_at),
+          fullName: eligibleUser.full_name,
           id: Number(eligibleUser.id),
           packageType: eligibleUser.package_code,
           phoneVerified: Boolean(eligibleUser.phone_verified_at),
@@ -404,6 +409,7 @@ export function createAuthRouter() {
         user: {
           email: eligibleUser.email,
           emailVerified: Boolean(eligibleUser.email_verified_at),
+          fullName: eligibleUser.full_name,
           id: Number(eligibleUser.id),
           packageType: eligibleUser.package_code,
           phoneVerified: Boolean(eligibleUser.phone_verified_at),
@@ -506,6 +512,7 @@ export function createAuthRouter() {
         user: {
           email: updatedUser.email,
           emailVerified: Boolean(updatedUser.email_verified_at),
+          fullName: updatedUser.full_name,
           id: Number(updatedUser.id),
           packageType: updatedUser.package_code,
           phoneVerified: Boolean(updatedUser.phone_verified_at),

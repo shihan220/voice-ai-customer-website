@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS packages (
 
 INSERT INTO packages (package_code, name, monthly_refill_tokens, signup_token_grant, is_premium, display_order)
 VALUES
-  ('starter', 'Starter', 1000, 1000, FALSE, 0),
+  ('starter', 'Starter', 10000, 10000, FALSE, 0),
   ('gold', 'Gold', 0, 10000, TRUE, 1),
   ('platinum', 'Platinum', 0, 100000, TRUE, 2)
 ON CONFLICT (package_code) DO UPDATE
