@@ -59,6 +59,11 @@ function createSearch(params: URLSearchParams) {
   return nextSearch ? `?${nextSearch}` : '';
 }
 
+function parseLeadIntent(search: string): LeadDialogMode | null {
+  const lead = new URLSearchParams(search).get('lead');
+  return lead === 'sample' || lead === 'pilot' ? lead : null;
+}
+
 function statusLabel(value: string) {
   return value.replace(/_/g, ' ');
 }
@@ -302,6 +307,30 @@ export default function App() {
 
   const currentUser = session.user;
 
+  useEffect(() => {
+    if (loading || location.pathname !== '/' || !session.authenticated || !currentUser?.emailVerified || !currentUser.phoneVerified) {
+      return;
+    }
+
+    const leadIntent = parseLeadIntent(location.search);
+
+    if (!leadIntent) {
+      return;
+    }
+
+    setLeadMode(leadIntent);
+    setLeadOpen(true);
+
+    const params = new URLSearchParams(location.search);
+    params.delete('lead');
+    const nextSearch = createSearch(params);
+    window.history.replaceState({}, '', `${location.pathname}${nextSearch}`);
+    setLocation((current) => ({
+      ...current,
+      search: nextSearch,
+    }));
+  }, [currentUser?.emailVerified, currentUser?.phoneVerified, loading, location.pathname, location.search, session.authenticated]);
+
   const planLabels = useMemo(
     () => ({
       gold: 'Gold',
@@ -313,17 +342,17 @@ export default function App() {
 
   const openVerifiedLead = (mode: LeadDialogMode) => {
     if (!session.authenticated) {
-      navigate('/signup?next=sample');
+      navigate(`/signup?next=lead&mode=${mode}`);
       return;
     }
 
     if (!currentUser?.emailVerified) {
-      navigate('/verify-email?next=sample');
+      navigate(`/verify-email?next=lead&mode=${mode}`);
       return;
     }
 
     if (!currentUser.phoneVerified) {
-      navigate('/verify-phone?next=sample');
+      navigate(`/verify-phone?next=lead&mode=${mode}`);
       return;
     }
 
@@ -448,7 +477,10 @@ export default function App() {
       </footer>
 
       <LeadCaptureDialog
+        currentTokenBalance={currentUser?.tokenBalance ?? null}
+        currentUserEmail={currentUser?.email ?? null}
         mode={leadMode}
+        onNavigate={navigate}
         open={leadOpen}
         onOpenChange={(open) => {
           setLeadOpen(open);
@@ -457,6 +489,7 @@ export default function App() {
             setLeadMode(null);
           }
         }}
+        onRefreshSession={refresh}
       />
 
       {purchaseSelection ? (

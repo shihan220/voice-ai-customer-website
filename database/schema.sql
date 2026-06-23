@@ -308,6 +308,7 @@ CREATE TABLE IF NOT EXISTS token_transactions (
       'package_upgrade',
       'extra_purchase',
       'usage',
+      'sample_voice_finalized',
       'admin_adjustment'
     )),
   token_delta BIGINT NOT NULL,
@@ -318,6 +319,35 @@ CREATE TABLE IF NOT EXISTS token_transactions (
 
 CREATE INDEX IF NOT EXISTS idx_token_transactions_user_created_at
   ON token_transactions (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sample_generations (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  sample_request_id BIGINT REFERENCES sample_requests (id) ON DELETE SET NULL,
+  script_text TEXT NOT NULL,
+  selected_service TEXT NOT NULL,
+  word_count INTEGER NOT NULL,
+  token_cost BIGINT NOT NULL,
+  audio_file TEXT NOT NULL,
+  storage_key TEXT,
+  source_kind TEXT NOT NULL DEFAULT 'fallback'
+    CHECK (source_kind IN ('fallback', 'provider')),
+  status TEXT NOT NULL DEFAULT 'preview'
+    CHECK (status IN ('preview', 'finalized', 'failed')),
+  regeneration_attempts_used INTEGER NOT NULL DEFAULT 0,
+  max_regeneration_attempts INTEGER NOT NULL DEFAULT 2,
+  token_transaction_id BIGINT REFERENCES token_transactions (id) ON DELETE SET NULL,
+  finalized_at TIMESTAMPTZ,
+  downloaded_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sample_generations_user_created_at
+  ON sample_generations (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_sample_generations_request_created_at
+  ON sample_generations (sample_request_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS admin_actions (
   id BIGSERIAL PRIMARY KEY,

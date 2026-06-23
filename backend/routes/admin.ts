@@ -6,6 +6,7 @@ import {
   type PackageUpgradeRecord,
   type PaymentRecord,
   type SampleEmailLogRecord,
+  type SampleGenerationRecord,
   type SampleRequestRecord,
   type SampleRequestStatus,
   type TokenTransactionRecord,
@@ -119,6 +120,32 @@ function toPackageUpgradeResponse(row: PackageUpgradeRecord) {
     toPackageCode: row.to_package_code,
     updatedAt: row.updated_at,
     userId: Number(row.user_id),
+  };
+}
+
+function toSampleGenerationResponse(
+  row: SampleGenerationRecord & {
+    user_email: string;
+  },
+) {
+  return {
+    audioFile: row.audio_file,
+    audioUrl: row.audio_file ? `/media/${row.audio_file}` : null,
+    createdAt: row.created_at,
+    finalized: row.status === 'finalized',
+    finalizedAt: row.finalized_at,
+    id: Number(row.id),
+    regenerationAttemptsRemaining: Math.max(
+      0,
+      Number(row.max_regeneration_attempts) - Number(row.regeneration_attempts_used),
+    ),
+    regenerationAttemptsUsed: Number(row.regeneration_attempts_used),
+    selectedService: row.selected_service,
+    status: row.status,
+    tokenCost: Number(row.token_cost),
+    updatedAt: row.updated_at,
+    userEmail: row.user_email,
+    wordCount: Number(row.word_count),
   };
 }
 
@@ -442,12 +469,30 @@ export function createAdminRouter() {
         [requestId],
       );
 
+      const sampleGenerationsResult = await pool.query<
+        SampleGenerationRecord & {
+          user_email: string;
+        }
+      >(
+        `
+          SELECT
+            g.*,
+            u.email AS user_email
+          FROM sample_generations g
+          INNER JOIN users u ON u.id = g.user_id
+          WHERE g.sample_request_id = $1
+          ORDER BY g.created_at DESC, g.id DESC
+        `,
+        [requestId],
+      );
+
       res.json({
         emailLogs: emailLogsResult.rows.map((row) => ({
           ...toEmailLogResponse(row),
           sampleTitle: row.sample_title,
         })),
         request: toSampleRequestResponse(sampleRequest),
+        sampleGenerations: sampleGenerationsResult.rows.map(toSampleGenerationResponse),
       });
     } catch (error) {
       res.status(500).json({

@@ -65,6 +65,23 @@ type EmailLog = {
   voiceSampleId: number | null;
 };
 
+type SampleGenerationSummary = {
+  audioFile: string;
+  audioUrl: string | null;
+  createdAt: string;
+  finalized: boolean;
+  finalizedAt: string | null;
+  id: number;
+  regenerationAttemptsRemaining: number;
+  regenerationAttemptsUsed: number;
+  selectedService: string;
+  status: 'preview' | 'finalized' | 'failed';
+  tokenCost: number;
+  updatedAt: string;
+  userEmail: string;
+  wordCount: number;
+};
+
 type DashboardPayload = {
   recentEmails: EmailLog[];
   recentRequests: SampleRequest[];
@@ -161,6 +178,7 @@ type CustomerFilter = 'all' | 'starter' | 'gold' | 'platinum';
 type SampleRequestDetailPayload = {
   emailLogs: EmailLog[];
   request: SampleRequest;
+  sampleGenerations: SampleGenerationSummary[];
 };
 
 type AppLocation = {
@@ -1394,6 +1412,43 @@ function SampleRequestsPage({ onNavigate }: { onNavigate: (href: string) => void
                         <div className="mt-1 text-xs text-[#7c7168]">
                           {email.sampleTitle ?? 'Voice card not linked'} • {formatDate(email.sentAt ?? email.createdAt)}
                         </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </PanelInset>
+
+              <PanelInset title="Sample preview activity">
+                {detail.sampleGenerations.length === 0 ? (
+                  <EmptyState label="No authenticated sample preview has been generated for this lead yet." compact />
+                ) : (
+                  <div className="space-y-3">
+                    {detail.sampleGenerations.map((generation) => (
+                      <div key={generation.id} className="rounded-2xl border border-[#eadfce] bg-[#fcfaf6] p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="font-semibold text-[#2f343b]">
+                              Preview #{generation.id} • {generation.userEmail}
+                            </div>
+                            <div className="mt-1 text-xs text-[#7c7168]">
+                              {generation.selectedService} • {generation.wordCount} words • {generation.tokenCost} tokens
+                            </div>
+                          </div>
+                          <StatusBadge status={generation.status} />
+                        </div>
+                        <div className="mt-3 grid gap-3 text-sm text-[#5a514a] sm:grid-cols-2">
+                          <div>Attempts used: {generation.regenerationAttemptsUsed}</div>
+                          <div>Attempts left: {generation.regenerationAttemptsRemaining}</div>
+                          <div>Created: {formatDate(generation.createdAt)}</div>
+                          <div>Finalized: {generation.finalizedAt ? formatDate(generation.finalizedAt) : 'Not finalized'}</div>
+                        </div>
+                        {generation.audioUrl ? (
+                          <div className="mt-3">
+                            <audio controls className="w-full" src={generation.audioUrl}>
+                              Your browser does not support audio preview.
+                            </audio>
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                   </div>

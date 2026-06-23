@@ -178,6 +178,16 @@ function buildAccountHref(section?: string | null) {
   return `/account${createSearch(params)}`;
 }
 
+function buildLeadHref(mode?: string | null) {
+  const params = new URLSearchParams();
+
+  if (mode === 'sample' || mode === 'pilot') {
+    params.set('lead', mode);
+  }
+
+  return `/${createSearch(params)}`;
+}
+
 function InlineMessage({ children, tone = 'neutral' }: InlineMessageProps) {
   return (
     <div
@@ -599,6 +609,7 @@ function LoginPage({
   const next = params.get('next');
   const packageCode = params.get('package');
   const section = params.get('section');
+  const mode = params.get('mode');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
@@ -622,14 +633,16 @@ function LoginPage({
         const verifyParams = new URLSearchParams();
         if (next) verifyParams.set('next', next);
         if (packageCode) verifyParams.set('package', packageCode);
+        if (mode) verifyParams.set('mode', mode);
         onNavigate(`/verify-email${createSearch(verifyParams)}`, true);
       } else if (!payload.user.phoneVerified) {
         const verifyParams = new URLSearchParams();
         if (next) verifyParams.set('next', next);
         if (packageCode) verifyParams.set('package', packageCode);
+        if (mode) verifyParams.set('mode', mode);
         onNavigate(`/verify-phone${createSearch(verifyParams)}`, true);
-      } else if (next === 'sample') {
-        onNavigate('/', true);
+      } else if (next === 'lead') {
+        onNavigate(buildLeadHref(mode), true);
       } else if (next === 'account') {
         onNavigate(buildAccountHref(section), true);
       } else if (next === 'checkout' && packageCode) {
@@ -689,6 +702,7 @@ function SignupPage({
   const next = params.get('next');
   const packageCode = params.get('package');
   const section = params.get('section');
+  const mode = params.get('mode');
   const [form, setForm] = useState({
     confirmPassword: '',
     countryCode: '+880',
@@ -726,6 +740,7 @@ function SignupPage({
       if (next) verifyParams.set('next', next);
       if (packageCode) verifyParams.set('package', packageCode);
       if (section) verifyParams.set('section', section);
+      if (mode) verifyParams.set('mode', mode);
       onNavigate(`/verify-email${createSearch(verifyParams)}`, true);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Signup failed.');
@@ -874,6 +889,7 @@ function VerifyEmailPage({
   const next = params.get('next');
   const packageCode = params.get('package');
   const section = params.get('section');
+  const mode = params.get('mode');
   const [otp, setOtp] = useState('');
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -895,8 +911,8 @@ function VerifyEmailPage({
           dashboardParams.set('checkout', packageCode);
           dashboardParams.set('section', 'plan');
           onNavigate(`/dashboard${createSearch(dashboardParams)}`, true);
-        } else if (next === 'sample') {
-          onNavigate('/', true);
+        } else if (next === 'lead') {
+          onNavigate(buildLeadHref(mode), true);
         } else if (next === 'account') {
           onNavigate(buildAccountHref(section), true);
         } else {
@@ -907,6 +923,7 @@ function VerifyEmailPage({
         if (next) verifyParams.set('next', next);
         if (packageCode) verifyParams.set('package', packageCode);
         if (section) verifyParams.set('section', section);
+        if (mode) verifyParams.set('mode', mode);
         onNavigate(`/verify-phone${createSearch(verifyParams)}`, true);
       }
     } catch (error) {
@@ -958,6 +975,7 @@ function VerifyPhonePage({
   const next = params.get('next');
   const packageCode = params.get('package');
   const section = params.get('section');
+  const mode = params.get('mode');
   const [otp, setOtp] = useState('');
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -978,8 +996,8 @@ function VerifyPhonePage({
         dashboardParams.set('checkout', packageCode);
         dashboardParams.set('section', 'plan');
         onNavigate(`/dashboard${createSearch(dashboardParams)}`, true);
-      } else if (next === 'sample') {
-        onNavigate('/', true);
+      } else if (next === 'lead') {
+        onNavigate(buildLeadHref(mode), true);
       } else if (next === 'account') {
         onNavigate(buildAccountHref(section), true);
       } else {
