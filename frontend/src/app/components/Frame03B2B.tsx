@@ -25,17 +25,17 @@ export function Frame03B2B({ onPilotClick }: Frame03B2BProps) {
       <div className="relative z-10 mx-auto max-w-7xl">
         <div className="grid items-start gap-10 lg:grid-cols-[0.95fr_1.05fr]">
           <div>
-            <div 
-              className="inline-block px-4 py-1.5 rounded-full mb-6 uppercase tracking-wider self-start text-[10px] lg:text-[11px]"
-              style={{ 
-                backgroundColor: '#373A40',
-                color: '#E3BB97',
-                letterSpacing: '0.1em',
-                fontWeight: '600'
-              }}
-            >
-              Content Idea 02 · B2B Premium
-            </div>
+          <div 
+            className="inline-block px-4 py-1.5 rounded-full mb-6 uppercase tracking-wider self-start text-[10px] lg:text-[11px]"
+            style={{ 
+              backgroundColor: '#373A40',
+              color: '#E3BB97',
+              letterSpacing: '0.1em',
+              fontWeight: '600'
+            }}
+          >
+            B2B Premium
+          </div>
 
             <h2 
               className="mb-3 text-3xl sm:text-4xl lg:text-[52px]"

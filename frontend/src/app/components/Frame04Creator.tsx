@@ -45,7 +45,7 @@ export function Frame04Creator({ onSampleClick }: Frame04CreatorProps) {
               fontWeight: '600'
             }}
           >
-            Content Idea 03
+            Creator Workflow
           </div>
 
           <h2 

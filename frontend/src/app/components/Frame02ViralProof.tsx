@@ -341,7 +341,7 @@ export function Frame02ViralProof() {
               fontWeight: '600'
             }}
           >
-            Content Idea 01
+            Voice Demo
           </div>
 
           <h2 
