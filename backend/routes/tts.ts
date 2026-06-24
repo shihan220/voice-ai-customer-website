@@ -14,6 +14,7 @@ import {
 } from '../services/customers.ts';
 import {
   cancelTtsGenerationJob,
+  deleteOwnedTtsGenerationJob,
   extractPdfText,
   getOwnedTtsGenerationJob,
   getTtsGenerationAttachmentPath,
@@ -415,6 +416,29 @@ export function createTtsRouter() {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
         error: safeTtsErrorMessage(error, 'Failed to load the preview audio.'),
+      });
+    }
+  });
+
+  router.delete('/api/tts/jobs/:id', requireCustomer, ttsGenerationLimiter, async (req, res) => {
+    try {
+      const jobId = Number(req.params.id);
+
+      if (!Number.isFinite(jobId)) {
+        res.status(400).json({ error: 'Valid job id is required.' });
+        return;
+      }
+
+      await deleteOwnedTtsGenerationJob(jobId, req.session.customerUser!.id);
+
+      res.json({
+        deleted: true,
+        jobId,
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: safeTtsErrorMessage(error, 'Failed to delete the audio generation job.'),
       });
     }
   });

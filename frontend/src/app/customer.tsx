@@ -10,6 +10,7 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
@@ -1419,6 +1420,10 @@ function canCancelTtsJob(job: TtsGenerationJob) {
   return job.status === 'queued' || job.status === 'processing' || job.status === 'preview_queued' || job.status === 'preview_processing';
 }
 
+function canDeleteTtsJob(job: TtsGenerationJob) {
+  return !isActiveTtsJob(job);
+}
+
 function isPreviewTtsJob(job: TtsGenerationJob) {
   return job.status === 'preview_queued' || job.status === 'preview_processing';
 }
@@ -1604,10 +1609,11 @@ export function CustomerDashboardPage({
   const [jobsError, setJobsError] = useState('');
   const [jobActionError, setJobActionError] = useState('');
   const [cancellingJobId, setCancellingJobId] = useState<number | null>(null);
+  const [deletingJobId, setDeletingJobId] = useState<number | null>(null);
   const [retryError, setRetryError] = useState('');
   const [retryingJobId, setRetryingJobId] = useState<number | null>(null);
   const [startingJobId, setStartingJobId] = useState<number | null>(null);
-  const [confirmJobAction, setConfirmJobAction] = useState<null | { job: TtsGenerationJob; type: 'cancel' | 'start' }>(null);
+  const [confirmJobAction, setConfirmJobAction] = useState<null | { job: TtsGenerationJob; type: 'cancel' | 'delete' | 'start' }>(null);
   const [sourceType, setSourceType] = useState<'pdf' | 'text'>('text');
   const [qualityPreset, setQualityPreset] = useState<TtsQualityPreset>('premium_mp3_wav');
   const [sourceName, setSourceName] = useState('');
@@ -1777,6 +1783,28 @@ export function CustomerDashboardPage({
     }
   };
 
+  const handleDeleteJob = async (jobId: number) => {
+    setDeletingJobId(jobId);
+    setJobActionError('');
+
+    try {
+      await apiRequest<{ deleted: boolean; jobId: number }>(`/api/tts/jobs/${jobId}`, {
+        method: 'DELETE',
+      });
+
+      setJobs((currentJobs) => {
+        const nextJobs = currentJobs.filter((job) => job.id !== jobId);
+        jobsRef.current = nextJobs;
+        return nextJobs;
+      });
+      await loadJobs();
+    } catch (nextError) {
+      setJobActionError(nextError instanceof Error ? nextError.message : 'Failed to delete the audio generation job.');
+    } finally {
+      setDeletingJobId(null);
+    }
+  };
+
   const requestStartFullGeneration = (job: TtsGenerationJob) => {
     const estimatedMinutes = estimateMinutesFromWords(job.wordCount);
 
@@ -1797,6 +1825,8 @@ export function CustomerDashboardPage({
 
     if (confirmJobAction.type === 'start') {
       await handleStartFullGeneration(confirmJobAction.job.id);
+    } else if (confirmJobAction.type === 'delete') {
+      await handleDeleteJob(confirmJobAction.job.id);
     } else {
       await handleCancelJob(confirmJobAction.job.id);
     }
@@ -2274,6 +2304,17 @@ export function CustomerDashboardPage({
                         {retryingJobId === job.id ? 'Retrying...' : 'Retry'}
                       </SecondaryButton>
                     ) : null}
+                    {canDeleteTtsJob(job) ? (
+                      <SecondaryButton
+                        className="w-full px-4 py-2 text-sm sm:w-auto"
+                        disabled={deletingJobId === job.id}
+                        onClick={() => setConfirmJobAction({ job, type: 'delete' })}
+                        type="button"
+                      >
+                        {deletingJobId === job.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        {deletingJobId === job.id ? 'Deleting...' : 'Delete'}
+                      </SecondaryButton>
+                    ) : null}
                     {job.wavDownloadUrl ? (
                       <a
                         className="inline-flex w-full items-center justify-center rounded-full bg-[#ae6c4a] px-4 py-2 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95 sm:w-auto"
@@ -2299,21 +2340,45 @@ export function CustomerDashboardPage({
       ) : null}
       {confirmJobAction ? (
         <ConfirmationDialog
-          cancelLabel={confirmJobAction.type === 'cancel' ? 'Keep running' : 'Not yet'}
-          confirmLabel={confirmJobAction.type === 'cancel' ? 'Cancel job' : 'Generate full audio'}
-          destructive={confirmJobAction.type === 'cancel'}
-          loading={
+          cancelLabel={
             confirmJobAction.type === 'cancel'
-              ? cancellingJobId === confirmJobAction.job.id
-              : startingJobId === confirmJobAction.job.id
+              ? 'Keep running'
+              : confirmJobAction.type === 'delete'
+                ? 'Keep job'
+                : 'Not yet'
+          }
+          confirmLabel={
+            confirmJobAction.type === 'cancel'
+              ? 'Cancel job'
+              : confirmJobAction.type === 'delete'
+                ? 'Delete permanently'
+                : 'Generate full audio'
+          }
+          destructive={confirmJobAction.type === 'cancel' || confirmJobAction.type === 'delete'}
+          loading={
+            confirmJobAction.type === 'delete'
+              ? deletingJobId === confirmJobAction.job.id
+              : confirmJobAction.type === 'cancel'
+                ? cancellingJobId === confirmJobAction.job.id
+                : startingJobId === confirmJobAction.job.id
           }
           onCancel={() => setConfirmJobAction(null)}
           onConfirm={() => void handleConfirmedJobAction()}
-          title={confirmJobAction.type === 'cancel' ? 'Cancel this generation?' : 'Generate the full audio?'}
+          title={
+            confirmJobAction.type === 'cancel'
+              ? 'Cancel this generation?'
+              : confirmJobAction.type === 'delete'
+                ? 'Delete this audio job?'
+                : 'Generate the full audio?'
+          }
         >
           {confirmJobAction.type === 'cancel' ? (
             <>
               This job will stop at the next safe point between audio chunks. Unfinished cancelled jobs are not billed and no final downloads are created.
+            </>
+          ) : confirmJobAction.type === 'delete' ? (
+            <>
+              This permanently removes the job from history and deletes its preview, WAV, MP3, and temporary files from private storage. Already billed minutes are not refunded.
             </>
           ) : (
             <>
@@ -2343,8 +2408,8 @@ export function CustomerJobDetailsPage({
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [action, setAction] = useState<null | 'cancel' | 'retry' | 'start'>(null);
-  const [confirmAction, setConfirmAction] = useState<null | 'cancel' | 'start'>(null);
+  const [action, setAction] = useState<null | 'cancel' | 'delete' | 'retry' | 'start'>(null);
+  const [confirmAction, setConfirmAction] = useState<null | 'cancel' | 'delete' | 'start'>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const active = job ? isActiveTtsJob(job) : false;
 
@@ -2387,9 +2452,27 @@ export function CustomerJobDetailsPage({
     return () => window.clearInterval(timer);
   }, [active]);
 
-  const runJobAction = async (nextAction: 'cancel' | 'retry' | 'start') => {
+  const runJobAction = async (nextAction: 'cancel' | 'delete' | 'retry' | 'start') => {
     setAction(nextAction);
     setActionError('');
+
+    if (nextAction === 'delete') {
+      try {
+        await apiRequest<{ deleted: boolean; jobId: number }>(`/api/tts/jobs/${jobId}`, {
+          method: 'DELETE',
+        });
+
+        setJob(null);
+        await Promise.resolve(onSessionRefresh?.());
+        onNavigate('/dashboard');
+      } catch (nextError) {
+        setActionError(nextError instanceof Error ? nextError.message : 'Failed to delete this audio job.');
+      } finally {
+        setAction(null);
+      }
+
+      return;
+    }
 
     const endpoint =
       nextAction === 'cancel'
@@ -2539,6 +2622,12 @@ export function CustomerJobDetailsPage({
                 {action === 'retry' ? 'Retrying...' : 'Retry'}
               </SecondaryButton>
             ) : null}
+            {canDeleteTtsJob(job) ? (
+              <SecondaryButton disabled={action === 'delete'} onClick={() => setConfirmAction('delete')} type="button">
+                {action === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {action === 'delete' ? 'Deleting...' : 'Delete'}
+              </SecondaryButton>
+            ) : null}
           </div>
         </div>
 
@@ -2611,17 +2700,21 @@ export function CustomerJobDetailsPage({
       </div>
       {confirmAction ? (
         <ConfirmationDialog
-          cancelLabel={confirmAction === 'cancel' ? 'Keep running' : 'Not yet'}
-          confirmLabel={confirmAction === 'cancel' ? 'Cancel job' : 'Generate full audio'}
-          destructive={confirmAction === 'cancel'}
+          cancelLabel={confirmAction === 'cancel' ? 'Keep running' : confirmAction === 'delete' ? 'Keep job' : 'Not yet'}
+          confirmLabel={confirmAction === 'cancel' ? 'Cancel job' : confirmAction === 'delete' ? 'Delete permanently' : 'Generate full audio'}
+          destructive={confirmAction === 'cancel' || confirmAction === 'delete'}
           loading={action === confirmAction}
           onCancel={() => setConfirmAction(null)}
           onConfirm={() => void runConfirmedDetailsAction()}
-          title={confirmAction === 'cancel' ? 'Cancel this generation?' : 'Generate the full audio?'}
+          title={confirmAction === 'cancel' ? 'Cancel this generation?' : confirmAction === 'delete' ? 'Delete this audio job?' : 'Generate the full audio?'}
         >
           {confirmAction === 'cancel' ? (
             <>
               This job will stop at the next safe point between audio chunks. Cancelled unfinished jobs are not billed.
+            </>
+          ) : confirmAction === 'delete' ? (
+            <>
+              This permanently removes the job from history and deletes its preview, WAV, MP3, and temporary files from private storage. Already billed minutes are not refunded.
             </>
           ) : (
             <>

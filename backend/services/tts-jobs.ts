@@ -215,6 +215,14 @@ function getJobPaths(job: Pick<TtsGenerationJobRecord, 'id' | 'source_name' | 's
   };
 }
 
+function isActiveJobStatus(status: TtsGenerationJobRecord['status']) {
+  return status === 'queued' ||
+    status === 'processing' ||
+    status === 'preview_queued' ||
+    status === 'preview_processing' ||
+    status === 'cancelling';
+}
+
 function splitSegmentByWords(segment: string, maxChars: number) {
   const words = segment.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
@@ -2299,6 +2307,59 @@ export async function markTtsGenerationJobDownloaded(jobId: number, userId: numb
     `,
     [jobId, userId],
   );
+}
+
+export async function deleteOwnedTtsGenerationJob(jobId: number, userId: number) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const jobResult = await client.query<TtsGenerationJobRecord>(
+      `
+        SELECT *
+        FROM tts_generation_jobs
+        WHERE id = $1
+          AND user_id = $2
+        FOR UPDATE
+      `,
+      [jobId, userId],
+    );
+    const job = jobResult.rows[0];
+
+    if (!job) {
+      throw withStatus('Audio generation job not found.', 404);
+    }
+
+    if (isActiveJobStatus(job.status)) {
+      throw withStatus('Cancel this active audio job before deleting it.', 409);
+    }
+
+    await fs.rm(getJobPaths(job).jobDirectory, {
+      force: true,
+      recursive: true,
+    });
+
+    await client.query(
+      `
+        DELETE FROM tts_generation_jobs
+        WHERE id = $1
+          AND user_id = $2
+      `,
+      [jobId, userId],
+    );
+
+    await client.query('COMMIT');
+
+    await fs.rmdir(getJobPaths(job).userDirectory).catch(() => undefined);
+
+    return job;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getTtsGenerationAttachmentPath(
