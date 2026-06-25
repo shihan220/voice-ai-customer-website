@@ -2443,7 +2443,7 @@ export function CustomerDashboardPage({
           onClick={() => setActiveTab('voices')}
           type="button"
         >
-          My Voices
+          Create with your voice
         </button>
       </div>
 
@@ -2652,7 +2652,7 @@ export function CustomerDashboardPage({
         <section className="mt-6 rounded-[28px] border border-[#ddcfbe] bg-white/88 p-4 shadow-[0_18px_50px_rgba(55,58,64,0.08)] sm:p-6">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
-              <h2 className="text-xl font-bold text-[#2f343b]">My Voices</h2>
+              <h2 className="text-xl font-bold text-[#2f343b]">Create voice notes with your own voice</h2>
               <p className="mt-2 max-w-3xl text-sm leading-7 text-[#64584f]">
                 Create and manage custom reference voices for this account. Saved reference WAVs are private to your login and provider profile IDs stay on the backend.
               </p>
