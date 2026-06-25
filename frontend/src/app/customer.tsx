@@ -151,6 +151,9 @@ type TtsVoiceProfileLimits = {
 
 type TtsQualityPreset = 'high_mp3_wav' | 'premium_mp3_wav' | 'standard_mp3_wav' | 'wav_only';
 
+const recommendedVoiceReferenceScript =
+  'আমি এখন আমার স্বাভাবিক কণ্ঠে একটি ছোট লেখা পড়ছি। এই রেকর্ডিংটি পরিষ্কারভাবে করা হয়েছে, যাতে আমার কণ্ঠের স্বর, গতি, উচ্চারণ এবং বিরতির ধরন বোঝা যায়। আমি বাংলায় কথা বলছি, তবে প্রয়োজন হলে কিছু ইংরেজি শব্দও স্বাভাবিকভাবে উচ্চারণ করতে পারি। প্রতিদিন আমরা কাজ, শিক্ষা, পরিবার, প্রযুক্তি এবং যোগাযোগের জন্য কণ্ঠ ব্যবহার করি। একটি ভালো কণ্ঠস্বর শুধু শব্দ নয়, অনুভূতি, ভরসা এবং স্পষ্টতা বহন করে। আমি বাক্যের শেষে একটু থামছি, কমার পরে ছোট বিরতি নিচ্ছি, এবং প্রতিটি শব্দ যতটা সম্ভব পরিষ্কারভাবে বলছি। আজকের আবহাওয়া সুন্দর, সকাল থেকে আকাশ পরিষ্কার, আর চারপাশ শান্ত। আমি চাই এই কণ্ঠ ভবিষ্যতে গল্প, সংবাদ, বিজ্ঞাপন, শিক্ষা, নির্দেশনা এবং অডিও বইয়ের জন্য ব্যবহার করা যাক। ধন্যবাদ, এই ছিল আমার কণ্ঠের নমুনা।';
+
 const ttsQualityOptions: Array<{
   description: string;
   label: string;
@@ -1368,6 +1371,7 @@ type DashboardTab = 'create' | 'history' | 'voices';
 type VoiceReferenceInputMode = 'record' | 'upload';
 type VoiceFileSource = 'recorded' | 'uploaded';
 type VoiceRecordingState = 'idle' | 'recording' | 'requesting';
+type VoiceScriptMode = 'custom' | 'recommended';
 
 type VoiceRecordingSession = {
   audioContext: AudioContext;
@@ -1739,9 +1743,10 @@ export function CustomerDashboardPage({
   const [voiceActionMessage, setVoiceActionMessage] = useState('');
   const [voiceActionId, setVoiceActionId] = useState<number | null>(null);
   const [voiceSubmitting, setVoiceSubmitting] = useState(false);
+  const [voiceScriptMode, setVoiceScriptMode] = useState<VoiceScriptMode>('recommended');
   const [voiceForm, setVoiceForm] = useState({
     name: '',
-    referenceText: '',
+    referenceText: recommendedVoiceReferenceScript,
     setDefault: false,
   });
   const [voiceReferenceMode, setVoiceReferenceMode] = useState<VoiceReferenceInputMode>('upload');
@@ -2084,15 +2089,34 @@ export function CustomerDashboardPage({
   const resetVoiceForm = () => {
     discardVoiceRecording();
     clearRecordedReference();
+    setVoiceScriptMode('recommended');
     setVoiceForm({
       name: '',
-      referenceText: '',
+      referenceText: recommendedVoiceReferenceScript,
       setDefault: false,
     });
     setVoiceReferenceMode('upload');
     setVoiceFile(null);
     setVoiceFileSource(null);
     setVoiceFileResetKey((current) => current + 1);
+  };
+
+  const handleVoiceScriptModeChange = (mode: VoiceScriptMode) => {
+    setVoiceScriptMode(mode);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    if (mode === 'recommended') {
+      setVoiceForm((current) => ({
+        ...current,
+        referenceText: recommendedVoiceReferenceScript,
+      }));
+    } else {
+      setVoiceForm((current) => ({
+        ...current,
+        referenceText: current.referenceText === recommendedVoiceReferenceScript ? '' : current.referenceText,
+      }));
+    }
   };
 
   const handleVoiceProfileSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -2107,7 +2131,7 @@ export function CustomerDashboardPage({
       }
 
       if (!voiceForm.referenceText.trim()) {
-        throw new Error('Paste the exact reference text spoken in the WAV.');
+        throw new Error('Use the recommended script or paste the exact reference text spoken in the WAV.');
       }
 
       if (isVoiceRecordingBusy) {
@@ -2811,8 +2835,8 @@ export function CustomerDashboardPage({
                   <div className="mb-4 flex items-center gap-3">
                     <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">1</span>
                     <div>
-                      <div className="text-sm font-semibold text-[#2f343b]">Name and spoken script</div>
-                      <div className="text-xs leading-5 text-[#6f645c]">Paste the exact words spoken in the reference audio.</div>
+                      <div className="text-sm font-semibold text-[#2f343b]">Read this script aloud</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">Record the exact words shown here so the reference text matches the audio.</div>
                     </div>
                   </div>
                   <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Voice name</label>
@@ -2822,21 +2846,80 @@ export function CustomerDashboardPage({
                     value={voiceForm.name}
                     onChange={(event) => setVoiceForm((current) => ({ ...current, name: event.target.value }))}
                   />
-                  <label className="mb-2 mt-4 block text-sm font-semibold text-[#4f4740]">Reference text</label>
-                  <TextArea
-                    className="min-h-[150px]"
-                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
-                    placeholder="Paste the exact text spoken in the reference WAV"
-                    value={voiceForm.referenceText}
-                    onChange={(event) => setVoiceForm((current) => ({ ...current, referenceText: event.target.value }))}
-                  />
+                  <div className="mt-4">
+                    <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <label className="block text-sm font-semibold text-[#4f4740]">Reference script</label>
+                      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[#d8cbbe] bg-white p-1 sm:min-w-[360px]">
+                        <button
+                          className={cx(
+                            'inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-xs font-semibold transition sm:text-sm',
+                            voiceScriptMode === 'recommended'
+                              ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+                              : 'text-[#5a514a] hover:bg-[#f8f3ec]',
+                          )}
+                          disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                          onClick={() => handleVoiceScriptModeChange('recommended')}
+                          type="button"
+                        >
+                          Recommended script
+                        </button>
+                        <button
+                          className={cx(
+                            'inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-xs font-semibold transition sm:text-sm',
+                            voiceScriptMode === 'custom'
+                              ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+                              : 'text-[#5a514a] hover:bg-[#f8f3ec]',
+                          )}
+                          disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                          onClick={() => handleVoiceScriptModeChange('custom')}
+                          type="button"
+                        >
+                          Use my own script
+                        </button>
+                      </div>
+                    </div>
+
+                    {voiceScriptMode === 'recommended' ? (
+                      <div className="rounded-2xl border border-[#ddcfbe] bg-[#fffaf4] p-4">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="text-sm font-semibold text-[#2f343b]">Read this Bangla script naturally</div>
+                          <span className="w-fit rounded-full border border-[#ddcfbe] bg-white px-3 py-1 text-xs font-semibold text-[#8d5d45]">
+                            Around 50s to 1m 30s
+                          </span>
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap text-base leading-8 text-[#3d3935]" lang="bn">
+                          {recommendedVoiceReferenceScript}
+                        </p>
+                        <div className="mt-4 grid gap-2 text-xs font-semibold text-[#6f645c] sm:grid-cols-3">
+                          <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">Read in your natural voice</span>
+                          <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">Keep the room quiet</span>
+                          <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">No music, echo, or noise</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <TextArea
+                          className="min-h-[170px]"
+                          disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                          placeholder="Paste the exact text spoken in the reference WAV"
+                          value={voiceForm.referenceText}
+                          onChange={(event) => setVoiceForm((current) => ({ ...current, referenceText: event.target.value }))}
+                        />
+                        <div className="mt-3">
+                          <InlineMessage>
+                            Make sure the uploaded or recorded WAV says exactly this text. Mismatched text can reduce custom voice quality.
+                          </InlineMessage>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">
                   <div className="mb-4 flex items-center gap-3">
                     <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">2</span>
                     <div>
                       <div className="text-sm font-semibold text-[#2f343b]">Upload or record the WAV</div>
-                      <div className="text-xs leading-5 text-[#6f645c]">Use a clear, single-speaker Bangla recording.</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">Read the selected script in a clear, single-speaker Bangla recording.</div>
                     </div>
                   </div>
                   <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Reference WAV</label>
