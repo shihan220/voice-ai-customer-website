@@ -2662,8 +2662,16 @@ export function CustomerDashboardPage({
             </div>
           </div>
 
-          <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
-            <div className="space-y-3">
+          <div className="mt-5 flex flex-col gap-5">
+            <div className="order-2 space-y-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-[#2f343b]">Saved custom voices</h3>
+                  <p className="mt-1 text-sm leading-6 text-[#64584f]">
+                    Use these saved voices when creating previews or full audio jobs.
+                  </p>
+                </div>
+              </div>
               {voiceProfilesLoading ? (
                 <StatePanel
                   description="Loading saved custom voices for this account."
@@ -2756,11 +2764,18 @@ export function CustomerDashboardPage({
               ) : null}
             </div>
 
-            <form className="rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-4 sm:p-5" onSubmit={handleVoiceProfileSubmit}>
-              <h3 className="text-lg font-semibold text-[#2f343b]">Create custom voice</h3>
-              <p className="mt-2 text-sm leading-6 text-[#64584f]">
-                Upload or record a WAV reference between {voiceProfileLimits.minAudioSeconds}s and {voiceProfileLimits.maxAudioSeconds}s. The reference audio is saved privately with your account after profile creation.
-              </p>
+            <form className="order-1 rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-4 sm:p-6 lg:p-7" onSubmit={handleVoiceProfileSubmit}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-[#2f343b]">Create a voice from your recording</h3>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-[#64584f]">
+                    Upload or record a WAV reference between {voiceProfileLimits.minAudioSeconds}s and {voiceProfileLimits.maxAudioSeconds}s. The reference audio is saved privately with your account after profile creation.
+                  </p>
+                </div>
+                <span className="inline-flex w-fit items-center rounded-full border border-[#d9c6b2] bg-white/80 px-3 py-1 text-xs font-semibold text-[#8d5d45]">
+                  New voice setup
+                </span>
+              </div>
               <div className="mt-4 rounded-2xl border border-[#eadfce] bg-white/70 p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#efe2d1] text-[#9a6041]">
@@ -2791,8 +2806,15 @@ export function CustomerDashboardPage({
                   </InlineMessage>
                 </div>
               ) : null}
-              <div className="mt-4 space-y-4">
-                <div>
+              <div className="mt-5 space-y-5">
+                <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">1</span>
+                    <div>
+                      <div className="text-sm font-semibold text-[#2f343b]">Name and spoken script</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">Paste the exact words spoken in the reference audio.</div>
+                    </div>
+                  </div>
                   <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Voice name</label>
                   <TextInput
                     disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
@@ -2800,9 +2822,7 @@ export function CustomerDashboardPage({
                     value={voiceForm.name}
                     onChange={(event) => setVoiceForm((current) => ({ ...current, name: event.target.value }))}
                   />
-                </div>
-                <div>
-                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Reference text</label>
+                  <label className="mb-2 mt-4 block text-sm font-semibold text-[#4f4740]">Reference text</label>
                   <TextArea
                     className="min-h-[150px]"
                     disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
@@ -2811,7 +2831,14 @@ export function CustomerDashboardPage({
                     onChange={(event) => setVoiceForm((current) => ({ ...current, referenceText: event.target.value }))}
                   />
                 </div>
-                <div>
+                <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">2</span>
+                    <div>
+                      <div className="text-sm font-semibold text-[#2f343b]">Upload or record the WAV</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">Use a clear, single-speaker Bangla recording.</div>
+                    </div>
+                  </div>
                   <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Reference WAV</label>
                   <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[#d8cbbe] bg-white p-1">
                     <button
@@ -2937,23 +2964,34 @@ export function CustomerDashboardPage({
                     WAV only. Maximum {formatBytes(voiceProfileLimits.maxAudioBytes)}.
                   </p>
                 </div>
-                <label className="flex items-center gap-3 text-sm font-semibold text-[#4f4740]">
-                  <input
-                    checked={voiceForm.setDefault}
-                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
-                    type="checkbox"
-                    onChange={(event) => setVoiceForm((current) => ({ ...current, setDefault: event.target.checked }))}
-                  />
-                  Set as my default custom voice
-                </label>
-                <PrimaryButton
-                  className="w-full justify-center"
-                  disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
-                  type="submit"
-                >
-                  {voiceSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileAudio2 className="h-4 w-4" />}
-                  {voiceSubmitting ? 'Creating voice...' : 'Create voice profile'}
-                </PrimaryButton>
+                <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">3</span>
+                    <div>
+                      <div className="text-sm font-semibold text-[#2f343b]">Save the custom voice</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">The voice will be available in your generation voice selector.</div>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <label className="flex items-center gap-3 text-sm font-semibold text-[#4f4740]">
+                      <input
+                        checked={voiceForm.setDefault}
+                        disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
+                        type="checkbox"
+                        onChange={(event) => setVoiceForm((current) => ({ ...current, setDefault: event.target.checked }))}
+                      />
+                      Set as my default custom voice
+                    </label>
+                    <PrimaryButton
+                      className="w-full justify-center sm:w-auto"
+                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
+                      type="submit"
+                    >
+                      {voiceSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileAudio2 className="h-4 w-4" />}
+                      {voiceSubmitting ? 'Creating voice...' : 'Create voice profile'}
+                    </PrimaryButton>
+                  </div>
+                </div>
               </div>
             </form>
           </div>
