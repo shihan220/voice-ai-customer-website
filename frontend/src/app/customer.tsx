@@ -2746,10 +2746,28 @@ export function CustomerDashboardPage({
               <p className="mt-2 text-sm leading-6 text-[#64584f]">
                 Upload or record a WAV reference between {voiceProfileLimits.minAudioSeconds}s and {voiceProfileLimits.maxAudioSeconds}s. The reference audio is discarded after profile creation.
               </p>
-              <div className="mt-4">
-                <InlineMessage>
-                  Upload or record around 1 minute of clear single-speaker Bangla voice, recorded in a quiet place, with no music, echo, or background noise.
-                </InlineMessage>
+              <div className="mt-4 rounded-2xl border border-[#eadfce] bg-white/70 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#efe2d1] text-[#9a6041]">
+                    <Mic className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold text-[#2f343b]">Reference voice quality</div>
+                    <p className="mt-1 text-sm leading-6 text-[#64584f]">
+                      Upload or record around 1 minute of clear single-speaker Bangla voice in a quiet place, with no music, echo, or background noise.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {['About 1 minute', 'Single speaker', 'Quiet place', 'No music or echo'].map((item) => (
+                        <span
+                          key={item}
+                          className="rounded-full border border-[#ddcfbe] bg-[#faf7f1] px-3 py-1 text-xs font-semibold text-[#5f564f]"
+                        >
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
               {!canCreateMoreVoiceProfiles ? (
                 <div className="mt-4">
