@@ -29,6 +29,7 @@ import {
 import {
   createTtsVoiceProfile,
   deactivateTtsVoiceProfile,
+  getOwnedTtsVoiceProfileReferencePath,
   getTtsVoiceProfileLimits,
   listTtsVoiceProfilesForUser,
   setDefaultTtsVoiceProfile,
@@ -181,6 +182,8 @@ function toTtsVoiceProfilePayload(profile: Awaited<ReturnType<typeof listTtsVoic
     displayName: profile.display_name,
     id: Number(profile.id),
     isDefault: profile.is_default,
+    referenceAudioDownloadUrl: profile.reference_audio_file ? `/api/tts/voice-profiles/${profile.id}/reference` : null,
+    referenceAudioFileSizeBytes: profile.reference_audio_file_size_bytes === null ? null : Number(profile.reference_audio_file_size_bytes),
     referenceAudioSeconds: profile.reference_audio_seconds === null ? null : Number(profile.reference_audio_seconds),
     referenceSampleRate: profile.reference_sample_rate === null ? null : Number(profile.reference_sample_rate),
     referenceText: profile.reference_text,
@@ -318,6 +321,25 @@ export function createTtsRouter() {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
         error: safeVoiceProfileErrorMessage(error, 'Failed to deactivate the voice profile.'),
+      });
+    }
+  });
+
+  router.get('/api/tts/voice-profiles/:id/reference', requireCustomer, ttsDownloadLimiter, async (req, res) => {
+    try {
+      const profileId = Number(req.params.id);
+
+      if (!Number.isFinite(profileId)) {
+        res.status(400).json({ error: 'Valid voice profile id is required.' });
+        return;
+      }
+
+      const reference = await getOwnedTtsVoiceProfileReferencePath(profileId, req.session.customerUser!.id);
+      res.download(reference.filePath, `${pathSafeFilename(reference.displayName)}-reference.wav`);
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: safeVoiceProfileErrorMessage(error, 'Failed to download the reference WAV.'),
       });
     }
   });
@@ -653,4 +675,17 @@ export function createTtsRouter() {
   });
 
   return router;
+}
+
+function pathSafeFilename(value: string) {
+  const normalized = normalizeText(value) ?? `voice-profile-${Date.now()}`;
+  const safe = normalized
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-')
+    .slice(0, 80);
+
+  return safe || `voice-profile-${Date.now()}`;
 }

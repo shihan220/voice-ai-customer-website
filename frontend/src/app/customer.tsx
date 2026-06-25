@@ -3,6 +3,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Clock3,
+  Download,
   Eye,
   EyeOff,
   FileAudio2,
@@ -133,6 +134,8 @@ type TtsVoiceProfile = {
   displayName: string;
   id: number;
   isDefault: boolean;
+  referenceAudioDownloadUrl: string | null;
+  referenceAudioFileSizeBytes: number | null;
   referenceAudioSeconds: number | null;
   referenceSampleRate: number | null;
   referenceText: string;
@@ -2139,7 +2142,7 @@ export function CustomerDashboardPage({
 
       setVoiceProfiles(payload.voiceProfiles);
       setSelectedVoiceProfileId(String(payload.voiceProfile.id));
-      setVoiceActionMessage('Custom voice profile created. The uploaded WAV was used for provider setup and is not stored by this website.');
+      setVoiceActionMessage('Custom voice profile created. The reference WAV is saved privately with this account.');
       resetVoiceForm();
       await loadVoiceProfiles();
     } catch (nextError) {
@@ -2651,7 +2654,7 @@ export function CustomerDashboardPage({
             <div>
               <h2 className="text-xl font-bold text-[#2f343b]">My Voices</h2>
               <p className="mt-2 max-w-3xl text-sm leading-7 text-[#64584f]">
-                Create and manage custom reference voices for this account. Custom voices are private to your login and do not expose provider profile IDs in the browser.
+                Create and manage custom reference voices for this account. Saved reference WAVs are private to your login and provider profile IDs stay on the backend.
               </p>
             </div>
             <div className="rounded-full border border-[#d9c6b2] bg-[#faf7f1] px-4 py-2 text-sm font-semibold text-[#8d5d45]">
@@ -2704,10 +2707,22 @@ export function CustomerDashboardPage({
                       <div className="mt-2 grid gap-2 text-sm text-[#64584f] sm:grid-cols-2">
                         <div>Reference: {profile.referenceAudioSeconds === null ? 'Not measured' : formatDuration(profile.referenceAudioSeconds)}</div>
                         <div>Sample rate: {profile.referenceSampleRate === null ? 'Not measured' : `${profile.referenceSampleRate.toLocaleString()} Hz`}</div>
+                        <div>
+                          Saved WAV: {profile.referenceAudioFileSizeBytes === null ? 'Not stored' : formatBytes(profile.referenceAudioFileSizeBytes)}
+                        </div>
                       </div>
                       <p className="mt-3 line-clamp-3 text-sm leading-7 text-[#5f564f]">{profile.referenceText}</p>
                     </div>
                     <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-end">
+                      {profile.referenceAudioDownloadUrl ? (
+                        <a
+                          className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-[#d8cbbe] bg-white/80 px-4 py-2 text-sm font-semibold text-[#5a514a] transition hover:border-[#c7b09e] hover:text-[#a96544] sm:w-auto"
+                          href={profile.referenceAudioDownloadUrl}
+                        >
+                          <Download className="h-4 w-4" />
+                          Reference WAV
+                        </a>
+                      ) : null}
                       {!profile.isDefault ? (
                         <SecondaryButton
                           className="w-full px-4 py-2 text-sm sm:w-auto"
@@ -2744,7 +2759,7 @@ export function CustomerDashboardPage({
             <form className="rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-4 sm:p-5" onSubmit={handleVoiceProfileSubmit}>
               <h3 className="text-lg font-semibold text-[#2f343b]">Create custom voice</h3>
               <p className="mt-2 text-sm leading-6 text-[#64584f]">
-                Upload or record a WAV reference between {voiceProfileLimits.minAudioSeconds}s and {voiceProfileLimits.maxAudioSeconds}s. The reference audio is discarded after profile creation.
+                Upload or record a WAV reference between {voiceProfileLimits.minAudioSeconds}s and {voiceProfileLimits.maxAudioSeconds}s. The reference audio is saved privately with your account after profile creation.
               </p>
               <div className="mt-4 rounded-2xl border border-[#eadfce] bg-white/70 p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start">

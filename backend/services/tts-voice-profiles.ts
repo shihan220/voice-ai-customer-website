@@ -6,6 +6,8 @@ import path from 'node:path';
 import type { PoolClient } from 'pg';
 import {
   normalizeText,
+  privateMediaRoot,
+  ttsVoiceProfilesMediaDirectory,
 } from '../core.ts';
 import {
   pool,
@@ -307,6 +309,42 @@ function normalizeReferenceText(referenceText: string) {
   return normalized;
 }
 
+function slugifyStem(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-')
+    .slice(0, 60);
+}
+
+function getVoiceProfilePaths(profile: Pick<TtsVoiceProfileRecord, 'display_name' | 'id' | 'user_id'>) {
+  const userDirectory = path.join(ttsVoiceProfilesMediaDirectory, `user-${profile.user_id}`);
+  const profileDirectory = path.join(userDirectory, `profile-${profile.id}`);
+  const safeStem = slugifyStem(profile.display_name) || `profile-${profile.id}`;
+  const referenceAbsolutePath = path.join(profileDirectory, `${safeStem}-reference.wav`);
+
+  return {
+    profileDirectory,
+    referenceAbsolutePath,
+    referenceRelativePath: path.relative(privateMediaRoot, referenceAbsolutePath),
+    userDirectory,
+  };
+}
+
+function resolvePrivateReferencePath(referenceAudioFile: string) {
+  const absolutePath = path.resolve(privateMediaRoot, referenceAudioFile);
+  const privateRootWithSeparator = `${privateMediaRoot}${path.sep}`;
+
+  if (!absolutePath.startsWith(privateRootWithSeparator)) {
+    throw withStatus('Reference audio file path is invalid.', 500);
+  }
+
+  return absolutePath;
+}
+
 async function countActiveProfiles(client: PoolClient, userId: number) {
   const result = await client.query<{ count: string }>(
     `
@@ -385,6 +423,34 @@ export async function listTtsVoiceProfilesForUser(userId: number) {
   return result.rows;
 }
 
+export async function getOwnedTtsVoiceProfileReferencePath(profileId: number, userId: number) {
+  const result = await pool.query<TtsVoiceProfileRecord>(
+    `
+      SELECT *
+      FROM tts_voice_profiles
+      WHERE id = $1
+        AND user_id = $2
+        AND is_active = TRUE
+      LIMIT 1
+    `,
+    [profileId, userId],
+  );
+  const profile = result.rows[0];
+
+  if (!profile) {
+    throw withStatus('Voice profile not found.', 404);
+  }
+
+  if (!profile.reference_audio_file) {
+    throw withStatus('Reference WAV is not stored for this voice profile.', 404);
+  }
+
+  return {
+    displayName: profile.display_name,
+    filePath: resolvePrivateReferencePath(profile.reference_audio_file),
+  };
+}
+
 export async function createTtsVoiceProfile(input: {
   audioBuffer: Buffer;
   displayName: string;
@@ -418,6 +484,7 @@ export async function createTtsVoiceProfile(input: {
     referenceText,
   });
   const client = await pool.connect();
+  let profileDirectoryToClean: string | null = null;
 
   try {
     await client.query('BEGIN');
@@ -466,12 +533,34 @@ export async function createTtsVoiceProfile(input: {
         input.setDefault,
       ],
     );
+    const createdProfile = profileResult.rows[0];
+    const profilePaths = getVoiceProfilePaths(createdProfile);
+    profileDirectoryToClean = profilePaths.profileDirectory;
+
+    await fs.mkdir(profilePaths.profileDirectory, { recursive: true });
+    await fs.writeFile(profilePaths.referenceAbsolutePath, input.audioBuffer);
+
+    const storedProfileResult = await client.query<TtsVoiceProfileRecord>(
+      `
+        UPDATE tts_voice_profiles
+        SET
+          reference_audio_file = $2,
+          reference_audio_file_size_bytes = $3,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [createdProfile.id, profilePaths.referenceRelativePath, input.audioBuffer.byteLength],
+    );
 
     await client.query('COMMIT');
-    return profileResult.rows[0];
+    return storedProfileResult.rows[0];
   } catch (error) {
     await client.query('ROLLBACK');
     await deactivateProviderVoiceProfile(providerProfileId).catch(() => undefined);
+    if (profileDirectoryToClean) {
+      await fs.rm(profileDirectoryToClean, { force: true, recursive: true }).catch(() => undefined);
+    }
     throw error;
   } finally {
     client.release();
@@ -538,6 +627,8 @@ export async function setDefaultTtsVoiceProfile(profileId: number, userId: numbe
 
 export async function deactivateTtsVoiceProfile(profileId: number, userId: number) {
   const client = await pool.connect();
+  let profileDirectoryToClean: string | null = null;
+  let userDirectoryToClean: string | null = null;
 
   try {
     await client.query('BEGIN');
@@ -560,6 +651,9 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
     }
 
     await deactivateProviderVoiceProfile(profile.provider_profile_id);
+    const profilePaths = getVoiceProfilePaths(profile);
+    profileDirectoryToClean = profilePaths.profileDirectory;
+    userDirectoryToClean = profilePaths.userDirectory;
 
     const updatedResult = await client.query<TtsVoiceProfileRecord>(
       `
@@ -567,6 +661,8 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
         SET
           is_active = FALSE,
           is_default = FALSE,
+          reference_audio_file = NULL,
+          reference_audio_file_size_bytes = NULL,
           updated_at = NOW()
         WHERE id = $1
           AND user_id = $2
@@ -576,6 +672,12 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
     );
 
     await client.query('COMMIT');
+    if (profileDirectoryToClean) {
+      await fs.rm(profileDirectoryToClean, { force: true, recursive: true }).catch(() => undefined);
+    }
+    if (userDirectoryToClean) {
+      await fs.rmdir(userDirectoryToClean).catch(() => undefined);
+    }
     return updatedResult.rows[0];
   } catch (error) {
     await client.query('ROLLBACK');

@@ -258,6 +258,8 @@ export type TtsVoiceProfileRecord = {
   reference_text: string;
   reference_audio_seconds: number | null;
   reference_sample_rate: number | null;
+  reference_audio_file: string | null;
+  reference_audio_file_size_bytes: number | null;
   is_active: boolean;
   is_default: boolean;
   created_at: Date;
@@ -544,11 +546,19 @@ export async function ensureSchema() {
       reference_text TEXT NOT NULL,
       reference_audio_seconds NUMERIC(12, 3),
       reference_sample_rate INTEGER,
+      reference_audio_file TEXT,
+      reference_audio_file_size_bytes BIGINT,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       is_default BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_voice_profiles
+      ADD COLUMN IF NOT EXISTS reference_audio_file TEXT,
+      ADD COLUMN IF NOT EXISTS reference_audio_file_size_bytes BIGINT;
   `);
 
   await pool.query(`
