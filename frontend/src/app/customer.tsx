@@ -2746,6 +2746,11 @@ export function CustomerDashboardPage({
               <p className="mt-2 text-sm leading-6 text-[#64584f]">
                 Upload or record a WAV reference between {voiceProfileLimits.minAudioSeconds}s and {voiceProfileLimits.maxAudioSeconds}s. The reference audio is discarded after profile creation.
               </p>
+              <div className="mt-4">
+                <InlineMessage>
+                  Upload or record around 1 minute of clear single-speaker Bangla voice, recorded in a quiet place, with no music, echo, or background noise.
+                </InlineMessage>
+              </div>
               {!canCreateMoreVoiceProfiles ? (
                 <div className="mt-4">
                   <InlineMessage>
