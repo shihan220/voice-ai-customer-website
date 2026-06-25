@@ -7,10 +7,13 @@ import {
   EyeOff,
   FileAudio2,
   Loader2,
+  Mic,
   Play,
   RefreshCw,
   RotateCcw,
+  Square,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
@@ -1359,6 +1362,24 @@ function VerifyPhonePage({
 }
 
 type DashboardTab = 'create' | 'history' | 'voices';
+type VoiceReferenceInputMode = 'record' | 'upload';
+type VoiceFileSource = 'recorded' | 'uploaded';
+type VoiceRecordingState = 'idle' | 'recording' | 'requesting';
+
+type VoiceRecordingSession = {
+  audioContext: AudioContext;
+  chunks: Float32Array[];
+  processor: ScriptProcessorNode;
+  source: MediaStreamAudioSourceNode;
+  startedAt: number;
+  stopTimer: number | null;
+  stream: MediaStream;
+};
+
+type WindowWithWebkitAudioContext = Window &
+  typeof globalThis & {
+    webkitAudioContext?: typeof AudioContext;
+  };
 
 function countWordsForDashboardPreview(value: string) {
   const trimmed = value.trim();
@@ -1472,6 +1493,56 @@ function formatBytes(bytes: number) {
   }
 
   return `${Math.ceil(bytes / 1024).toLocaleString()} KB`;
+}
+
+function mergeAudioChunks(chunks: Float32Array[]) {
+  const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const samples = new Float32Array(sampleCount);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    samples.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return samples;
+}
+
+function writeAscii(view: DataView, offset: number, value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    view.setUint8(offset + index, value.charCodeAt(index));
+  }
+}
+
+function encodeWav(samples: Float32Array, sampleRate: number) {
+  const bytesPerSample = 2;
+  const channelCount = 1;
+  const dataBytes = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataBytes);
+  const view = new DataView(buffer);
+
+  writeAscii(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataBytes, true);
+  writeAscii(view, 8, 'WAVE');
+  writeAscii(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channelCount, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * channelCount * bytesPerSample, true);
+  view.setUint16(32, channelCount * bytesPerSample, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, 'data');
+  view.setUint32(40, dataBytes, true);
+
+  let outputOffset = 44;
+  for (const sample of samples) {
+    const clamped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(outputOffset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+    outputOffset += bytesPerSample;
+  }
+
+  return new Blob([view], { type: 'audio/wav' });
 }
 
 function getActiveJobEstimateSeconds(job: TtsGenerationJob) {
@@ -1670,8 +1741,16 @@ export function CustomerDashboardPage({
     referenceText: '',
     setDefault: false,
   });
+  const [voiceReferenceMode, setVoiceReferenceMode] = useState<VoiceReferenceInputMode>('upload');
   const [voiceFile, setVoiceFile] = useState<File | null>(null);
+  const [voiceFileSource, setVoiceFileSource] = useState<VoiceFileSource | null>(null);
   const [voiceFileResetKey, setVoiceFileResetKey] = useState(0);
+  const [voiceRecordingState, setVoiceRecordingState] = useState<VoiceRecordingState>('idle');
+  const [voiceRecordingSeconds, setVoiceRecordingSeconds] = useState(0);
+  const [recordedVoiceDuration, setRecordedVoiceDuration] = useState<number | null>(null);
+  const [recordedVoiceUrl, setRecordedVoiceUrl] = useState<string | null>(null);
+  const recordedVoiceUrlRef = useRef<string | null>(null);
+  const voiceRecordingRef = useRef<VoiceRecordingSession | null>(null);
 
   const estimatedWordCount = useMemo(
     () => (sourceType === 'text' ? countWordsForDashboardPreview(textInput) : 0),
@@ -1690,6 +1769,8 @@ export function CustomerDashboardPage({
     : voiceProfiles.find((profile) => String(profile.id) === selectedVoiceProfileId) ?? null;
   const selectedVoiceName = selectedVoiceProfile?.displayName ?? 'Keypillar Bangla Female';
   const canCreateMoreVoiceProfiles = voiceProfiles.length < voiceProfileLimits.maxActiveProfiles;
+  const isVoiceRecording = voiceRecordingState === 'recording';
+  const isVoiceRecordingBusy = voiceRecordingState !== 'idle';
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const loadJobs = useCallback(async () => {
@@ -1789,6 +1870,199 @@ export function CustomerDashboardPage({
     return () => window.clearInterval(timer);
   }, [hasActiveJobs]);
 
+  const setRecordedReferenceUrl = useCallback((nextUrl: string | null) => {
+    if (recordedVoiceUrlRef.current) {
+      window.URL.revokeObjectURL(recordedVoiceUrlRef.current);
+    }
+
+    recordedVoiceUrlRef.current = nextUrl;
+    setRecordedVoiceUrl(nextUrl);
+  }, []);
+
+  const clearRecordedReference = useCallback(() => {
+    setRecordedReferenceUrl(null);
+    setRecordedVoiceDuration(null);
+  }, [setRecordedReferenceUrl]);
+
+  const cleanupVoiceRecordingSession = useCallback((session: VoiceRecordingSession) => {
+    session.processor.onaudioprocess = null;
+    session.source.disconnect();
+    session.processor.disconnect();
+
+    if (session.stopTimer !== null) {
+      window.clearTimeout(session.stopTimer);
+    }
+
+    session.stream.getTracks().forEach((track) => track.stop());
+    void session.audioContext.close().catch(() => undefined);
+  }, []);
+
+  const discardVoiceRecording = useCallback(() => {
+    const session = voiceRecordingRef.current;
+
+    if (session) {
+      voiceRecordingRef.current = null;
+      cleanupVoiceRecordingSession(session);
+    }
+
+    setVoiceRecordingState('idle');
+    setVoiceRecordingSeconds(0);
+  }, [cleanupVoiceRecordingSession]);
+
+  const stopVoiceRecording = useCallback(() => {
+    const session = voiceRecordingRef.current;
+
+    if (!session) {
+      return;
+    }
+
+    voiceRecordingRef.current = null;
+    cleanupVoiceRecordingSession(session);
+    setVoiceRecordingState('idle');
+    setVoiceRecordingSeconds(0);
+
+    const samples = mergeAudioChunks(session.chunks);
+    const durationSeconds = samples.length / session.audioContext.sampleRate;
+
+    if (durationSeconds < voiceProfileLimits.minAudioSeconds) {
+      setVoiceActionError(`Record at least ${voiceProfileLimits.minAudioSeconds} second before creating a custom voice.`);
+      return;
+    }
+
+    const wavBlob = encodeWav(samples, session.audioContext.sampleRate);
+    const wavFile = new File([wavBlob], `recorded-reference-${Date.now()}.wav`, { type: 'audio/wav' });
+    const nextUrl = window.URL.createObjectURL(wavBlob);
+
+    setRecordedReferenceUrl(nextUrl);
+    setRecordedVoiceDuration(durationSeconds);
+    setVoiceFile(wavFile);
+    setVoiceFileSource('recorded');
+    setVoiceFileResetKey((current) => current + 1);
+    setVoiceActionError('');
+    setVoiceActionMessage(`Recorded ${formatDuration(durationSeconds)} reference WAV. Create the profile when the reference text matches this recording.`);
+  }, [cleanupVoiceRecordingSession, setRecordedReferenceUrl, voiceProfileLimits.minAudioSeconds]);
+
+  const startVoiceRecording = useCallback(async () => {
+    if (!canCreateMoreVoiceProfiles || voiceSubmitting) {
+      return;
+    }
+
+    discardVoiceRecording();
+    clearRecordedReference();
+    setVoiceFile(null);
+    setVoiceFileSource(null);
+    setVoiceFileResetKey((current) => current + 1);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+    setVoiceRecordingSeconds(0);
+    setVoiceRecordingState('requesting');
+
+    try {
+      const AudioContextConstructor = window.AudioContext ?? (window as WindowWithWebkitAudioContext).webkitAudioContext;
+
+      if (!navigator.mediaDevices?.getUserMedia || !AudioContextConstructor) {
+        throw new Error('Microphone recording is not available in this browser.');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          autoGainControl: true,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      const audioContext = new AudioContextConstructor();
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      const session: VoiceRecordingSession = {
+        audioContext,
+        chunks: [],
+        processor,
+        source,
+        startedAt: Date.now(),
+        stopTimer: null,
+        stream,
+      };
+
+      processor.onaudioprocess = (event) => {
+        session.chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+        event.outputBuffer.getChannelData(0).fill(0);
+      };
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      await audioContext.resume();
+
+      voiceRecordingRef.current = session;
+      session.stopTimer = window.setTimeout(() => {
+        stopVoiceRecording();
+      }, voiceProfileLimits.maxAudioSeconds * 1000);
+      setVoiceRecordingState('recording');
+    } catch (nextError) {
+      discardVoiceRecording();
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Unable to start microphone recording.');
+    }
+  }, [
+    canCreateMoreVoiceProfiles,
+    clearRecordedReference,
+    discardVoiceRecording,
+    stopVoiceRecording,
+    voiceProfileLimits.maxAudioSeconds,
+    voiceSubmitting,
+  ]);
+
+  const handleVoiceReferenceModeChange = useCallback((mode: VoiceReferenceInputMode) => {
+    if (mode === voiceReferenceMode) {
+      return;
+    }
+
+    discardVoiceRecording();
+    setVoiceReferenceMode(mode);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    if (mode === 'upload') {
+      if (voiceFileSource === 'recorded') {
+        setVoiceFile(null);
+      }
+      clearRecordedReference();
+    }
+
+    if (mode === 'record' && voiceFileSource === 'uploaded') {
+      setVoiceFile(null);
+      setVoiceFileSource(null);
+      setVoiceFileResetKey((current) => current + 1);
+    }
+  }, [clearRecordedReference, discardVoiceRecording, voiceFileSource, voiceReferenceMode]);
+
+  useEffect(() => {
+    if (!isVoiceRecording) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      const session = voiceRecordingRef.current;
+      setVoiceRecordingSeconds(session ? Math.floor((Date.now() - session.startedAt) / 1000) : 0);
+    }, 250);
+
+    return () => window.clearInterval(timer);
+  }, [isVoiceRecording]);
+
+  useEffect(() => {
+    return () => {
+      const session = voiceRecordingRef.current;
+
+      if (session) {
+        voiceRecordingRef.current = null;
+        cleanupVoiceRecordingSession(session);
+      }
+
+      if (recordedVoiceUrlRef.current) {
+        window.URL.revokeObjectURL(recordedVoiceUrlRef.current);
+      }
+    };
+  }, [cleanupVoiceRecordingSession]);
+
   const resetCreateForm = () => {
     setSourceName('');
     setTextInput('');
@@ -1805,12 +2079,16 @@ export function CustomerDashboardPage({
   };
 
   const resetVoiceForm = () => {
+    discardVoiceRecording();
+    clearRecordedReference();
     setVoiceForm({
       name: '',
       referenceText: '',
       setDefault: false,
     });
+    setVoiceReferenceMode('upload');
     setVoiceFile(null);
+    setVoiceFileSource(null);
     setVoiceFileResetKey((current) => current + 1);
   };
 
@@ -1829,8 +2107,12 @@ export function CustomerDashboardPage({
         throw new Error('Paste the exact reference text spoken in the WAV.');
       }
 
+      if (isVoiceRecordingBusy) {
+        throw new Error('Stop the microphone recording before creating the custom voice.');
+      }
+
       if (!voiceFile) {
-        throw new Error('Upload a WAV reference file.');
+        throw new Error('Upload or record a WAV reference file.');
       }
 
       if (!voiceFile.name.toLowerCase().endsWith('.wav')) {
@@ -2462,7 +2744,7 @@ export function CustomerDashboardPage({
             <form className="rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-4 sm:p-5" onSubmit={handleVoiceProfileSubmit}>
               <h3 className="text-lg font-semibold text-[#2f343b]">Create custom voice</h3>
               <p className="mt-2 text-sm leading-6 text-[#64584f]">
-                Upload a WAV reference between {voiceProfileLimits.minAudioSeconds}s and {voiceProfileLimits.maxAudioSeconds}s. The uploaded file is discarded after profile creation.
+                Upload or record a WAV reference between {voiceProfileLimits.minAudioSeconds}s and {voiceProfileLimits.maxAudioSeconds}s. The reference audio is discarded after profile creation.
               </p>
               {!canCreateMoreVoiceProfiles ? (
                 <div className="mt-4">
@@ -2486,21 +2768,133 @@ export function CustomerDashboardPage({
                   <TextArea
                     className="min-h-[150px]"
                     disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
-                    placeholder="Paste the exact text spoken in the uploaded WAV"
+                    placeholder="Paste the exact text spoken in the reference WAV"
                     value={voiceForm.referenceText}
                     onChange={(event) => setVoiceForm((current) => ({ ...current, referenceText: event.target.value }))}
                   />
                 </div>
                 <div>
                   <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Reference WAV</label>
-                  <input
-                    key={voiceFileResetKey}
-                    accept="audio/wav,audio/x-wav,.wav"
-                    className={textInputClassName}
-                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
-                    type="file"
-                    onChange={(event) => setVoiceFile(event.target.files?.[0] ?? null)}
-                  />
+                  <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[#d8cbbe] bg-white p-1">
+                    <button
+                      className={cx(
+                        'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold transition',
+                        voiceReferenceMode === 'upload'
+                          ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+                          : 'text-[#5a514a] hover:bg-[#f8f3ec]',
+                      )}
+                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
+                      onClick={() => handleVoiceReferenceModeChange('upload')}
+                      type="button"
+                    >
+                      <Upload className="h-4 w-4" />
+                      Upload WAV
+                    </button>
+                    <button
+                      className={cx(
+                        'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold transition',
+                        voiceReferenceMode === 'record'
+                          ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+                          : 'text-[#5a514a] hover:bg-[#f8f3ec]',
+                      )}
+                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                      onClick={() => handleVoiceReferenceModeChange('record')}
+                      type="button"
+                    >
+                      <Mic className="h-4 w-4" />
+                      Record
+                    </button>
+                  </div>
+
+                  {voiceReferenceMode === 'upload' ? (
+                    <div className="mt-3">
+                      <input
+                        key={voiceFileResetKey}
+                        accept="audio/wav,audio/x-wav,.wav"
+                        className={textInputClassName}
+                        disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                        type="file"
+                        onChange={(event) => {
+                          clearRecordedReference();
+                          discardVoiceRecording();
+                          const nextFile = event.target.files?.[0] ?? null;
+                          setVoiceFile(nextFile);
+                          setVoiceFileSource(nextFile ? 'uploaded' : null);
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-2xl border border-[#d8cbbe] bg-white p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-[#2f343b]">
+                            {isVoiceRecording
+                              ? `Recording ${formatCountdown(voiceRecordingSeconds)}`
+                              : recordedVoiceDuration !== null
+                                ? `Recorded ${formatDuration(recordedVoiceDuration)}`
+                                : 'Ready to record'}
+                          </div>
+                          <div className="mt-1 text-xs leading-5 text-[#6f645c]">
+                            {voiceProfileLimits.minAudioSeconds}s minimum, {formatCountdown(voiceProfileLimits.maxAudioSeconds)} maximum.
+                          </div>
+                        </div>
+                        {isVoiceRecording ? (
+                          <SecondaryButton
+                            className="w-full px-4 py-2.5 text-sm sm:w-auto"
+                            onClick={stopVoiceRecording}
+                            type="button"
+                          >
+                            <Square className="h-4 w-4" />
+                            Stop
+                          </SecondaryButton>
+                        ) : (
+                          <PrimaryButton
+                            className="w-full px-4 py-2.5 text-sm sm:w-auto"
+                            disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || voiceRecordingState === 'requesting'}
+                            onClick={() => void startVoiceRecording()}
+                            type="button"
+                          >
+                            {voiceRecordingState === 'requesting' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
+                            {voiceRecordingState === 'requesting' ? 'Opening mic...' : 'Start recording'}
+                          </PrimaryButton>
+                        )}
+                      </div>
+                      {isVoiceRecording ? (
+                        <div className="mt-4 h-3 overflow-hidden rounded-full bg-[#eadfce]">
+                          <div
+                            className="h-full rounded-full bg-[#ae6c4a] transition-[width] duration-300"
+                            style={{
+                              width: `${Math.min(100, (voiceRecordingSeconds / voiceProfileLimits.maxAudioSeconds) * 100)}%`,
+                            }}
+                          />
+                        </div>
+                      ) : null}
+                      {recordedVoiceUrl ? (
+                        <div className="mt-4 space-y-3">
+                          <audio className="w-full" controls src={recordedVoiceUrl} />
+                          <SecondaryButton
+                            className="w-full px-4 py-2.5 text-sm sm:w-auto"
+                            disabled={voiceSubmitting}
+                            onClick={() => {
+                              clearRecordedReference();
+                              setVoiceFile(null);
+                              setVoiceFileSource(null);
+                            }}
+                            type="button"
+                          >
+                            <X className="h-4 w-4" />
+                            Clear recording
+                          </SecondaryButton>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                  {voiceFile ? (
+                    <p className="mt-2 text-sm leading-6 text-[#6f645c]">
+                      Selected: {voiceFile.name} ({formatBytes(voiceFile.size)})
+                      {voiceFileSource === 'recorded' && recordedVoiceDuration !== null ? `, ${formatDuration(recordedVoiceDuration)}` : ''}
+                    </p>
+                  ) : null}
                   <p className="mt-2 text-sm leading-6 text-[#6f645c]">
                     WAV only. Maximum {formatBytes(voiceProfileLimits.maxAudioBytes)}.
                   </p>
@@ -2508,7 +2902,7 @@ export function CustomerDashboardPage({
                 <label className="flex items-center gap-3 text-sm font-semibold text-[#4f4740]">
                   <input
                     checked={voiceForm.setDefault}
-                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
                     type="checkbox"
                     onChange={(event) => setVoiceForm((current) => ({ ...current, setDefault: event.target.checked }))}
                   />
@@ -2516,7 +2910,7 @@ export function CustomerDashboardPage({
                 </label>
                 <PrimaryButton
                   className="w-full justify-center"
-                  disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                  disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
                   type="submit"
                 >
                   {voiceSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileAudio2 className="h-4 w-4" />}
