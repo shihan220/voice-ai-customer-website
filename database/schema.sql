@@ -352,6 +352,27 @@ CREATE INDEX IF NOT EXISTS idx_sample_generations_user_created_at
 CREATE INDEX IF NOT EXISTS idx_sample_generations_request_created_at
   ON sample_generations (sample_request_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS tts_voice_profiles (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  provider_profile_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  reference_text TEXT NOT NULL,
+  reference_audio_seconds NUMERIC(12, 3),
+  reference_sample_rate INTEGER,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_active_created_at
+  ON tts_voice_profiles (user_id, is_active, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_default_unique
+  ON tts_voice_profiles (user_id)
+  WHERE is_default = TRUE AND is_active = TRUE;
+
 CREATE TABLE IF NOT EXISTS tts_generation_jobs (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -370,6 +391,9 @@ CREATE TABLE IF NOT EXISTS tts_generation_jobs (
     CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'preview_queued', 'preview_processing', 'preview_ready', 'cancelling', 'cancelled')),
   processing_stage TEXT,
   provider_voice TEXT NOT NULL,
+  voice_profile_id BIGINT REFERENCES tts_voice_profiles (id) ON DELETE SET NULL,
+  voice_display_name TEXT NOT NULL DEFAULT 'Keypillar Bangla Female',
+  provider_voice_profile_id TEXT,
   wav_file TEXT,
   mp3_file TEXT,
   preview_file TEXT,

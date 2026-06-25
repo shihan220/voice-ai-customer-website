@@ -50,6 +50,8 @@ KEYPILLAR_TTS_ENDPOINT=/v1/voice/generate
 KEYPILLAR_TTS_VOICE_ID=keypillar-bd-female
 KEYPILLAR_TTS_FORMAT=wav
 KEYPILLAR_TTS_PRONUNCIATION_MODE=english_preserve
+KEYPILLAR_TTS_VOICE_PROFILES_ENDPOINT=/v1/voice-profiles
+TTS_MAX_ACTIVE_VOICE_PROFILES=3
 FFMPEG_PATH=ffmpeg
 ```
 
@@ -106,3 +108,7 @@ It also verifies the default Premium MP3 320 kbps + WAV preset, WAV-only mode wi
 - Do not send MP3 bitrate or quality preset fields to Keypillar. The website backend converts final WAV to MP3 with ffmpeg after generation when the user selected an MP3 preset.
 - WAV is the highest-quality download. MP3 is generated from the final WAV at the per-job quality preset selected by the user.
 - The Keypillar API key must stay server-side only. Never expose it in frontend code.
+- Custom reference voices are website-owned per user in `tts_voice_profiles`. The browser only receives local profile IDs and display names; provider profile IDs stay server-side.
+- The built-in voice is still available as `fixed`. Custom generation jobs store the selected local profile and provider profile at job creation time, so retry/start uses the original voice choice.
+- Reference WAV uploads are accepted through `/api/tts/voice-profiles`, validated with `ffprobe`, sent to Keypillar privately, and discarded by the website after provider profile creation.
+- Do not call provider-level default voice APIs for customers. Customer defaults are local database flags only.

@@ -250,6 +250,20 @@ export type TtsPronunciationRuleRecord = {
   updated_at: Date;
 };
 
+export type TtsVoiceProfileRecord = {
+  id: number;
+  user_id: number;
+  provider_profile_id: string;
+  display_name: string;
+  reference_text: string;
+  reference_audio_seconds: number | null;
+  reference_sample_rate: number | null;
+  is_active: boolean;
+  is_default: boolean;
+  created_at: Date;
+  updated_at: Date;
+};
+
 export type TtsGenerationJobRecord = {
   id: number;
   user_id: number;
@@ -265,6 +279,9 @@ export type TtsGenerationJobRecord = {
   status: TtsGenerationJobStatus;
   processing_stage: string | null;
   provider_voice: string;
+  voice_profile_id: number | null;
+  voice_display_name: string;
+  provider_voice_profile_id: string | null;
   wav_file: string | null;
   mp3_file: string | null;
   preview_file: string | null;
@@ -519,6 +536,33 @@ export async function ensureSchema() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS tts_voice_profiles (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      provider_profile_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      reference_text TEXT NOT NULL,
+      reference_audio_seconds NUMERIC(12, 3),
+      reference_sample_rate INTEGER,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      is_default BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_active_created_at
+      ON tts_voice_profiles (user_id, is_active, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_default_unique
+      ON tts_voice_profiles (user_id)
+      WHERE is_default = TRUE AND is_active = TRUE;
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS tts_generation_jobs (
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -537,6 +581,9 @@ export async function ensureSchema() {
         CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'preview_queued', 'preview_processing', 'preview_ready', 'cancelling', 'cancelled')),
       processing_stage TEXT,
       provider_voice TEXT NOT NULL,
+      voice_profile_id BIGINT REFERENCES tts_voice_profiles (id) ON DELETE SET NULL,
+      voice_display_name TEXT NOT NULL DEFAULT 'Keypillar Bangla Female',
+      provider_voice_profile_id TEXT,
       wav_file TEXT,
       mp3_file TEXT,
       preview_file TEXT,
@@ -563,7 +610,10 @@ export async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS full_generation_requested_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS cancellation_requested_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+      ADD COLUMN IF NOT EXISTS cancel_reason TEXT,
+      ADD COLUMN IF NOT EXISTS voice_profile_id BIGINT REFERENCES tts_voice_profiles (id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS voice_display_name TEXT NOT NULL DEFAULT 'Keypillar Bangla Female',
+      ADD COLUMN IF NOT EXISTS provider_voice_profile_id TEXT;
   `);
 
   await pool.query(`

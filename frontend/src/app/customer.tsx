@@ -119,8 +119,28 @@ type TtsGenerationJob = {
     | 'queued';
   tokenCost: number;
   updatedAt: string;
+  voiceDisplayName: string;
+  voiceProfileId: number | null;
   wavDownloadUrl: string | null;
   wordCount: number;
+};
+
+type TtsVoiceProfile = {
+  createdAt: string;
+  displayName: string;
+  id: number;
+  isDefault: boolean;
+  referenceAudioSeconds: number | null;
+  referenceSampleRate: number | null;
+  referenceText: string;
+  updatedAt: string;
+};
+
+type TtsVoiceProfileLimits = {
+  maxActiveProfiles: number;
+  maxAudioBytes: number;
+  maxAudioSeconds: number;
+  minAudioSeconds: number;
 };
 
 type TtsQualityPreset = 'high_mp3_wav' | 'premium_mp3_wav' | 'standard_mp3_wav' | 'wav_only';
@@ -1338,7 +1358,7 @@ function VerifyPhonePage({
   );
 }
 
-type DashboardTab = 'create' | 'history';
+type DashboardTab = 'create' | 'history' | 'voices';
 
 function countWordsForDashboardPreview(value: string) {
   const trimmed = value.trim();
@@ -1444,6 +1464,14 @@ function getBillingExplanation(qualityPreset: TtsQualityPreset) {
   }
 
   return `Preview is free. Full generation is billed only after the WAV and ${quality.mp3BitrateKbps} kbps MP3 finish successfully.`;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1024 * 1024) {
+    return `${Math.floor(bytes / (1024 * 1024)).toLocaleString()} MB`;
+  }
+
+  return `${Math.ceil(bytes / 1024).toLocaleString()} KB`;
 }
 
 function getActiveJobEstimateSeconds(job: TtsGenerationJob) {
@@ -1616,6 +1644,7 @@ export function CustomerDashboardPage({
   const [confirmJobAction, setConfirmJobAction] = useState<null | { job: TtsGenerationJob; type: 'cancel' | 'delete' | 'start' }>(null);
   const [sourceType, setSourceType] = useState<'pdf' | 'text'>('text');
   const [qualityPreset, setQualityPreset] = useState<TtsQualityPreset>('premium_mp3_wav');
+  const [selectedVoiceProfileId, setSelectedVoiceProfileId] = useState('fixed');
   const [sourceName, setSourceName] = useState('');
   const [textInput, setTextInput] = useState('');
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -1623,6 +1652,26 @@ export function CustomerDashboardPage({
   const [submitError, setSubmitError] = useState('');
   const [submitMessage, setSubmitMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [voiceProfiles, setVoiceProfiles] = useState<TtsVoiceProfile[]>([]);
+  const [voiceProfileLimits, setVoiceProfileLimits] = useState<TtsVoiceProfileLimits>({
+    maxActiveProfiles: 3,
+    maxAudioBytes: 16 * 1024 * 1024,
+    maxAudioSeconds: 120,
+    minAudioSeconds: 1,
+  });
+  const [voiceProfilesLoading, setVoiceProfilesLoading] = useState(true);
+  const [voiceProfilesError, setVoiceProfilesError] = useState('');
+  const [voiceActionError, setVoiceActionError] = useState('');
+  const [voiceActionMessage, setVoiceActionMessage] = useState('');
+  const [voiceActionId, setVoiceActionId] = useState<number | null>(null);
+  const [voiceSubmitting, setVoiceSubmitting] = useState(false);
+  const [voiceForm, setVoiceForm] = useState({
+    name: '',
+    referenceText: '',
+    setDefault: false,
+  });
+  const [voiceFile, setVoiceFile] = useState<File | null>(null);
+  const [voiceFileResetKey, setVoiceFileResetKey] = useState(0);
 
   const estimatedWordCount = useMemo(
     () => (sourceType === 'text' ? countWordsForDashboardPreview(textInput) : 0),
@@ -1635,6 +1684,12 @@ export function CustomerDashboardPage({
   const hasActiveJobs = jobs.some(isActiveTtsJob);
   const isInitialJobsLoading = jobsLoading && jobs.length === 0;
   const selectedQuality = getTtsQualityOption(qualityPreset);
+  const defaultVoiceProfile = voiceProfiles.find((profile) => profile.isDefault) ?? null;
+  const selectedVoiceProfile = selectedVoiceProfileId === 'fixed'
+    ? null
+    : voiceProfiles.find((profile) => String(profile.id) === selectedVoiceProfileId) ?? null;
+  const selectedVoiceName = selectedVoiceProfile?.displayName ?? 'Keypillar Bangla Female';
+  const canCreateMoreVoiceProfiles = voiceProfiles.length < voiceProfileLimits.maxActiveProfiles;
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const loadJobs = useCallback(async () => {
@@ -1670,12 +1725,45 @@ export function CustomerDashboardPage({
     }
   }, [onSessionRefresh]);
 
+  const loadVoiceProfiles = useCallback(async () => {
+    setVoiceProfilesLoading(true);
+
+    try {
+      const payload = await apiRequest<{
+        limits: TtsVoiceProfileLimits;
+        voiceProfiles: TtsVoiceProfile[];
+      }>('/api/tts/voice-profiles');
+
+      setVoiceProfiles(payload.voiceProfiles);
+      setVoiceProfileLimits(payload.limits);
+      setVoiceProfilesError('');
+      setSelectedVoiceProfileId((current) => {
+        if (current !== 'fixed' && payload.voiceProfiles.some((profile) => String(profile.id) === current)) {
+          return current;
+        }
+
+        const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault);
+        return defaultProfile ? String(defaultProfile.id) : 'fixed';
+      });
+    } catch (nextError) {
+      setVoiceProfilesError(nextError instanceof Error ? nextError.message : 'Failed to load your custom voices.');
+    } finally {
+      setVoiceProfilesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     jobsRef.current = [];
     setJobs([]);
     setJobsLoading(true);
     void loadJobs();
   }, [loadJobs, user.id]);
+
+  useEffect(() => {
+    setVoiceProfiles([]);
+    setVoiceProfilesLoading(true);
+    void loadVoiceProfiles();
+  }, [loadVoiceProfiles, user.id]);
 
   useEffect(() => {
     if (!hasActiveJobs) {
@@ -1714,6 +1802,114 @@ export function CustomerDashboardPage({
     }
 
     void loadJobs();
+  };
+
+  const resetVoiceForm = () => {
+    setVoiceForm({
+      name: '',
+      referenceText: '',
+      setDefault: false,
+    });
+    setVoiceFile(null);
+    setVoiceFileResetKey((current) => current + 1);
+  };
+
+  const handleVoiceProfileSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setVoiceSubmitting(true);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    try {
+      if (!voiceForm.name.trim()) {
+        throw new Error('Enter a name for this custom voice.');
+      }
+
+      if (!voiceForm.referenceText.trim()) {
+        throw new Error('Paste the exact reference text spoken in the WAV.');
+      }
+
+      if (!voiceFile) {
+        throw new Error('Upload a WAV reference file.');
+      }
+
+      if (!voiceFile.name.toLowerCase().endsWith('.wav')) {
+        throw new Error('Reference audio must be a WAV file.');
+      }
+
+      if (voiceFile.size > voiceProfileLimits.maxAudioBytes) {
+        throw new Error(`Reference WAV files must stay under ${formatBytes(voiceProfileLimits.maxAudioBytes)}.`);
+      }
+
+      const formData = new FormData();
+      formData.append('file', voiceFile);
+      formData.append('name', voiceForm.name.trim());
+      formData.append('referenceText', voiceForm.referenceText.trim());
+      formData.append('setDefault', String(voiceForm.setDefault));
+
+      const payload = await apiRequest<{
+        voiceProfile: TtsVoiceProfile;
+        voiceProfiles: TtsVoiceProfile[];
+      }>('/api/tts/voice-profiles', {
+        body: formData,
+        method: 'POST',
+      });
+
+      setVoiceProfiles(payload.voiceProfiles);
+      setSelectedVoiceProfileId(String(payload.voiceProfile.id));
+      setVoiceActionMessage('Custom voice profile created. The uploaded WAV was used for provider setup and is not stored by this website.');
+      resetVoiceForm();
+      await loadVoiceProfiles();
+    } catch (nextError) {
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to create the custom voice.');
+    } finally {
+      setVoiceSubmitting(false);
+    }
+  };
+
+  const handleSetDefaultVoiceProfile = async (profileId: number) => {
+    setVoiceActionId(profileId);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    try {
+      const payload = await apiRequest<{ voiceProfiles: TtsVoiceProfile[] }>(`/api/tts/voice-profiles/${profileId}/default`, {
+        method: 'POST',
+      });
+      setVoiceProfiles(payload.voiceProfiles);
+      setSelectedVoiceProfileId(String(profileId));
+      setVoiceActionMessage('Default custom voice updated.');
+    } catch (nextError) {
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to set default custom voice.');
+    } finally {
+      setVoiceActionId(null);
+    }
+  };
+
+  const handleDeactivateVoiceProfile = async (profileId: number) => {
+    setVoiceActionId(profileId);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    try {
+      const payload = await apiRequest<{ deactivatedId: number; voiceProfiles: TtsVoiceProfile[] }>(`/api/tts/voice-profiles/${profileId}/deactivate`, {
+        method: 'POST',
+      });
+      setVoiceProfiles(payload.voiceProfiles);
+      setSelectedVoiceProfileId((current) => {
+        if (current !== String(profileId)) {
+          return current;
+        }
+
+        const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault);
+        return defaultProfile ? String(defaultProfile.id) : 'fixed';
+      });
+      setVoiceActionMessage('Custom voice profile deactivated.');
+    } catch (nextError) {
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to deactivate the custom voice.');
+    } finally {
+      setVoiceActionId(null);
+    }
   };
 
   const handleRetryJob = async (jobId: number) => {
@@ -1859,6 +2055,7 @@ export function CustomerDashboardPage({
             inputText: textInput,
             qualityPreset,
             sourceName,
+            voiceProfileId: selectedVoiceProfileId,
           }),
           method: 'POST',
         });
@@ -1870,6 +2067,7 @@ export function CustomerDashboardPage({
         const formData = new FormData();
         formData.append('file', pdfFile);
         formData.append('qualityPreset', qualityPreset);
+        formData.append('voiceProfileId', selectedVoiceProfileId);
 
         if (sourceName.trim()) {
           formData.append('sourceName', sourceName.trim());
@@ -1950,6 +2148,18 @@ export function CustomerDashboardPage({
         >
           History
         </button>
+        <button
+          className={cx(
+            'rounded-full px-5 py-3 text-sm font-semibold transition',
+            activeTab === 'voices'
+              ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+              : 'border border-[#d8cbbe] bg-white/88 text-[#5a514a] hover:border-[#c7b09e] hover:text-[#a96544]',
+          )}
+          onClick={() => setActiveTab('voices')}
+          type="button"
+        >
+          My Voices
+        </button>
       </div>
 
       {activeTab === 'create' ? (
@@ -2021,6 +2231,26 @@ export function CustomerDashboardPage({
                 )}
 
                 <div>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Voice</label>
+                  <select
+                    className={textInputClassName}
+                    value={selectedVoiceProfileId}
+                    onChange={(event) => setSelectedVoiceProfileId(event.target.value)}
+                  >
+                    <option value="fixed">Keypillar Bangla Female</option>
+                    {voiceProfiles.map((profile) => (
+                      <option key={profile.id} value={String(profile.id)}>
+                        {profile.displayName}{profile.isDefault ? ' (default)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-sm leading-6 text-[#6f645c]">
+                    Custom voices are private to your account. Provider profile IDs stay on the website backend.
+                  </p>
+                  {voiceProfilesError ? <div className="mt-2"><InlineMessage tone="error">{voiceProfilesError}</InlineMessage></div> : null}
+                </div>
+
+                <div>
                   <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Download quality</label>
                   <select
                     className={textInputClassName}
@@ -2078,7 +2308,7 @@ export function CustomerDashboardPage({
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span>Voice</span>
-                    <span className="font-semibold text-[#2f343b]">keypillar-bd-female</span>
+                    <span className="text-right font-semibold text-[#2f343b]">{selectedVoiceName}</span>
                   </div>
                   <div className="flex items-start justify-between gap-3">
                     <span>Quality</span>
@@ -2130,6 +2360,171 @@ export function CustomerDashboardPage({
               </div>
             </div>
           </form>
+        </section>
+      ) : null}
+
+      {activeTab === 'voices' ? (
+        <section className="mt-6 rounded-[28px] border border-[#ddcfbe] bg-white/88 p-4 shadow-[0_18px_50px_rgba(55,58,64,0.08)] sm:p-6">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-[#2f343b]">My Voices</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-7 text-[#64584f]">
+                Create and manage custom reference voices for this account. Custom voices are private to your login and do not expose provider profile IDs in the browser.
+              </p>
+            </div>
+            <div className="rounded-full border border-[#d9c6b2] bg-[#faf7f1] px-4 py-2 text-sm font-semibold text-[#8d5d45]">
+              {voiceProfiles.length}/{voiceProfileLimits.maxActiveProfiles} active
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
+            <div className="space-y-3">
+              {voiceProfilesLoading ? (
+                <StatePanel
+                  description="Loading saved custom voices for this account."
+                  icon={<Loader2 className="h-5 w-5 animate-spin" />}
+                  title="Loading custom voices"
+                />
+              ) : null}
+              {voiceProfilesError ? (
+                <StatePanel
+                  action={(
+                    <SecondaryButton onClick={() => void loadVoiceProfiles()} type="button">
+                      <RefreshCw className="h-4 w-4" />
+                      Try again
+                    </SecondaryButton>
+                  )}
+                  description={voiceProfilesError}
+                  icon={<AlertTriangle className="h-5 w-5" />}
+                  title="Could not load custom voices"
+                  tone="error"
+                />
+              ) : null}
+              {!voiceProfilesLoading && !voiceProfilesError && voiceProfiles.length === 0 ? (
+                <StatePanel
+                  description="The built-in Keypillar Bangla Female voice is always available. Add a custom WAV reference voice when you need account-specific narration."
+                  icon={<FileAudio2 className="h-5 w-5" />}
+                  title="No custom voices yet"
+                />
+              ) : null}
+              {voiceProfiles.map((profile) => (
+                <div key={profile.id} className="rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-4 sm:p-5">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <h3 className="text-lg font-semibold text-[#2f343b]">{profile.displayName}</h3>
+                        {profile.isDefault ? (
+                          <span className="rounded-full bg-[#e5f4e5] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#355f3b]">
+                            Default
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-2 grid gap-2 text-sm text-[#64584f] sm:grid-cols-2">
+                        <div>Reference: {profile.referenceAudioSeconds === null ? 'Not measured' : formatDuration(profile.referenceAudioSeconds)}</div>
+                        <div>Sample rate: {profile.referenceSampleRate === null ? 'Not measured' : `${profile.referenceSampleRate.toLocaleString()} Hz`}</div>
+                      </div>
+                      <p className="mt-3 line-clamp-3 text-sm leading-7 text-[#5f564f]">{profile.referenceText}</p>
+                    </div>
+                    <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-end">
+                      {!profile.isDefault ? (
+                        <SecondaryButton
+                          className="w-full px-4 py-2 text-sm sm:w-auto"
+                          disabled={voiceActionId === profile.id}
+                          onClick={() => void handleSetDefaultVoiceProfile(profile.id)}
+                          type="button"
+                        >
+                          {voiceActionId === profile.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                          Set default
+                        </SecondaryButton>
+                      ) : null}
+                      <SecondaryButton
+                        className="w-full px-4 py-2 text-sm sm:w-auto"
+                        disabled={voiceActionId === profile.id}
+                        onClick={() => void handleDeactivateVoiceProfile(profile.id)}
+                        type="button"
+                      >
+                        {voiceActionId === profile.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                        Deactivate
+                      </SecondaryButton>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {voiceActionError ? <InlineMessage tone="error">{voiceActionError}</InlineMessage> : null}
+              {voiceActionMessage ? <InlineMessage tone="success">{voiceActionMessage}</InlineMessage> : null}
+              {defaultVoiceProfile ? (
+                <InlineMessage>
+                  New generation forms select {defaultVoiceProfile.displayName} by default. You can still choose Keypillar Bangla Female for any job.
+                </InlineMessage>
+              ) : null}
+            </div>
+
+            <form className="rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-4 sm:p-5" onSubmit={handleVoiceProfileSubmit}>
+              <h3 className="text-lg font-semibold text-[#2f343b]">Create custom voice</h3>
+              <p className="mt-2 text-sm leading-6 text-[#64584f]">
+                Upload a WAV reference between {voiceProfileLimits.minAudioSeconds}s and {voiceProfileLimits.maxAudioSeconds}s. The uploaded file is discarded after profile creation.
+              </p>
+              {!canCreateMoreVoiceProfiles ? (
+                <div className="mt-4">
+                  <InlineMessage>
+                    You already have {voiceProfileLimits.maxActiveProfiles} active custom voices. Deactivate one before creating another.
+                  </InlineMessage>
+                </div>
+              ) : null}
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Voice name</label>
+                  <TextInput
+                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                    placeholder="Example: Tanim narration"
+                    value={voiceForm.name}
+                    onChange={(event) => setVoiceForm((current) => ({ ...current, name: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Reference text</label>
+                  <TextArea
+                    className="min-h-[150px]"
+                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                    placeholder="Paste the exact text spoken in the uploaded WAV"
+                    value={voiceForm.referenceText}
+                    onChange={(event) => setVoiceForm((current) => ({ ...current, referenceText: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Reference WAV</label>
+                  <input
+                    key={voiceFileResetKey}
+                    accept="audio/wav,audio/x-wav,.wav"
+                    className={textInputClassName}
+                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                    type="file"
+                    onChange={(event) => setVoiceFile(event.target.files?.[0] ?? null)}
+                  />
+                  <p className="mt-2 text-sm leading-6 text-[#6f645c]">
+                    WAV only. Maximum {formatBytes(voiceProfileLimits.maxAudioBytes)}.
+                  </p>
+                </div>
+                <label className="flex items-center gap-3 text-sm font-semibold text-[#4f4740]">
+                  <input
+                    checked={voiceForm.setDefault}
+                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                    type="checkbox"
+                    onChange={(event) => setVoiceForm((current) => ({ ...current, setDefault: event.target.checked }))}
+                  />
+                  Set as my default custom voice
+                </label>
+                <PrimaryButton
+                  className="w-full justify-center"
+                  disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                  type="submit"
+                >
+                  {voiceSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileAudio2 className="h-4 w-4" />}
+                  {voiceSubmitting ? 'Creating voice...' : 'Create voice profile'}
+                </PrimaryButton>
+              </div>
+            </form>
+          </div>
         </section>
       ) : null}
 
@@ -2230,7 +2625,7 @@ export function CustomerDashboardPage({
                       <div>Minutes: {job.billableMinutes === null ? 'Not measured' : job.billableMinutes.toLocaleString()}</div>
                     </div>
                     <div className="mt-2 text-sm leading-6 text-[#7a6f66]">
-                      Voice: {job.providerVoice} • Quality: {getTtsQualityOption(job.qualityPreset).label}
+                      Voice: {job.voiceDisplayName} • Quality: {getTtsQualityOption(job.qualityPreset).label}
                       {job.generatedAudioSeconds !== null ? ` • Duration: ${formatDuration(job.generatedAudioSeconds)}` : ''}
                       {job.processingStage ? ` • Stage: ${statusLabel(job.processingStage)}` : ''}
                     </div>
@@ -2599,7 +2994,7 @@ export function CustomerJobDetailsPage({
           <div>
             <h2 className="text-xl font-bold text-[#2f343b]">Status timeline</h2>
             <p className="mt-2 text-sm leading-7 text-[#64584f]">
-              Voice: {job.providerVoice} • Quality: {getTtsQualityOption(job.qualityPreset).label}
+              Voice: {job.voiceDisplayName} • Quality: {getTtsQualityOption(job.qualityPreset).label}
               {job.processingStage ? ` • Stage: ${statusLabel(job.processingStage)}` : ''}
             </p>
           </div>

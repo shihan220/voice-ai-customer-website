@@ -26,8 +26,16 @@ import {
   retryTtsGenerationJob,
   startTtsGenerationFromPreview,
 } from '../services/tts-jobs.ts';
+import {
+  createTtsVoiceProfile,
+  deactivateTtsVoiceProfile,
+  getTtsVoiceProfileLimits,
+  listTtsVoiceProfilesForUser,
+  setDefaultTtsVoiceProfile,
+} from '../services/tts-voice-profiles.ts';
 
 const maxPdfFileSizeBytes = 10 * 1024 * 1024;
+const maxVoiceReferenceFileSizeBytes = 16 * 1024 * 1024;
 const ttsPreviewLimiter = createJsonRateLimiter({
   maxDevelopment: 20,
   maxProduction: 5,
@@ -46,6 +54,12 @@ const ttsDownloadLimiter = createJsonRateLimiter({
   message: 'Too many audio download requests. Please try again later.',
   windowMs: 10 * 60 * 1000,
 });
+const ttsVoiceProfileLimiter = createJsonRateLimiter({
+  maxDevelopment: 12,
+  maxProduction: 4,
+  message: 'Too many voice profile requests. Please try again later.',
+  windowMs: 15 * 60 * 1000,
+});
 
 const pdfUpload = multer({
   fileFilter: (_req, file, callback) => {
@@ -61,6 +75,25 @@ const pdfUpload = multer({
   },
   limits: {
     fileSize: maxPdfFileSizeBytes,
+  },
+  storage: multer.memoryStorage(),
+});
+
+const voiceReferenceUpload = multer({
+  fileFilter: (_req, file, callback) => {
+    const extension = file.originalname.toLowerCase().endsWith('.wav');
+    const mimeType = file.mimetype.toLowerCase();
+    const wavMimeType = mimeType === 'audio/wav' || mimeType === 'audio/x-wav' || mimeType === 'audio/wave';
+
+    if (!extension || !wavMimeType) {
+      callback(new Error('Upload a WAV reference file.'));
+      return;
+    }
+
+    callback(null, true);
+  },
+  limits: {
+    fileSize: maxVoiceReferenceFileSizeBytes,
   },
   storage: multer.memoryStorage(),
 });
@@ -91,9 +124,36 @@ function safeTtsErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function safeVoiceProfileErrorMessage(error: unknown, fallback: string) {
+  const statusCode = resolveStatusCode(error);
+
+  if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+    return `Reference WAV files must stay under ${Math.floor(maxVoiceReferenceFileSizeBytes / (1024 * 1024))} MB.`;
+  }
+
+  if (error instanceof Error && statusCode < 500) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
 async function runPdfUpload(req: Parameters<Router['post']>[1] extends never ? never : any, res: any) {
   await new Promise<void>((resolve, reject) => {
     pdfUpload.single('file')(req, res, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+async function runVoiceReferenceUpload(req: Parameters<Router['post']>[1] extends never ? never : any, res: any) {
+  await new Promise<void>((resolve, reject) => {
+    voiceReferenceUpload.single('file')(req, res, (error) => {
       if (error) {
         reject(error);
         return;
@@ -115,6 +175,19 @@ async function getHydratedCustomer(userId: number) {
   return applyStarterMonthlyRefillIfDue(granted);
 }
 
+function toTtsVoiceProfilePayload(profile: Awaited<ReturnType<typeof listTtsVoiceProfilesForUser>>[number]) {
+  return {
+    createdAt: profile.created_at,
+    displayName: profile.display_name,
+    id: Number(profile.id),
+    isDefault: profile.is_default,
+    referenceAudioSeconds: profile.reference_audio_seconds === null ? null : Number(profile.reference_audio_seconds),
+    referenceSampleRate: profile.reference_sample_rate === null ? null : Number(profile.reference_sample_rate),
+    referenceText: profile.reference_text,
+    updatedAt: profile.updated_at,
+  };
+}
+
 function toTtsJobPayload(job: TtsGenerationJobRecord, options?: { includeInputText?: boolean }) {
   return {
     createdAt: job.created_at,
@@ -133,6 +206,8 @@ function toTtsJobPayload(job: TtsGenerationJobRecord, options?: { includeInputTe
     processingStage: job.processing_stage,
     providerVoice: job.provider_voice,
     qualityPreset: job.quality_preset,
+    voiceDisplayName: job.voice_display_name,
+    voiceProfileId: job.voice_profile_id === null ? null : Number(job.voice_profile_id),
     cancelReason: job.cancel_reason,
     cancellationRequestedAt: job.cancellation_requested_at,
     cancelledAt: job.cancelled_at,
@@ -150,6 +225,103 @@ function toTtsJobPayload(job: TtsGenerationJobRecord, options?: { includeInputTe
 export function createTtsRouter() {
   const router = Router();
 
+  router.get('/api/tts/voice-profiles', requireCustomer, async (req, res) => {
+    try {
+      const profiles = await listTtsVoiceProfilesForUser(req.session.customerUser!.id);
+      res.json({
+        fixedVoice: {
+          displayName: 'Keypillar Bangla Female',
+          id: 'fixed',
+        },
+        limits: getTtsVoiceProfileLimits(),
+        voiceProfiles: profiles.map(toTtsVoiceProfilePayload),
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to load voice profiles.',
+      });
+    }
+  });
+
+  router.post('/api/tts/voice-profiles', requireCustomer, ttsVoiceProfileLimiter, async (req, res) => {
+    try {
+      await runVoiceReferenceUpload(req, res);
+
+      if (!req.file) {
+        res.status(400).json({ error: 'Upload a WAV reference file.' });
+        return;
+      }
+
+      const profile = await createTtsVoiceProfile({
+        audioBuffer: req.file.buffer,
+        displayName: requireText(req.body.name, 'Voice name is required.'),
+        referenceText: requireText(req.body.referenceText, 'Reference text is required.'),
+        setDefault: req.body.setDefault === 'true' || req.body.setDefault === true,
+        userId: req.session.customerUser!.id,
+      });
+
+      const profiles = await listTtsVoiceProfilesForUser(req.session.customerUser!.id);
+      res.status(201).json({
+        limits: getTtsVoiceProfileLimits(),
+        voiceProfile: toTtsVoiceProfilePayload(profile),
+        voiceProfiles: profiles.map(toTtsVoiceProfilePayload),
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: safeVoiceProfileErrorMessage(error, 'Failed to create the voice profile.'),
+      });
+    }
+  });
+
+  router.post('/api/tts/voice-profiles/:id/default', requireCustomer, ttsVoiceProfileLimiter, async (req, res) => {
+    try {
+      const profileId = Number(req.params.id);
+
+      if (!Number.isFinite(profileId)) {
+        res.status(400).json({ error: 'Valid voice profile id is required.' });
+        return;
+      }
+
+      const profile = await setDefaultTtsVoiceProfile(profileId, req.session.customerUser!.id);
+      const profiles = await listTtsVoiceProfilesForUser(req.session.customerUser!.id);
+
+      res.json({
+        voiceProfile: toTtsVoiceProfilePayload(profile),
+        voiceProfiles: profiles.map(toTtsVoiceProfilePayload),
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: safeVoiceProfileErrorMessage(error, 'Failed to set the default voice profile.'),
+      });
+    }
+  });
+
+  router.post('/api/tts/voice-profiles/:id/deactivate', requireCustomer, ttsVoiceProfileLimiter, async (req, res) => {
+    try {
+      const profileId = Number(req.params.id);
+
+      if (!Number.isFinite(profileId)) {
+        res.status(400).json({ error: 'Valid voice profile id is required.' });
+        return;
+      }
+
+      const profile = await deactivateTtsVoiceProfile(profileId, req.session.customerUser!.id);
+      const profiles = await listTtsVoiceProfilesForUser(req.session.customerUser!.id);
+
+      res.json({
+        deactivatedId: Number(profile.id),
+        voiceProfiles: profiles.map(toTtsVoiceProfilePayload),
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: safeVoiceProfileErrorMessage(error, 'Failed to deactivate the voice profile.'),
+      });
+    }
+  });
+
   router.post('/api/tts/jobs/text/preview', requireCustomer, ttsPreviewLimiter, async (req, res) => {
     try {
       const user = await getHydratedCustomer(req.session.customerUser!.id);
@@ -165,6 +337,7 @@ export function createTtsRouter() {
         sourceName: normalizeText(req.body.sourceName),
         sourceType: 'text',
         userId: user.id,
+        voiceProfileId: req.body.voiceProfileId,
       });
 
       res.status(201).json({
@@ -194,6 +367,7 @@ export function createTtsRouter() {
         sourceName: normalizeText(req.body.sourceName),
         sourceType: 'text',
         userId: user.id,
+        voiceProfileId: req.body.voiceProfileId,
       });
 
       res.status(201).json({
@@ -233,6 +407,7 @@ export function createTtsRouter() {
         sourceName,
         sourceType: 'pdf',
         userId: user.id,
+        voiceProfileId: req.body.voiceProfileId,
       });
 
       res.status(201).json({
@@ -272,6 +447,7 @@ export function createTtsRouter() {
         sourceName,
         sourceType: 'pdf',
         userId: user.id,
+        voiceProfileId: req.body.voiceProfileId,
       });
 
       res.status(201).json({

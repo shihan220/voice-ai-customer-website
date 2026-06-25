@@ -19,6 +19,9 @@ import {
   type TtsPronunciationRuleRecord,
   type UserRecord,
 } from '../db.ts';
+import {
+  resolveTtsVoiceSelectionForUser,
+} from './tts-voice-profiles.ts';
 
 const defaultKeypillarTtsApiUrl = 'https://api.keypillar.org/v1/voice/generate';
 const defaultKeypillarTtsBaseUrl = 'https://api.keypillar.org';
@@ -923,12 +926,14 @@ async function fetchAudioFromJsonPayload(payload: unknown, config: ReturnType<ty
   throw withStatus('Keypillar TTS response did not include downloadable audio.', 502);
 }
 
-async function generateWavChunk(text: string) {
+async function generateWavChunk(text: string, job: TtsGenerationJobRecord) {
   const config = getRuntimeConfig();
 
   if (!config.apiKey) {
     throw withStatus('KEYPILLAR_TTS_API_KEY is missing.', 503);
   }
+
+  const providerVoiceProfileId = job.provider_voice_profile_id ?? 'fixed';
 
   const response = await fetch(config.apiUrl, {
     body: JSON.stringify({
@@ -936,7 +941,8 @@ async function generateWavChunk(text: string) {
       pronunciation_mode: config.pronunciationMode,
       speed: 1.0,
       text,
-      voice: config.voiceId,
+      voice: job.provider_voice || config.voiceId,
+      voice_profile_id: providerVoiceProfileId,
     }),
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
@@ -1654,7 +1660,7 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
       return false;
     }
 
-    const chunkAudio = await generateWavChunk(segment.text);
+    const chunkAudio = await generateWavChunk(segment.text, job);
 
     if (await isJobCancellationRequested(job.id)) {
       await markJobCancelled(job.id);
@@ -1943,6 +1949,7 @@ async function createQueuedTtsGenerationJob(
     sourceName?: string | null;
     sourceType: TtsGenerationJobSourceType;
     userId: number;
+    voiceProfileId?: number | string | null;
   },
   initialStatus: 'preview_queued' | 'queued',
 ) {
@@ -1963,6 +1970,7 @@ async function createQueuedTtsGenerationJob(
 
     const currentBalance = assertUserCanQueueTtsJob(user);
     await assertUserCanQueueMoreTtsJobs(client, user.id, initialStatus);
+    const voiceSelection = await resolveTtsVoiceSelectionForUser(client, user.id, input.voiceProfileId);
     const stage = initialStatus === 'preview_queued' ? 'preview_queued' : 'queued';
 
     const jobResult = await client.query<TtsGenerationJobRecord>(
@@ -1978,9 +1986,12 @@ async function createQueuedTtsGenerationJob(
           mp3_bitrate_kbps,
           status,
           processing_stage,
-          provider_voice
+          provider_voice,
+          voice_profile_id,
+          voice_display_name,
+          provider_voice_profile_id
         )
-        VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *
       `,
       [
@@ -1994,6 +2005,9 @@ async function createQueuedTtsGenerationJob(
         initialStatus,
         stage,
         config.voiceId,
+        voiceSelection.voiceProfileId,
+        voiceSelection.voiceDisplayName,
+        voiceSelection.providerVoiceProfileId,
       ],
     );
     const createdJob = jobResult.rows[0];
@@ -2019,6 +2033,7 @@ export async function queueTtsGenerationJob(input: {
   sourceName?: string | null;
   sourceType: TtsGenerationJobSourceType;
   userId: number;
+  voiceProfileId?: number | string | null;
 }) {
   return createQueuedTtsGenerationJob(input, 'queued');
 }
@@ -2029,6 +2044,7 @@ export async function queueTtsPreviewJob(input: {
   sourceName?: string | null;
   sourceType: TtsGenerationJobSourceType;
   userId: number;
+  voiceProfileId?: number | string | null;
 }) {
   return createQueuedTtsGenerationJob(input, 'preview_queued');
 }
