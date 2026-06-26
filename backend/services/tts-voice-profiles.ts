@@ -15,6 +15,10 @@ import {
 } from '../db.ts';
 
 const defaultKeypillarTtsBaseUrl = 'https://api.keypillar.org';
+const defaultKeypillarTtsEndpoint = '/v1/voice/generate';
+const defaultKeypillarTtsFormat = 'wav';
+const defaultKeypillarTtsPronunciationMode = 'english_preserve';
+const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
 const defaultKeypillarVoiceProfilesEndpoint = '/v1/voice-profiles';
 const defaultFixedVoiceDisplayName = 'Keypillar Bangla Female';
 const defaultFfmpegPath = 'ffmpeg';
@@ -24,10 +28,18 @@ const maxReferenceTextLength = 4_000;
 const minReferenceAudioSeconds = 1;
 const maxReferenceAudioSeconds = 120;
 const providerUnavailablePublicMessage = 'Keypillar voice profile API is currently unavailable. The reference WAV was saved here and can be activated after the API is back online.';
+const testPreviewText = 'এটি আমার কাস্টম কণ্ঠের একটি ছোট পরীক্ষামূলক অডিও। বাক্যগুলো পরিষ্কারভাবে পড়া হচ্ছে, যাতে স্বর, বিরতি এবং উচ্চারণ বোঝা যায়।';
 
 type AudioMetadata = {
   durationSeconds: number;
   sampleRate: number;
+};
+
+type NormalizedReferenceAudio = {
+  audioBuffer: Buffer;
+  metadata: AudioMetadata;
+  normalizedAt: Date;
+  qualityWarnings: string[];
 };
 
 type ProviderSyncStatus = TtsVoiceProfileRecord['provider_sync_status'];
@@ -60,19 +72,26 @@ function isProviderVoiceProfileUnavailableError(error: unknown) {
 
 function getVoiceProfileConfig() {
   const apiKey = normalizeText(process.env.KEYPILLAR_TTS_API_KEY);
+  const configuredTtsApiUrl = normalizeText(process.env.KEYPILLAR_TTS_API_URL);
   const configuredApiUrl = normalizeText(process.env.KEYPILLAR_TTS_VOICE_PROFILES_API_URL);
   const baseUrl = normalizeText(process.env.KEYPILLAR_TTS_BASE_URL) ?? defaultKeypillarTtsBaseUrl;
+  const ttsEndpoint = normalizeText(process.env.KEYPILLAR_TTS_ENDPOINT) ?? defaultKeypillarTtsEndpoint;
   const endpoint = normalizeText(process.env.KEYPILLAR_TTS_VOICE_PROFILES_ENDPOINT) ?? defaultKeypillarVoiceProfilesEndpoint;
   const apiUrl = configuredApiUrl ?? new URL(endpoint, `${baseUrl.replace(/\/+$/, '')}/`).toString();
+  const ttsApiUrl = configuredTtsApiUrl ?? new URL(ttsEndpoint, `${baseUrl.replace(/\/+$/, '')}/`).toString();
   const configuredMaxActive = Number(process.env.TTS_MAX_ACTIVE_VOICE_PROFILES ?? defaultMaxActiveVoiceProfilesPerUser);
 
   return {
     apiKey,
     apiUrl,
     ffmpegPath: normalizeText(process.env.FFMPEG_PATH) ?? defaultFfmpegPath,
+    format: defaultKeypillarTtsFormat,
     maxActiveProfiles: Number.isFinite(configuredMaxActive) && configuredMaxActive > 0
       ? Math.floor(configuredMaxActive)
       : defaultMaxActiveVoiceProfilesPerUser,
+    pronunciationMode: normalizeText(process.env.KEYPILLAR_TTS_PRONUNCIATION_MODE) ?? defaultKeypillarTtsPronunciationMode,
+    ttsApiUrl,
+    voiceId: normalizeText(process.env.KEYPILLAR_TTS_VOICE_ID) ?? defaultKeypillarTtsVoiceId,
   };
 }
 
@@ -116,6 +135,33 @@ async function runCommandForStdout(command: string, args: string[]) {
   });
 }
 
+async function runCommand(command: string, args: string[]) {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+
+    let stderr = '';
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('error', (error) => {
+      reject(error);
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(stderr.trim() || `${command} exited with code ${code ?? 'unknown'}.`));
+    });
+  });
+}
+
 function assertWavBuffer(audioBuffer: Buffer) {
   const riffHeader = audioBuffer.subarray(0, 4).toString('ascii');
   const waveHeader = audioBuffer.subarray(8, 12).toString('ascii');
@@ -125,8 +171,9 @@ function assertWavBuffer(audioBuffer: Buffer) {
   }
 }
 
-async function inspectReferenceWav(audioBuffer: Buffer): Promise<AudioMetadata> {
+async function inspectReferenceWav(audioBuffer: Buffer, options: { enforceDurationLimits?: boolean } = {}): Promise<AudioMetadata> {
   assertWavBuffer(audioBuffer);
+  const enforceDurationLimits = options.enforceDurationLimits ?? true;
 
   const config = getVoiceProfileConfig();
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'keypillar-reference-'));
@@ -156,11 +203,11 @@ async function inspectReferenceWav(audioBuffer: Buffer): Promise<AudioMetadata> 
     const durationSeconds = Number(payload.format?.duration);
     const sampleRate = Number(payload.streams?.[0]?.sample_rate);
 
-    if (!Number.isFinite(durationSeconds) || durationSeconds < minReferenceAudioSeconds) {
+    if (!Number.isFinite(durationSeconds) || (enforceDurationLimits && durationSeconds < minReferenceAudioSeconds)) {
       throw withStatus('Reference audio must be at least 1 second long.', 400);
     }
 
-    if (durationSeconds > maxReferenceAudioSeconds) {
+    if (enforceDurationLimits && durationSeconds > maxReferenceAudioSeconds) {
       throw withStatus('Reference audio must be 120 seconds or shorter.', 400);
     }
 
@@ -172,6 +219,186 @@ async function inspectReferenceWav(audioBuffer: Buffer): Promise<AudioMetadata> 
       durationSeconds,
       sampleRate,
     };
+  } finally {
+    await fs.rm(tempDirectory, { force: true, recursive: true }).catch(() => undefined);
+  }
+}
+
+function parseVolumeDb(output: string, key: 'max_volume' | 'mean_volume') {
+  const match = output.match(new RegExp(`${key}:\\s*(-?[0-9.]+)\\s*dB`));
+  return match ? Number(match[1]) : null;
+}
+
+function parseSilenceWarnings(output: string, durationSeconds: number) {
+  const warnings: string[] = [];
+  const silenceStarts = [...output.matchAll(/silence_start:\s*([0-9.]+)/g)].map((match) => Number(match[1]));
+  const silenceEnds = [...output.matchAll(/silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)/g)]
+    .map((match) => ({
+      duration: Number(match[2]),
+      end: Number(match[1]),
+    }));
+  const firstSilenceEnd = silenceEnds[0];
+  const lastSilenceEnd = silenceEnds[silenceEnds.length - 1];
+
+  if (
+    silenceStarts.some((start) => Number.isFinite(start) && start <= 0.15) &&
+    firstSilenceEnd &&
+    Number.isFinite(firstSilenceEnd.duration) &&
+    firstSilenceEnd.duration > 1
+  ) {
+    warnings.push('Reference audio still has more than 1 second of leading silence.');
+  }
+
+  if (
+    lastSilenceEnd &&
+    Number.isFinite(lastSilenceEnd.end) &&
+    Number.isFinite(lastSilenceEnd.duration) &&
+    durationSeconds - lastSilenceEnd.end <= 0.2 &&
+    lastSilenceEnd.duration > 1
+  ) {
+    warnings.push('Reference audio still has more than 1 second of trailing silence.');
+  }
+
+  return warnings;
+}
+
+async function getAudioFilterOutput(command: string, args: string[]) {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+
+    let stderr = '';
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('error', (error) => {
+      reject(error);
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(stderr);
+        return;
+      }
+
+      reject(new Error(stderr.trim() || `${command} exited with code ${code ?? 'unknown'}.`));
+    });
+  });
+}
+
+async function buildReferenceQualityWarnings(filePath: string, metadata: AudioMetadata) {
+  const config = getVoiceProfileConfig();
+  const warnings: string[] = [];
+
+  if (metadata.durationSeconds < 45) {
+    warnings.push('Reference audio is shorter than 45 seconds. Around 1 minute usually gives better custom voice quality.');
+  }
+
+  if (metadata.durationSeconds > 100) {
+    warnings.push('Reference audio is longer than 1 minute 40 seconds. A focused 50-90 second sample usually works best.');
+  }
+
+  try {
+    const volumeOutput = await getAudioFilterOutput(config.ffmpegPath, [
+      '-hide_banner',
+      '-nostats',
+      '-i',
+      filePath,
+      '-af',
+      'volumedetect',
+      '-f',
+      'null',
+      '-',
+    ]);
+    const meanVolume = parseVolumeDb(volumeOutput, 'mean_volume');
+    const maxVolume = parseVolumeDb(volumeOutput, 'max_volume');
+
+    if (meanVolume !== null && meanVolume < -35) {
+      warnings.push('Reference audio is very quiet. Record closer to the microphone or increase input level.');
+    }
+
+    if (maxVolume !== null && maxVolume > -0.5) {
+      warnings.push('Reference audio may be clipping. Lower the microphone input level and avoid speaking too close to the mic.');
+    }
+  } catch {
+    warnings.push('Reference audio loudness could not be fully checked.');
+  }
+
+  try {
+    const silenceOutput = await getAudioFilterOutput(config.ffmpegPath, [
+      '-hide_banner',
+      '-nostats',
+      '-i',
+      filePath,
+      '-af',
+      'silencedetect=n=-45dB:d=0.3',
+      '-f',
+      'null',
+      '-',
+    ]);
+    warnings.push(...parseSilenceWarnings(silenceOutput, metadata.durationSeconds));
+  } catch {
+    warnings.push('Reference audio silence could not be fully checked.');
+  }
+
+  return [...new Set(warnings)];
+}
+
+async function normalizeReferenceAudio(audioBuffer: Buffer): Promise<NormalizedReferenceAudio> {
+  assertWavBuffer(audioBuffer);
+  await inspectReferenceWav(audioBuffer);
+
+  const config = getVoiceProfileConfig();
+  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'keypillar-reference-normalize-'));
+  const inputPath = path.join(tempDirectory, `${randomUUID()}-input.wav`);
+  const outputPath = path.join(tempDirectory, `${randomUUID()}-normalized.wav`);
+
+  try {
+    await fs.writeFile(inputPath, audioBuffer);
+    await runCommand(config.ffmpegPath, [
+      '-y',
+      '-i',
+      inputPath,
+      '-af',
+      [
+        'silenceremove=start_periods=1:start_duration=0.2:start_threshold=-50dB',
+        'areverse',
+        'silenceremove=start_periods=1:start_duration=0.4:start_threshold=-50dB',
+        'areverse',
+        'loudnorm=I=-20:TP=-3:LRA=11',
+      ].join(','),
+      '-ac',
+      '1',
+      '-ar',
+      '48000',
+      '-c:a',
+      'pcm_s16le',
+      outputPath,
+    ]);
+
+    const normalizedBuffer = await fs.readFile(outputPath);
+    const metadata = await inspectReferenceWav(normalizedBuffer, { enforceDurationLimits: false });
+    const qualityWarnings = await buildReferenceQualityWarnings(outputPath, metadata);
+
+    return {
+      audioBuffer: normalizedBuffer,
+      metadata,
+      normalizedAt: new Date(),
+      qualityWarnings,
+    };
+  } catch (error) {
+    if (error instanceof Error && 'statusCode' in error) {
+      throw error;
+    }
+
+    throw withStatus(
+      `Reference audio could not be normalized: ${error instanceof Error ? error.message : String(error)}`,
+      400,
+      'Reference WAV could not be processed. Upload a clean PCM WAV file and try again.',
+    );
   } finally {
     await fs.rm(tempDirectory, { force: true, recursive: true }).catch(() => undefined);
   }
@@ -228,6 +455,167 @@ function extractProviderProfileId(payload: unknown) {
   }
 
   return null;
+}
+
+function extractBase64AudioPayload(payload: unknown): Buffer | null {
+  const candidatePaths = [
+    ['audio_base64'],
+    ['audioBase64'],
+    ['audio'],
+    ['wav_base64'],
+    ['wavBase64'],
+    ['data', 'audio_base64'],
+    ['data', 'audioBase64'],
+    ['data', 'audio'],
+    ['result', 'audio_base64'],
+    ['result', 'audioBase64'],
+    ['result', 'audio'],
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    const value = getJsonValueCandidates(payload, candidatePath);
+
+    if (typeof value !== 'string' || !value.trim()) {
+      continue;
+    }
+
+    const cleanedValue = value.includes('base64,') ? value.split('base64,').pop() ?? '' : value;
+
+    try {
+      return Buffer.from(cleanedValue, 'base64');
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function extractAudioUrlFromPayload(payload: unknown) {
+  const candidatePaths = [
+    ['audio_url'],
+    ['audioUrl'],
+    ['url'],
+    ['download_url'],
+    ['downloadUrl'],
+    ['data', 'audio_url'],
+    ['data', 'audioUrl'],
+    ['data', 'url'],
+    ['result', 'audio_url'],
+    ['result', 'audioUrl'],
+    ['result', 'url'],
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    const value = getJsonValueCandidates(payload, candidatePath);
+
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+async function fetchProviderAudioUrl(audioUrl: string, apiKey: string) {
+  const response = await fetch(audioUrl, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw withStatus(`Test preview audio fetch failed with status ${response.status}.`, 502);
+  }
+
+  return Buffer.from(await response.arrayBuffer());
+}
+
+async function fetchAudioFromJsonPayload(payload: unknown, apiKey: string) {
+  const directAudio = extractBase64AudioPayload(payload);
+
+  if (directAudio) {
+    return directAudio;
+  }
+
+  const audioUrl = extractAudioUrlFromPayload(payload);
+
+  if (audioUrl) {
+    return fetchProviderAudioUrl(audioUrl, apiKey);
+  }
+
+  throw withStatus('Keypillar TTS response did not include downloadable audio.', 502);
+}
+
+async function generateProviderTestPreview(input: {
+  providerVoiceProfileId: string;
+}) {
+  const config = getVoiceProfileConfig();
+
+  if (!config.apiKey) {
+    throw withStatus('KEYPILLAR_TTS_API_KEY is missing.', 503);
+  }
+
+  const response = await fetch(config.ttsApiUrl, {
+    body: JSON.stringify({
+      format: config.format,
+      pronunciation_mode: config.pronunciationMode,
+      speed: 1.0,
+      text: testPreviewText,
+      voice: config.voiceId,
+      voice_profile_id: input.providerVoiceProfileId,
+    }),
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': randomUUID(),
+    },
+    method: 'POST',
+  }).catch((error: unknown) => {
+    throw withStatus(
+      `Keypillar TTS test preview request failed: ${error instanceof Error ? error.message : String(error)}`,
+      503,
+      'Keypillar TTS API is currently unavailable. Try the custom voice test again after the API is back online.',
+    );
+  });
+
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => '');
+    if (isCloudflareOriginUnavailable(response.status, errorBody)) {
+      throw withStatus(
+        `Keypillar TTS API unavailable with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
+        503,
+        'Keypillar TTS API is currently unavailable. Try the custom voice test again after the API is back online.',
+      );
+    }
+
+    throw withStatus(
+      `Keypillar TTS test preview failed with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
+      502,
+    );
+  }
+
+  if (contentType.includes('audio') || contentType.includes('octet-stream')) {
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  if (contentType.includes('json')) {
+    return fetchAudioFromJsonPayload(await response.json(), config.apiKey);
+  }
+
+  const rawBody = await response.text();
+
+  try {
+    return fetchAudioFromJsonPayload(JSON.parse(rawBody), config.apiKey);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw withStatus('Keypillar TTS returned an unsupported response format.', 502);
+    }
+
+    throw error;
+  }
 }
 
 async function createProviderVoiceProfile(input: {
@@ -369,11 +757,14 @@ function getVoiceProfilePaths(profile: Pick<TtsVoiceProfileRecord, 'display_name
   const profileDirectory = path.join(userDirectory, `profile-${profile.id}`);
   const safeStem = slugifyStem(profile.display_name) || `profile-${profile.id}`;
   const referenceAbsolutePath = path.join(profileDirectory, `${safeStem}-reference.wav`);
+  const testPreviewAbsolutePath = path.join(profileDirectory, `${safeStem}-test-preview.wav`);
 
   return {
     profileDirectory,
     referenceAbsolutePath,
     referenceRelativePath: path.relative(privateMediaRoot, referenceAbsolutePath),
+    testPreviewAbsolutePath,
+    testPreviewRelativePath: path.relative(privateMediaRoot, testPreviewAbsolutePath),
     userDirectory,
   };
 }
@@ -511,7 +902,7 @@ export async function createTtsVoiceProfile(input: {
 }) {
   const displayName = normalizeProfileName(input.displayName);
   const referenceText = normalizeReferenceText(input.referenceText);
-  const metadata = await inspectReferenceWav(input.audioBuffer);
+  const normalizedReference = await normalizeReferenceAudio(input.audioBuffer);
   const config = getVoiceProfileConfig();
 
   const preflightResult = await pool.query<{ count: string }>(
@@ -535,7 +926,7 @@ export async function createTtsVoiceProfile(input: {
 
   try {
     providerProfileId = await createProviderVoiceProfile({
-      audioBuffer: input.audioBuffer,
+      audioBuffer: normalizedReference.audioBuffer,
       displayName,
       referenceText,
     });
@@ -588,9 +979,11 @@ export async function createTtsVoiceProfile(input: {
           reference_text,
           reference_audio_seconds,
           reference_sample_rate,
+          reference_normalized_at,
+          reference_quality_warnings,
           is_default
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
         RETURNING *
       `,
       [
@@ -601,8 +994,10 @@ export async function createTtsVoiceProfile(input: {
         providerSyncStatus === 'ready' ? new Date() : null,
         displayName,
         referenceText,
-        metadata.durationSeconds,
-        metadata.sampleRate,
+        normalizedReference.metadata.durationSeconds,
+        normalizedReference.metadata.sampleRate,
+        normalizedReference.normalizedAt,
+        JSON.stringify(normalizedReference.qualityWarnings),
         canSetDefault,
       ],
     );
@@ -611,7 +1006,7 @@ export async function createTtsVoiceProfile(input: {
     profileDirectoryToClean = profilePaths.profileDirectory;
 
     await fs.mkdir(profilePaths.profileDirectory, { recursive: true });
-    await fs.writeFile(profilePaths.referenceAbsolutePath, input.audioBuffer);
+    await fs.writeFile(profilePaths.referenceAbsolutePath, normalizedReference.audioBuffer);
 
     const storedProfileResult = await client.query<TtsVoiceProfileRecord>(
       `
@@ -623,7 +1018,7 @@ export async function createTtsVoiceProfile(input: {
         WHERE id = $1
         RETURNING *
       `,
-      [createdProfile.id, profilePaths.referenceRelativePath, input.audioBuffer.byteLength],
+      [createdProfile.id, profilePaths.referenceRelativePath, normalizedReference.audioBuffer.byteLength],
     );
 
     await client.query('COMMIT');
@@ -674,12 +1069,13 @@ export async function syncTtsVoiceProfileWithProvider(profileId: number, userId:
       'Reference WAV is missing. Delete this voice and create a new one.',
     );
   });
+  const normalizedReference = await normalizeReferenceAudio(audioBuffer);
 
   let providerProfileId: string | null = null;
 
   try {
     providerProfileId = await createProviderVoiceProfile({
-      audioBuffer,
+      audioBuffer: normalizedReference.audioBuffer,
       displayName: profile.display_name,
       referenceText: profile.reference_text,
     });
@@ -706,6 +1102,10 @@ export async function syncTtsVoiceProfileWithProvider(profileId: number, userId:
   }
 
   try {
+    const profilePaths = getVoiceProfilePaths(profile);
+    await fs.mkdir(profilePaths.profileDirectory, { recursive: true });
+    await fs.writeFile(profilePaths.referenceAbsolutePath, normalizedReference.audioBuffer);
+
     const updatedResult = await pool.query<TtsVoiceProfileRecord>(
       `
         UPDATE tts_voice_profiles
@@ -714,13 +1114,29 @@ export async function syncTtsVoiceProfileWithProvider(profileId: number, userId:
           provider_sync_status = 'ready',
           provider_sync_error = NULL,
           provider_synced_at = NOW(),
+          reference_audio_seconds = $4,
+          reference_sample_rate = $5,
+          reference_audio_file = $6,
+          reference_audio_file_size_bytes = $7,
+          reference_normalized_at = $8,
+          reference_quality_warnings = $9::jsonb,
           updated_at = NOW()
         WHERE id = $1
           AND user_id = $2
           AND is_active = TRUE
         RETURNING *
       `,
-      [profileId, userId, providerProfileId],
+      [
+        profileId,
+        userId,
+        providerProfileId,
+        normalizedReference.metadata.durationSeconds,
+        normalizedReference.metadata.sampleRate,
+        profilePaths.referenceRelativePath,
+        normalizedReference.audioBuffer.byteLength,
+        normalizedReference.normalizedAt,
+        JSON.stringify(normalizedReference.qualityWarnings),
+      ],
     );
     const updatedProfile = updatedResult.rows[0];
 
@@ -733,6 +1149,89 @@ export async function syncTtsVoiceProfileWithProvider(profileId: number, userId:
     await tryDeactivateProviderVoiceProfile(providerProfileId);
     throw error;
   }
+}
+
+export async function generateTtsVoiceProfileTestPreview(profileId: number, userId: number) {
+  const profileResult = await pool.query<TtsVoiceProfileRecord>(
+    `
+      SELECT *
+      FROM tts_voice_profiles
+      WHERE id = $1
+        AND user_id = $2
+        AND is_active = TRUE
+      LIMIT 1
+    `,
+    [profileId, userId],
+  );
+  const profile = profileResult.rows[0];
+
+  if (!profile) {
+    throw withStatus('Voice profile not found.', 404);
+  }
+
+  if (profile.provider_sync_status !== 'ready' || !profile.provider_profile_id) {
+    throw withStatus('Activate this voice before generating a test preview.', 409);
+  }
+
+  const profilePaths = getVoiceProfilePaths(profile);
+  const previewAudio = await generateProviderTestPreview({
+    providerVoiceProfileId: profile.provider_profile_id,
+  });
+  const metadata = await inspectReferenceWav(previewAudio);
+
+  await fs.mkdir(profilePaths.profileDirectory, { recursive: true });
+  await fs.writeFile(profilePaths.testPreviewAbsolutePath, previewAudio);
+
+  const updatedResult = await pool.query<TtsVoiceProfileRecord>(
+    `
+      UPDATE tts_voice_profiles
+      SET
+        test_preview_file = $3,
+        test_preview_audio_seconds = $4,
+        test_preview_generated_at = NOW(),
+        updated_at = NOW()
+      WHERE id = $1
+        AND user_id = $2
+        AND is_active = TRUE
+      RETURNING *
+    `,
+    [profileId, userId, profilePaths.testPreviewRelativePath, metadata.durationSeconds],
+  );
+  const updatedProfile = updatedResult.rows[0];
+
+  if (!updatedProfile) {
+    throw withStatus('Voice profile not found.', 404);
+  }
+
+  return updatedProfile;
+}
+
+export async function getOwnedTtsVoiceProfileTestPreviewPath(profileId: number, userId: number) {
+  const result = await pool.query<TtsVoiceProfileRecord>(
+    `
+      SELECT *
+      FROM tts_voice_profiles
+      WHERE id = $1
+        AND user_id = $2
+        AND is_active = TRUE
+      LIMIT 1
+    `,
+    [profileId, userId],
+  );
+  const profile = result.rows[0];
+
+  if (!profile) {
+    throw withStatus('Voice profile not found.', 404);
+  }
+
+  if (!profile.test_preview_file) {
+    throw withStatus('Test preview is not available for this voice profile yet.', 404);
+  }
+
+  return {
+    displayName: profile.display_name,
+    filePath: resolvePrivateReferencePath(profile.test_preview_file),
+  };
 }
 
 export async function setDefaultTtsVoiceProfile(profileId: number, userId: number) {
@@ -842,6 +1341,9 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
           is_default = FALSE,
           reference_audio_file = NULL,
           reference_audio_file_size_bytes = NULL,
+          test_preview_file = NULL,
+          test_preview_audio_seconds = NULL,
+          test_preview_generated_at = NULL,
           updated_at = NOW()
         WHERE id = $1
           AND user_id = $2

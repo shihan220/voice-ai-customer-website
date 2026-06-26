@@ -29,7 +29,9 @@ import {
 import {
   createTtsVoiceProfile,
   deactivateTtsVoiceProfile,
+  generateTtsVoiceProfileTestPreview,
   getOwnedTtsVoiceProfileReferencePath,
+  getOwnedTtsVoiceProfileTestPreviewPath,
   getTtsVoiceProfileLimits,
   listTtsVoiceProfilesForUser,
   setDefaultTtsVoiceProfile,
@@ -186,6 +188,10 @@ async function getHydratedCustomer(userId: number) {
 }
 
 function toTtsVoiceProfilePayload(profile: Awaited<ReturnType<typeof listTtsVoiceProfilesForUser>>[number]) {
+  const qualityWarnings = Array.isArray(profile.reference_quality_warnings)
+    ? profile.reference_quality_warnings.filter((warning): warning is string => typeof warning === 'string')
+    : [];
+
   return {
     createdAt: profile.created_at,
     displayName: profile.display_name,
@@ -196,9 +202,16 @@ function toTtsVoiceProfilePayload(profile: Awaited<ReturnType<typeof listTtsVoic
     providerSyncedAt: profile.provider_synced_at,
     referenceAudioDownloadUrl: profile.reference_audio_file ? `/api/tts/voice-profiles/${profile.id}/reference` : null,
     referenceAudioFileSizeBytes: profile.reference_audio_file_size_bytes === null ? null : Number(profile.reference_audio_file_size_bytes),
+    referenceNormalizedAt: profile.reference_normalized_at,
+    referenceQualityWarnings: qualityWarnings,
     referenceAudioSeconds: profile.reference_audio_seconds === null ? null : Number(profile.reference_audio_seconds),
     referenceSampleRate: profile.reference_sample_rate === null ? null : Number(profile.reference_sample_rate),
     referenceText: profile.reference_text,
+    testPreviewAudioSeconds: profile.test_preview_audio_seconds === null ? null : Number(profile.test_preview_audio_seconds),
+    testPreviewAudioUrl: profile.test_preview_file
+      ? `/api/tts/voice-profiles/${profile.id}/test-preview?ts=${profile.test_preview_generated_at?.getTime?.() ?? Date.now()}`
+      : null,
+    testPreviewGeneratedAt: profile.test_preview_generated_at,
     updatedAt: profile.updated_at,
   };
 }
@@ -317,6 +330,30 @@ export function createTtsRouter() {
     }
   });
 
+  router.post('/api/tts/voice-profiles/:id/test-preview', requireCustomer, ttsVoiceProfileLimiter, async (req, res) => {
+    try {
+      const profileId = Number(req.params.id);
+
+      if (!Number.isFinite(profileId)) {
+        res.status(400).json({ error: 'Valid voice profile id is required.' });
+        return;
+      }
+
+      const profile = await generateTtsVoiceProfileTestPreview(profileId, req.session.customerUser!.id);
+      const profiles = await listTtsVoiceProfilesForUser(req.session.customerUser!.id);
+
+      res.json({
+        voiceProfile: toTtsVoiceProfilePayload(profile),
+        voiceProfiles: profiles.map(toTtsVoiceProfilePayload),
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: safeVoiceProfileErrorMessage(error, 'Failed to generate the voice test preview.'),
+      });
+    }
+  });
+
   router.post('/api/tts/voice-profiles/:id/default', requireCustomer, ttsVoiceProfileLimiter, async (req, res) => {
     try {
       const profileId = Number(req.params.id);
@@ -380,6 +417,26 @@ export function createTtsRouter() {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
         error: safeVoiceProfileErrorMessage(error, 'Failed to download the reference WAV.'),
+      });
+    }
+  });
+
+  router.get('/api/tts/voice-profiles/:id/test-preview', requireCustomer, ttsDownloadLimiter, async (req, res) => {
+    try {
+      const profileId = Number(req.params.id);
+
+      if (!Number.isFinite(profileId)) {
+        res.status(400).json({ error: 'Valid voice profile id is required.' });
+        return;
+      }
+
+      const preview = await getOwnedTtsVoiceProfileTestPreviewPath(profileId, req.session.customerUser!.id);
+      res.type('audio/wav');
+      res.sendFile(preview.filePath);
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: safeVoiceProfileErrorMessage(error, 'Failed to play the test preview.'),
       });
     }
   });

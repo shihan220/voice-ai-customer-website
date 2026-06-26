@@ -263,6 +263,11 @@ export type TtsVoiceProfileRecord = {
   reference_sample_rate: number | null;
   reference_audio_file: string | null;
   reference_audio_file_size_bytes: number | null;
+  reference_normalized_at: Date | null;
+  reference_quality_warnings: string[];
+  test_preview_audio_seconds: number | null;
+  test_preview_file: string | null;
+  test_preview_generated_at: Date | null;
   is_active: boolean;
   is_default: boolean;
   created_at: Date;
@@ -555,6 +560,11 @@ export async function ensureSchema() {
       reference_sample_rate INTEGER,
       reference_audio_file TEXT,
       reference_audio_file_size_bytes BIGINT,
+      reference_normalized_at TIMESTAMPTZ,
+      reference_quality_warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      test_preview_file TEXT,
+      test_preview_audio_seconds NUMERIC(12, 3),
+      test_preview_generated_at TIMESTAMPTZ,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       is_default BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -568,7 +578,12 @@ export async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS reference_audio_file_size_bytes BIGINT,
       ADD COLUMN IF NOT EXISTS provider_sync_status TEXT NOT NULL DEFAULT 'ready',
       ADD COLUMN IF NOT EXISTS provider_sync_error TEXT,
-      ADD COLUMN IF NOT EXISTS provider_synced_at TIMESTAMPTZ;
+      ADD COLUMN IF NOT EXISTS provider_synced_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS reference_normalized_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS reference_quality_warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS test_preview_file TEXT,
+      ADD COLUMN IF NOT EXISTS test_preview_audio_seconds NUMERIC(12, 3),
+      ADD COLUMN IF NOT EXISTS test_preview_generated_at TIMESTAMPTZ;
   `);
 
   await pool.query(`

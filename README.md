@@ -83,6 +83,7 @@ Required environment variables are documented in `.env.example`. The main ones a
 - `KEYPILLAR_TTS_VOICE_PROFILES_API_URL` (optional override)
 - `FFMPEG_PATH`
 - `TTS_CHUNK_MAX_CHARS`
+- `TTS_CUSTOM_VOICE_CHUNK_MAX_CHARS`
 - `TTS_MAX_ACTIVE_VOICE_PROFILES`
 
 Optional integrations:

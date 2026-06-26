@@ -139,9 +139,14 @@ type TtsVoiceProfile = {
   providerSyncedAt: string | null;
   referenceAudioDownloadUrl: string | null;
   referenceAudioFileSizeBytes: number | null;
+  referenceNormalizedAt: string | null;
+  referenceQualityWarnings: string[];
   referenceAudioSeconds: number | null;
   referenceSampleRate: number | null;
   referenceText: string;
+  testPreviewAudioSeconds: number | null;
+  testPreviewAudioUrl: string | null;
+  testPreviewGeneratedAt: string | null;
   updatedAt: string;
 };
 
@@ -1747,6 +1752,7 @@ export function CustomerDashboardPage({
   const [voiceActionId, setVoiceActionId] = useState<number | null>(null);
   const [voiceSubmitting, setVoiceSubmitting] = useState(false);
   const [voiceScriptMode, setVoiceScriptMode] = useState<VoiceScriptMode>('recommended');
+  const [customScriptConfirmed, setCustomScriptConfirmed] = useState(false);
   const [voiceForm, setVoiceForm] = useState({
     name: '',
     referenceText: recommendedVoiceReferenceScript,
@@ -1982,13 +1988,21 @@ export function CustomerDashboardPage({
         throw new Error('Microphone recording is not available in this browser.');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          autoGainControl: true,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-      });
+      let stream: MediaStream;
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            autoGainControl: false,
+            channelCount: 1,
+            echoCancellation: false,
+            noiseSuppression: false,
+          },
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setVoiceActionMessage('This browser could not provide raw microphone input. Record in a quiet room and keep headphones or speakers silent.');
+      }
       const audioContext = new AudioContextConstructor();
       const source = audioContext.createMediaStreamSource(stream);
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
@@ -2100,6 +2114,7 @@ export function CustomerDashboardPage({
     discardVoiceRecording();
     clearRecordedReference();
     setVoiceScriptMode('recommended');
+    setCustomScriptConfirmed(false);
     setVoiceForm({
       name: '',
       referenceText: recommendedVoiceReferenceScript,
@@ -2113,6 +2128,7 @@ export function CustomerDashboardPage({
 
   const handleVoiceScriptModeChange = (mode: VoiceScriptMode) => {
     setVoiceScriptMode(mode);
+    setCustomScriptConfirmed(false);
     setVoiceActionError('');
     setVoiceActionMessage('');
 
@@ -2142,6 +2158,10 @@ export function CustomerDashboardPage({
 
       if (!voiceForm.referenceText.trim()) {
         throw new Error('Use the recommended script or paste the exact reference text spoken in the WAV.');
+      }
+
+      if (voiceScriptMode === 'custom' && !customScriptConfirmed) {
+        throw new Error('Confirm that the WAV says exactly the custom script before creating the voice.');
       }
 
       if (isVoiceRecordingBusy) {
@@ -2210,6 +2230,28 @@ export function CustomerDashboardPage({
       setVoiceActionMessage('Custom voice activated. You can now use it in the generation voice selector.');
     } catch (nextError) {
       setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to activate the custom voice.');
+    } finally {
+      setVoiceActionId(null);
+    }
+  };
+
+  const handleGenerateVoiceTestPreview = async (profileId: number) => {
+    setVoiceActionId(profileId);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    try {
+      const payload = await apiRequest<{
+        voiceProfile: TtsVoiceProfile;
+        voiceProfiles: TtsVoiceProfile[];
+      }>(`/api/tts/voice-profiles/${profileId}/test-preview`, {
+        method: 'POST',
+      });
+      setVoiceProfiles(payload.voiceProfiles);
+      setSelectedVoiceProfileId(String(payload.voiceProfile.id));
+      setVoiceActionMessage('Test preview generated. Play it below to check whether this custom voice sounds right.');
+    } catch (nextError) {
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to generate the custom voice test preview.');
     } finally {
       setVoiceActionId(null);
     }
@@ -2793,13 +2835,34 @@ export function CustomerDashboardPage({
                         <div>
                           Status: {profile.providerSyncStatus === 'ready' ? 'Ready to use' : 'Saved locally'}
                         </div>
+                        <div>
+                          Normalized: {profile.referenceNormalizedAt ? 'Yes' : 'Not yet'}
+                        </div>
                       </div>
                       <p className="mt-3 line-clamp-3 text-sm leading-7 text-[#5f564f]">{profile.referenceText}</p>
+                      {profile.referenceQualityWarnings.length > 0 ? (
+                        <div className="mt-3 rounded-2xl border border-[#eadfce] bg-white/80 p-3">
+                          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8d5d45]">Reference quality notes</div>
+                          <ul className="mt-2 space-y-1 text-sm leading-6 text-[#64584f]">
+                            {profile.referenceQualityWarnings.map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
                       {profile.providerSyncStatus === 'pending' ? (
                         <div className="mt-3">
                           <InlineMessage>
                             {profile.providerSyncError ?? 'The recording is saved here. Retry activation after the Keypillar API is back online.'}
                           </InlineMessage>
+                        </div>
+                      ) : null}
+                      {profile.testPreviewAudioUrl ? (
+                        <div className="mt-3 space-y-2">
+                          <div className="text-sm font-semibold text-[#2f343b]">
+                            Test preview{profile.testPreviewAudioSeconds === null ? '' : ` (${formatDuration(profile.testPreviewAudioSeconds)})`}
+                          </div>
+                          <audio className="w-full" controls src={profile.testPreviewAudioUrl} />
                         </div>
                       ) : null}
                     </div>
@@ -2833,6 +2896,17 @@ export function CustomerDashboardPage({
                         >
                           {voiceActionId === profile.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                           Set default
+                        </SecondaryButton>
+                      ) : null}
+                      {profile.providerSyncStatus === 'ready' ? (
+                        <SecondaryButton
+                          className="w-full px-4 py-2 text-sm sm:w-auto"
+                          disabled={voiceActionId === profile.id}
+                          onClick={() => void handleGenerateVoiceTestPreview(profile.id)}
+                          type="button"
+                        >
+                          {voiceActionId === profile.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                          Test this voice
                         </SecondaryButton>
                       ) : null}
                       <SecondaryButton
@@ -2979,6 +3053,16 @@ export function CustomerDashboardPage({
                             Make sure the uploaded or recorded WAV says exactly this text. Mismatched text can reduce custom voice quality.
                           </InlineMessage>
                         </div>
+                        <label className="mt-3 flex items-start gap-3 rounded-2xl border border-[#eadfce] bg-white/80 px-4 py-3 text-sm font-semibold leading-6 text-[#4f4740]">
+                          <input
+                            checked={customScriptConfirmed}
+                            className="mt-1"
+                            disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                            type="checkbox"
+                            onChange={(event) => setCustomScriptConfirmed(event.target.checked)}
+                          />
+                          I confirm the WAV says exactly this custom script.
+                        </label>
                       </div>
                     )}
                   </div>
@@ -3053,6 +3137,9 @@ export function CustomerDashboardPage({
                           </div>
                           <div className="mt-1 text-xs leading-5 text-[#6f645c]">
                             {voiceProfileLimits.minAudioSeconds}s minimum, {formatCountdown(voiceProfileLimits.maxAudioSeconds)} maximum.
+                          </div>
+                          <div className="mt-1 text-xs leading-5 text-[#6f645c]">
+                            Recording asks the browser for raw mono input with echo cancellation, noise suppression, and auto gain turned off. Keep headphones and speakers silent.
                           </div>
                         </div>
                         {isVoiceRecording ? (
@@ -3138,7 +3225,7 @@ export function CustomerDashboardPage({
                     </label>
                     <PrimaryButton
                       className="w-full justify-center sm:w-auto"
-                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
+                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy || (voiceScriptMode === 'custom' && !customScriptConfirmed)}
                       type="submit"
                     >
                       {voiceSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileAudio2 className="h-4 w-4" />}

@@ -31,6 +31,7 @@ const defaultKeypillarTtsPronunciationMode = 'english_preserve';
 const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
 const defaultFfmpegPath = 'ffmpeg';
 const defaultTtsChunkMaxChars = 1_200;
+const defaultCustomVoiceChunkMaxChars = 220;
 const maxInputCharacters = 120_000;
 const maxActivePreviewJobsPerUser = 2;
 const maxActiveGenerationJobsPerUser = 1;
@@ -40,6 +41,11 @@ const headingPauseMs = 900;
 const listItemPauseMs = 450;
 const paragraphPauseMs = 800;
 const sentencePauseMs = 340;
+const customVoiceChunkPauseMs = 220;
+const customVoiceHeadingPauseMs = 900;
+const customVoiceListItemPauseMs = 420;
+const customVoiceParagraphPauseMs = 750;
+const customVoiceSentencePauseMs = 320;
 const previewWordLimit = 85;
 
 type SpeechSegment = {
@@ -55,6 +61,16 @@ type AudioMergePart = {
 type AudioStreamFormat = {
   channels: number;
   sampleRate: number;
+};
+
+type SpeechProfile = {
+  allowClauseFallback: boolean;
+  chunkMaxChars: number;
+  chunkPauseMs: number;
+  headingPauseMs: number;
+  listItemPauseMs: number;
+  paragraphPauseMs: number;
+  sentencePauseMs: number;
 };
 
 const ttsQualityPresets: Record<TtsGenerationQualityPreset, { label: string; mp3BitrateKbps: number | null }> = {
@@ -116,6 +132,9 @@ function getRuntimeConfig() {
   const voiceId = normalizeText(process.env.KEYPILLAR_TTS_VOICE_ID) ?? defaultKeypillarTtsVoiceId;
   const ffmpegPath = normalizeText(process.env.FFMPEG_PATH) ?? defaultFfmpegPath;
   const configuredChunkMaxChars = Number(process.env.TTS_CHUNK_MAX_CHARS ?? defaultTtsChunkMaxChars);
+  const configuredCustomVoiceChunkMaxChars = Number(
+    process.env.TTS_CUSTOM_VOICE_CHUNK_MAX_CHARS ?? defaultCustomVoiceChunkMaxChars,
+  );
 
   return {
     apiKey,
@@ -123,6 +142,11 @@ function getRuntimeConfig() {
     chunkMaxChars: Number.isFinite(configuredChunkMaxChars) && configuredChunkMaxChars >= 300
       ? Math.floor(configuredChunkMaxChars)
       : defaultTtsChunkMaxChars,
+    customVoiceChunkMaxChars: Number.isFinite(configuredCustomVoiceChunkMaxChars) &&
+      configuredCustomVoiceChunkMaxChars >= 80 &&
+      configuredCustomVoiceChunkMaxChars <= 500
+      ? Math.floor(configuredCustomVoiceChunkMaxChars)
+      : defaultCustomVoiceChunkMaxChars,
     ffmpegPath,
     format,
     pronunciationMode,
@@ -261,31 +285,22 @@ function splitSegmentByWords(segment: string, maxChars: number) {
   return chunks;
 }
 
-function splitSegmentBySentences(segment: string, maxChars: number) {
-  const sentences = segment
-    .split(/(?<=[.!?।])\s+/u)
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  if (sentences.length <= 1) {
-    return splitSegmentByWords(segment, maxChars);
-  }
-
+function combineUnitsIntoChunks(units: string[], maxChars: number) {
   const chunks: string[] = [];
   let current = '';
 
-  for (const sentence of sentences) {
-    if (sentence.length > maxChars) {
+  for (const unit of units) {
+    if (unit.length > maxChars) {
       if (current) {
         chunks.push(current);
         current = '';
       }
 
-      chunks.push(...splitSegmentByWords(sentence, maxChars));
+      chunks.push(...splitSegmentByWords(unit, maxChars));
       continue;
     }
 
-    const next = current ? `${current} ${sentence}` : sentence;
+    const next = current ? `${current} ${unit}` : unit;
 
     if (next.length <= maxChars) {
       current = next;
@@ -295,7 +310,7 @@ function splitSegmentBySentences(segment: string, maxChars: number) {
     if (current) {
       chunks.push(current);
     }
-    current = sentence;
+    current = unit;
   }
 
   if (current) {
@@ -303,6 +318,30 @@ function splitSegmentBySentences(segment: string, maxChars: number) {
   }
 
   return chunks;
+}
+
+function splitSegmentBySentences(segment: string, maxChars: number, allowClauseFallback = false) {
+  const sentenceUnits = segment
+    .split(/(?<=[.!?।])\s+/u)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (sentenceUnits.length > 1) {
+    return combineUnitsIntoChunks(sentenceUnits, maxChars);
+  }
+
+  if (allowClauseFallback) {
+    const clauseUnits = segment
+      .split(/(?<=[,;:،؛，、])\s+/u)
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    if (clauseUnits.length > 1) {
+      return combineUnitsIntoChunks(clauseUnits, maxChars);
+    }
+  }
+
+  return splitSegmentByWords(segment, maxChars);
 }
 
 function splitTextIntoSentences(segment: string) {
@@ -643,29 +682,61 @@ export async function applyActivePronunciationRules(inputText: string) {
   return outputText;
 }
 
-function addSpeechTextSegment(segments: SpeechSegment[], text: string, pauseAfterMs: number, maxChars: number) {
+function getFixedSpeechProfile(config = getRuntimeConfig()): SpeechProfile {
+  return {
+    allowClauseFallback: false,
+    chunkMaxChars: config.chunkMaxChars,
+    chunkPauseMs,
+    headingPauseMs,
+    listItemPauseMs,
+    paragraphPauseMs,
+    sentencePauseMs,
+  };
+}
+
+function getCustomVoiceSpeechProfile(config = getRuntimeConfig()): SpeechProfile {
+  return {
+    allowClauseFallback: true,
+    chunkMaxChars: config.customVoiceChunkMaxChars,
+    chunkPauseMs: customVoiceChunkPauseMs,
+    headingPauseMs: customVoiceHeadingPauseMs,
+    listItemPauseMs: customVoiceListItemPauseMs,
+    paragraphPauseMs: customVoiceParagraphPauseMs,
+    sentencePauseMs: customVoiceSentencePauseMs,
+  };
+}
+
+function getSpeechProfileForJob(job: Pick<TtsGenerationJobRecord, 'provider_voice_profile_id'>) {
+  return job.provider_voice_profile_id ? getCustomVoiceSpeechProfile() : getFixedSpeechProfile();
+}
+
+function addSpeechTextSegment(segments: SpeechSegment[], text: string, pauseAfterMs: number, speechProfile: SpeechProfile) {
   const normalized = text.replace(/\s+/g, ' ').trim();
 
   if (!normalized) {
     return;
   }
 
-  if (normalized.length <= maxChars) {
+  if (normalized.length <= speechProfile.chunkMaxChars) {
     segments.push({ pauseAfterMs, text: normalized });
     return;
   }
 
-  const parts = splitSegmentBySentences(normalized, maxChars);
+  const parts = splitSegmentBySentences(
+    normalized,
+    speechProfile.chunkMaxChars,
+    speechProfile.allowClauseFallback,
+  );
 
   for (const [index, part] of parts.entries()) {
     segments.push({
-      pauseAfterMs: index === parts.length - 1 ? pauseAfterMs : chunkPauseMs,
+      pauseAfterMs: index === parts.length - 1 ? pauseAfterMs : speechProfile.chunkPauseMs,
       text: part,
     });
   }
 }
 
-function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string, maxChars: number) {
+function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string, speechProfile: SpeechProfile) {
   const lines = paragraph
     .split('\n')
     .map((value) => value.trim())
@@ -680,8 +751,8 @@ function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string
       addSpeechTextSegment(
         segments,
         stripListMarker(line),
-        index === lines.length - 1 ? paragraphPauseMs : listItemPauseMs,
-        maxChars,
+        index === lines.length - 1 ? speechProfile.paragraphPauseMs : speechProfile.listItemPauseMs,
+        speechProfile,
       );
     }
     return;
@@ -690,14 +761,14 @@ function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string
   const paragraphText = lines.join(' ').trim();
 
   if (isLikelyHeading(paragraphText)) {
-    addSpeechTextSegment(segments, paragraphText, headingPauseMs, maxChars);
+    addSpeechTextSegment(segments, paragraphText, speechProfile.headingPauseMs, speechProfile);
     return;
   }
 
   const sentences = splitTextIntoSentences(paragraphText);
 
   if (sentences.length === 0) {
-    addSpeechTextSegment(segments, paragraphText, paragraphPauseMs, maxChars);
+    addSpeechTextSegment(segments, paragraphText, speechProfile.paragraphPauseMs, speechProfile);
     return;
   }
 
@@ -705,13 +776,13 @@ function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string
     addSpeechTextSegment(
       segments,
       sentence,
-      index === sentences.length - 1 ? paragraphPauseMs : sentencePauseMs,
-      maxChars,
+      index === sentences.length - 1 ? speechProfile.paragraphPauseMs : speechProfile.sentencePauseMs,
+      speechProfile,
     );
   }
 }
 
-function prepareSpeechSegmentsForTts(inputText: string, maxChars: number) {
+function prepareSpeechSegmentsForTts(inputText: string, speechProfile: SpeechProfile) {
   const normalized = normalizeGenerationText(inputText);
   const paragraphs = normalized
     .split(/\n\s*\n+/)
@@ -721,7 +792,7 @@ function prepareSpeechSegmentsForTts(inputText: string, maxChars: number) {
   const segments: SpeechSegment[] = [];
 
   for (const paragraph of paragraphs) {
-    addParagraphSpeechSegments(segments, paragraph, maxChars);
+    addParagraphSpeechSegments(segments, paragraph, speechProfile);
   }
 
   const finalSegments = segments.filter((segment) => segment.text);
@@ -741,8 +812,8 @@ function takeFirstWords(value: string, wordLimit: number) {
   return value.split(/\s+/).filter(Boolean).slice(0, wordLimit).join(' ');
 }
 
-function preparePreviewSpeechSegments(inputText: string, maxChars: number) {
-  const fullSegments = prepareSpeechSegmentsForTts(inputText, maxChars);
+function preparePreviewSpeechSegments(inputText: string, speechProfile: SpeechProfile) {
+  const fullSegments = prepareSpeechSegmentsForTts(inputText, speechProfile);
   const previewSegments: SpeechSegment[] = [];
   let remainingWords = previewWordLimit;
 
@@ -1689,7 +1760,7 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
 async function processPreviewJob(job: TtsGenerationJobRecord) {
   const jobPaths = getJobPaths(job);
   const generationText = await applyActivePronunciationRules(job.input_text);
-  const segments = preparePreviewSpeechSegments(generationText, getRuntimeConfig().chunkMaxChars);
+  const segments = preparePreviewSpeechSegments(generationText, getSpeechProfileForJob(job));
 
   await fs.mkdir(jobPaths.tempDirectory, { recursive: true });
 
@@ -1720,7 +1791,7 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
 async function processFullGenerationJob(job: TtsGenerationJobRecord) {
   const jobPaths = getJobPaths(job);
   const generationText = await applyActivePronunciationRules(job.input_text);
-  const segments = prepareSpeechSegmentsForTts(generationText, getRuntimeConfig().chunkMaxChars);
+  const segments = prepareSpeechSegmentsForTts(generationText, getSpeechProfileForJob(job));
   const quality = resolveTtsQualityPreset(job.quality_preset);
 
   await fs.mkdir(jobPaths.tempDirectory, { recursive: true });
