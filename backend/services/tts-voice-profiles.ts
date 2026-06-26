@@ -650,7 +650,12 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
       throw withStatus('Voice profile not found.', 404);
     }
 
-    await deactivateProviderVoiceProfile(profile.provider_profile_id);
+    await deactivateProviderVoiceProfile(profile.provider_profile_id).catch((error) => {
+      console.warn(
+        `Provider voice profile deactivation failed for local profile ${profile.id}; deleting local profile anyway.`,
+        error instanceof Error ? error.message : error,
+      );
+    });
     const profilePaths = getVoiceProfilePaths(profile);
     profileDirectoryToClean = profilePaths.profileDirectory;
     userDirectoryToClean = profilePaths.userDirectory;

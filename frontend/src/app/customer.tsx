@@ -2213,9 +2213,9 @@ export function CustomerDashboardPage({
         const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault);
         return defaultProfile ? String(defaultProfile.id) : 'fixed';
       });
-      setVoiceActionMessage('Custom voice profile deactivated.');
+      setVoiceActionMessage('Custom voice profile deleted.');
     } catch (nextError) {
-      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to deactivate the custom voice.');
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to delete the custom voice.');
     } finally {
       setVoiceActionId(null);
     }
@@ -2773,7 +2773,7 @@ export function CustomerDashboardPage({
                         type="button"
                       >
                         {voiceActionId === profile.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
-                        Deactivate
+                        Delete
                       </SecondaryButton>
                     </div>
                   </div>
@@ -2826,7 +2826,7 @@ export function CustomerDashboardPage({
               {!canCreateMoreVoiceProfiles ? (
                 <div className="mt-4">
                   <InlineMessage>
-                    You already have {voiceProfileLimits.maxActiveProfiles} active custom voices. Deactivate one before creating another.
+                    You already have {voiceProfileLimits.maxActiveProfiles} active custom voices. Delete one before creating another.
                   </InlineMessage>
                 </div>
               ) : null}

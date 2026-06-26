@@ -320,7 +320,7 @@ export function createTtsRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: safeVoiceProfileErrorMessage(error, 'Failed to deactivate the voice profile.'),
+        error: safeVoiceProfileErrorMessage(error, 'Failed to delete the voice profile.'),
       });
     }
   });
