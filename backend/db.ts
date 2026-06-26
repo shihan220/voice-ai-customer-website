@@ -254,6 +254,9 @@ export type TtsVoiceProfileRecord = {
   id: number;
   user_id: number;
   provider_profile_id: string;
+  provider_sync_status: 'pending' | 'ready';
+  provider_sync_error: string | null;
+  provider_synced_at: Date | null;
   display_name: string;
   reference_text: string;
   reference_audio_seconds: number | null;
@@ -542,6 +545,10 @@ export async function ensureSchema() {
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
       provider_profile_id TEXT NOT NULL,
+      provider_sync_status TEXT NOT NULL DEFAULT 'ready'
+        CHECK (provider_sync_status IN ('pending', 'ready')),
+      provider_sync_error TEXT,
+      provider_synced_at TIMESTAMPTZ,
       display_name TEXT NOT NULL,
       reference_text TEXT NOT NULL,
       reference_audio_seconds NUMERIC(12, 3),
@@ -558,7 +565,21 @@ export async function ensureSchema() {
   await pool.query(`
     ALTER TABLE tts_voice_profiles
       ADD COLUMN IF NOT EXISTS reference_audio_file TEXT,
-      ADD COLUMN IF NOT EXISTS reference_audio_file_size_bytes BIGINT;
+      ADD COLUMN IF NOT EXISTS reference_audio_file_size_bytes BIGINT,
+      ADD COLUMN IF NOT EXISTS provider_sync_status TEXT NOT NULL DEFAULT 'ready',
+      ADD COLUMN IF NOT EXISTS provider_sync_error TEXT,
+      ADD COLUMN IF NOT EXISTS provider_synced_at TIMESTAMPTZ;
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_voice_profiles
+      DROP CONSTRAINT IF EXISTS tts_voice_profiles_provider_sync_status_check;
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_voice_profiles
+      ADD CONSTRAINT tts_voice_profiles_provider_sync_status_check
+      CHECK (provider_sync_status IN ('pending', 'ready'));
   `);
 
   await pool.query(`

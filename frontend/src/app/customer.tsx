@@ -134,6 +134,9 @@ type TtsVoiceProfile = {
   displayName: string;
   id: number;
   isDefault: boolean;
+  providerSyncError: string | null;
+  providerSyncStatus: 'pending' | 'ready';
+  providerSyncedAt: string | null;
   referenceAudioDownloadUrl: string | null;
   referenceAudioFileSizeBytes: number | null;
   referenceAudioSeconds: number | null;
@@ -1771,10 +1774,14 @@ export function CustomerDashboardPage({
   const hasActiveJobs = jobs.some(isActiveTtsJob);
   const isInitialJobsLoading = jobsLoading && jobs.length === 0;
   const selectedQuality = getTtsQualityOption(qualityPreset);
-  const defaultVoiceProfile = voiceProfiles.find((profile) => profile.isDefault) ?? null;
+  const readyVoiceProfiles = useMemo(
+    () => voiceProfiles.filter((profile) => profile.providerSyncStatus === 'ready'),
+    [voiceProfiles],
+  );
+  const defaultVoiceProfile = readyVoiceProfiles.find((profile) => profile.isDefault) ?? null;
   const selectedVoiceProfile = selectedVoiceProfileId === 'fixed'
     ? null
-    : voiceProfiles.find((profile) => String(profile.id) === selectedVoiceProfileId) ?? null;
+    : readyVoiceProfiles.find((profile) => String(profile.id) === selectedVoiceProfileId) ?? null;
   const selectedVoiceName = selectedVoiceProfile?.displayName ?? 'Keypillar Bangla Female';
   const canCreateMoreVoiceProfiles = voiceProfiles.length < voiceProfileLimits.maxActiveProfiles;
   const isVoiceRecording = voiceRecordingState === 'recording';
@@ -1827,11 +1834,14 @@ export function CustomerDashboardPage({
       setVoiceProfileLimits(payload.limits);
       setVoiceProfilesError('');
       setSelectedVoiceProfileId((current) => {
-        if (current !== 'fixed' && payload.voiceProfiles.some((profile) => String(profile.id) === current)) {
+        if (
+          current !== 'fixed'
+          && payload.voiceProfiles.some((profile) => String(profile.id) === current && profile.providerSyncStatus === 'ready')
+        ) {
           return current;
         }
 
-        const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault);
+        const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault && profile.providerSyncStatus === 'ready');
         return defaultProfile ? String(defaultProfile.id) : 'fixed';
       });
     } catch (nextError) {
@@ -2157,6 +2167,7 @@ export function CustomerDashboardPage({
       formData.append('setDefault', String(voiceForm.setDefault));
 
       const payload = await apiRequest<{
+        message?: string;
         voiceProfile: TtsVoiceProfile;
         voiceProfiles: TtsVoiceProfile[];
       }>('/api/tts/voice-profiles', {
@@ -2165,14 +2176,42 @@ export function CustomerDashboardPage({
       });
 
       setVoiceProfiles(payload.voiceProfiles);
-      setSelectedVoiceProfileId(String(payload.voiceProfile.id));
-      setVoiceActionMessage('Custom voice profile created. The reference WAV is saved privately with this account.');
+      if (payload.voiceProfile.providerSyncStatus === 'ready') {
+        setSelectedVoiceProfileId(String(payload.voiceProfile.id));
+        setVoiceActionMessage(payload.message ?? 'Custom voice profile created. The reference WAV is saved privately with this account.');
+      } else {
+        const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault && profile.providerSyncStatus === 'ready');
+        setSelectedVoiceProfileId(defaultProfile ? String(defaultProfile.id) : 'fixed');
+        setVoiceActionMessage(payload.message ?? 'Reference WAV saved. Retry activation after the Keypillar API is back online.');
+      }
       resetVoiceForm();
       await loadVoiceProfiles();
     } catch (nextError) {
       setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to create the custom voice.');
     } finally {
       setVoiceSubmitting(false);
+    }
+  };
+
+  const handleSyncVoiceProfile = async (profileId: number) => {
+    setVoiceActionId(profileId);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    try {
+      const payload = await apiRequest<{
+        voiceProfile: TtsVoiceProfile;
+        voiceProfiles: TtsVoiceProfile[];
+      }>(`/api/tts/voice-profiles/${profileId}/sync`, {
+        method: 'POST',
+      });
+      setVoiceProfiles(payload.voiceProfiles);
+      setSelectedVoiceProfileId(String(payload.voiceProfile.id));
+      setVoiceActionMessage('Custom voice activated. You can now use it in the generation voice selector.');
+    } catch (nextError) {
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to activate the custom voice.');
+    } finally {
+      setVoiceActionId(null);
     }
   };
 
@@ -2210,7 +2249,7 @@ export function CustomerDashboardPage({
           return current;
         }
 
-        const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault);
+        const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault && profile.providerSyncStatus === 'ready');
         return defaultProfile ? String(defaultProfile.id) : 'fixed';
       });
       setVoiceActionMessage('Custom voice profile deleted.');
@@ -2548,8 +2587,12 @@ export function CustomerDashboardPage({
                   >
                     <option value="fixed">Keypillar Bangla Female</option>
                     {voiceProfiles.map((profile) => (
-                      <option key={profile.id} value={String(profile.id)}>
-                        {profile.displayName}{profile.isDefault ? ' (default)' : ''}
+                      <option
+                        key={profile.id}
+                        disabled={profile.providerSyncStatus !== 'ready'}
+                        value={String(profile.id)}
+                      >
+                        {profile.displayName}{profile.isDefault ? ' (default)' : ''}{profile.providerSyncStatus === 'pending' ? ' (pending activation)' : ''}
                       </option>
                     ))}
                   </select>
@@ -2682,7 +2725,7 @@ export function CustomerDashboardPage({
               </p>
             </div>
             <div className="rounded-full border border-[#d9c6b2] bg-[#faf7f1] px-4 py-2 text-sm font-semibold text-[#8d5d45]">
-              {voiceProfiles.length}/{voiceProfileLimits.maxActiveProfiles} active
+              {voiceProfiles.length}/{voiceProfileLimits.maxActiveProfiles} saved
             </div>
           </div>
 
@@ -2735,6 +2778,11 @@ export function CustomerDashboardPage({
                             Default
                           </span>
                         ) : null}
+                        {profile.providerSyncStatus === 'pending' ? (
+                          <span className="rounded-full bg-[#fff0df] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#9a5b36]">
+                            Pending activation
+                          </span>
+                        ) : null}
                       </div>
                       <div className="mt-2 grid gap-2 text-sm text-[#64584f] sm:grid-cols-2">
                         <div>Reference: {profile.referenceAudioSeconds === null ? 'Not measured' : formatDuration(profile.referenceAudioSeconds)}</div>
@@ -2742,8 +2790,18 @@ export function CustomerDashboardPage({
                         <div>
                           Saved WAV: {profile.referenceAudioFileSizeBytes === null ? 'Not stored' : formatBytes(profile.referenceAudioFileSizeBytes)}
                         </div>
+                        <div>
+                          Status: {profile.providerSyncStatus === 'ready' ? 'Ready to use' : 'Saved locally'}
+                        </div>
                       </div>
                       <p className="mt-3 line-clamp-3 text-sm leading-7 text-[#5f564f]">{profile.referenceText}</p>
+                      {profile.providerSyncStatus === 'pending' ? (
+                        <div className="mt-3">
+                          <InlineMessage>
+                            {profile.providerSyncError ?? 'The recording is saved here. Retry activation after the Keypillar API is back online.'}
+                          </InlineMessage>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-end">
                       {profile.referenceAudioDownloadUrl ? (
@@ -2755,7 +2813,18 @@ export function CustomerDashboardPage({
                           Reference WAV
                         </a>
                       ) : null}
-                      {!profile.isDefault ? (
+                      {profile.providerSyncStatus === 'pending' ? (
+                        <SecondaryButton
+                          className="w-full px-4 py-2 text-sm sm:w-auto"
+                          disabled={voiceActionId === profile.id}
+                          onClick={() => void handleSyncVoiceProfile(profile.id)}
+                          type="button"
+                        >
+                          {voiceActionId === profile.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                          Retry activation
+                        </SecondaryButton>
+                      ) : null}
+                      {profile.providerSyncStatus === 'ready' && !profile.isDefault ? (
                         <SecondaryButton
                           className="w-full px-4 py-2 text-sm sm:w-auto"
                           disabled={voiceActionId === profile.id}
@@ -3052,7 +3121,9 @@ export function CustomerDashboardPage({
                     <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">3</span>
                     <div>
                       <div className="text-sm font-semibold text-[#2f343b]">Save the custom voice</div>
-                      <div className="text-xs leading-5 text-[#6f645c]">The voice will be available in your generation voice selector.</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">
+                        The voice becomes selectable after the provider profile is active. If the provider is down, the reference WAV is saved here for retry.
+                      </div>
                     </div>
                   </div>
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

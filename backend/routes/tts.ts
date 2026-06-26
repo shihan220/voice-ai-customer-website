@@ -33,6 +33,7 @@ import {
   getTtsVoiceProfileLimits,
   listTtsVoiceProfilesForUser,
   setDefaultTtsVoiceProfile,
+  syncTtsVoiceProfileWithProvider,
 } from '../services/tts-voice-profiles.ts';
 
 const maxPdfFileSizeBytes = 10 * 1024 * 1024;
@@ -190,6 +191,9 @@ function toTtsVoiceProfilePayload(profile: Awaited<ReturnType<typeof listTtsVoic
     displayName: profile.display_name,
     id: Number(profile.id),
     isDefault: profile.is_default,
+    providerSyncError: profile.provider_sync_error,
+    providerSyncStatus: profile.provider_sync_status,
+    providerSyncedAt: profile.provider_synced_at,
     referenceAudioDownloadUrl: profile.reference_audio_file ? `/api/tts/voice-profiles/${profile.id}/reference` : null,
     referenceAudioFileSizeBytes: profile.reference_audio_file_size_bytes === null ? null : Number(profile.reference_audio_file_size_bytes),
     referenceAudioSeconds: profile.reference_audio_seconds === null ? null : Number(profile.reference_audio_seconds),
@@ -272,8 +276,12 @@ export function createTtsRouter() {
       });
 
       const profiles = await listTtsVoiceProfilesForUser(req.session.customerUser!.id);
-      res.status(201).json({
+      const isPending = profile.provider_sync_status === 'pending';
+      res.status(isPending ? 202 : 201).json({
         limits: getTtsVoiceProfileLimits(),
+        message: isPending
+          ? 'Reference WAV saved. The voice needs activation after the Keypillar API is back online.'
+          : 'Custom voice profile created.',
         voiceProfile: toTtsVoiceProfilePayload(profile),
         voiceProfiles: profiles.map(toTtsVoiceProfilePayload),
       });
@@ -281,6 +289,30 @@ export function createTtsRouter() {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
         error: safeVoiceProfileErrorMessage(error, 'Failed to create the voice profile.'),
+      });
+    }
+  });
+
+  router.post('/api/tts/voice-profiles/:id/sync', requireCustomer, ttsVoiceProfileLimiter, async (req, res) => {
+    try {
+      const profileId = Number(req.params.id);
+
+      if (!Number.isFinite(profileId)) {
+        res.status(400).json({ error: 'Valid voice profile id is required.' });
+        return;
+      }
+
+      const profile = await syncTtsVoiceProfileWithProvider(profileId, req.session.customerUser!.id);
+      const profiles = await listTtsVoiceProfilesForUser(req.session.customerUser!.id);
+
+      res.json({
+        voiceProfile: toTtsVoiceProfilePayload(profile),
+        voiceProfiles: profiles.map(toTtsVoiceProfilePayload),
+      });
+    } catch (error) {
+      const statusCode = resolveStatusCode(error);
+      res.status(statusCode).json({
+        error: safeVoiceProfileErrorMessage(error, 'Failed to activate the voice profile.'),
       });
     }
   });

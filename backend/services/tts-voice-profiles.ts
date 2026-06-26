@@ -23,11 +23,14 @@ const maxVoiceProfileNameLength = 80;
 const maxReferenceTextLength = 4_000;
 const minReferenceAudioSeconds = 1;
 const maxReferenceAudioSeconds = 120;
+const providerUnavailablePublicMessage = 'Keypillar voice profile API is currently unavailable. The reference WAV was saved here and can be activated after the API is back online.';
 
 type AudioMetadata = {
   durationSeconds: number;
   sampleRate: number;
 };
+
+type ProviderSyncStatus = TtsVoiceProfileRecord['provider_sync_status'];
 
 export type TtsResolvedVoiceSelection = {
   providerVoiceProfileId: string | null;
@@ -47,6 +50,12 @@ function withStatus(message: string, statusCode: number, publicMessage?: string)
 
 function isCloudflareOriginUnavailable(statusCode: number, responseBody: string) {
   return statusCode === 530 || /error code:\s*1033/i.test(responseBody);
+}
+
+function isProviderVoiceProfileUnavailableError(error: unknown) {
+  const enrichedError = error as { publicMessage?: string; statusCode?: number };
+
+  return enrichedError.statusCode === 503 && enrichedError.publicMessage === providerUnavailablePublicMessage;
 }
 
 function getVoiceProfileConfig() {
@@ -244,6 +253,12 @@ async function createProviderVoiceProfile(input: {
       'Idempotency-Key': randomUUID(),
     },
     method: 'POST',
+  }).catch((error: unknown) => {
+    throw withStatus(
+      `Keypillar voice profile API request failed: ${error instanceof Error ? error.message : String(error)}`,
+      503,
+      providerUnavailablePublicMessage,
+    );
   });
 
   if (!response.ok) {
@@ -252,7 +267,7 @@ async function createProviderVoiceProfile(input: {
       throw withStatus(
         `Keypillar voice profile API unavailable with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
         503,
-        'Keypillar voice profile API is currently unavailable. Please try again after the API is back online.',
+        providerUnavailablePublicMessage,
       );
     }
     throw withStatus(
@@ -272,6 +287,14 @@ async function createProviderVoiceProfile(input: {
   }
 
   return providerProfileId;
+}
+
+async function tryDeactivateProviderVoiceProfile(providerProfileId: string | null) {
+  if (!providerProfileId) {
+    return;
+  }
+
+  await deactivateProviderVoiceProfile(providerProfileId).catch(() => undefined);
 }
 
 async function deactivateProviderVoiceProfile(providerProfileId: string) {
@@ -422,6 +445,13 @@ export async function resolveTtsVoiceSelectionForUser(
     throw withStatus('Voice profile not found.', 404);
   }
 
+  if (profile.provider_sync_status !== 'ready' || !profile.provider_profile_id) {
+    throw withStatus(
+      'This custom voice is saved but not active yet. Retry activation after the Keypillar API is back online.',
+      409,
+    );
+  }
+
   return {
     providerVoiceProfileId: profile.provider_profile_id,
     voiceDisplayName: profile.display_name,
@@ -499,11 +529,25 @@ export async function createTtsVoiceProfile(input: {
     throw withStatus(`You can keep up to ${config.maxActiveProfiles} active custom voices. Deactivate one before creating another.`, 409);
   }
 
-  const providerProfileId = await createProviderVoiceProfile({
-    audioBuffer: input.audioBuffer,
-    displayName,
-    referenceText,
-  });
+  let providerProfileId: string | null = null;
+  let providerSyncStatus: ProviderSyncStatus = 'ready';
+  let providerSyncError: string | null = null;
+
+  try {
+    providerProfileId = await createProviderVoiceProfile({
+      audioBuffer: input.audioBuffer,
+      displayName,
+      referenceText,
+    });
+  } catch (error) {
+    if (!isProviderVoiceProfileUnavailableError(error)) {
+      throw error;
+    }
+
+    providerSyncStatus = 'pending';
+    providerSyncError = (error as { publicMessage?: string }).publicMessage ?? providerUnavailablePublicMessage;
+  }
+
   const client = await pool.connect();
   let profileDirectoryToClean: string | null = null;
 
@@ -516,7 +560,9 @@ export async function createTtsVoiceProfile(input: {
       throw withStatus(`You can keep up to ${config.maxActiveProfiles} active custom voices. Deactivate one before creating another.`, 409);
     }
 
-    if (input.setDefault) {
+    const canSetDefault = input.setDefault && providerSyncStatus === 'ready';
+
+    if (canSetDefault) {
       await client.query(
         `
           UPDATE tts_voice_profiles
@@ -535,23 +581,29 @@ export async function createTtsVoiceProfile(input: {
         INSERT INTO tts_voice_profiles (
           user_id,
           provider_profile_id,
+          provider_sync_status,
+          provider_sync_error,
+          provider_synced_at,
           display_name,
           reference_text,
           reference_audio_seconds,
           reference_sample_rate,
           is_default
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
       `,
       [
         input.userId,
-        providerProfileId,
+        providerProfileId ?? '',
+        providerSyncStatus,
+        providerSyncError,
+        providerSyncStatus === 'ready' ? new Date() : null,
         displayName,
         referenceText,
         metadata.durationSeconds,
         metadata.sampleRate,
-        input.setDefault,
+        canSetDefault,
       ],
     );
     const createdProfile = profileResult.rows[0];
@@ -578,13 +630,108 @@ export async function createTtsVoiceProfile(input: {
     return storedProfileResult.rows[0];
   } catch (error) {
     await client.query('ROLLBACK');
-    await deactivateProviderVoiceProfile(providerProfileId).catch(() => undefined);
+    await tryDeactivateProviderVoiceProfile(providerProfileId);
     if (profileDirectoryToClean) {
       await fs.rm(profileDirectoryToClean, { force: true, recursive: true }).catch(() => undefined);
     }
     throw error;
   } finally {
     client.release();
+  }
+}
+
+export async function syncTtsVoiceProfileWithProvider(profileId: number, userId: number) {
+  const profileResult = await pool.query<TtsVoiceProfileRecord>(
+    `
+      SELECT *
+      FROM tts_voice_profiles
+      WHERE id = $1
+        AND user_id = $2
+        AND is_active = TRUE
+      LIMIT 1
+    `,
+    [profileId, userId],
+  );
+  const profile = profileResult.rows[0];
+
+  if (!profile) {
+    throw withStatus('Voice profile not found.', 404);
+  }
+
+  if (profile.provider_sync_status === 'ready' && profile.provider_profile_id) {
+    return profile;
+  }
+
+  if (!profile.reference_audio_file) {
+    throw withStatus('Reference WAV is not stored for this voice profile.', 409);
+  }
+
+  const referenceAudioPath = resolvePrivateReferencePath(profile.reference_audio_file);
+  const audioBuffer = await fs.readFile(referenceAudioPath).catch((error: unknown) => {
+    throw withStatus(
+      `Reference WAV is missing: ${error instanceof Error ? error.message : String(error)}`,
+      409,
+      'Reference WAV is missing. Delete this voice and create a new one.',
+    );
+  });
+
+  let providerProfileId: string | null = null;
+
+  try {
+    providerProfileId = await createProviderVoiceProfile({
+      audioBuffer,
+      displayName: profile.display_name,
+      referenceText: profile.reference_text,
+    });
+  } catch (error) {
+    if (isProviderVoiceProfileUnavailableError(error)) {
+      await pool.query(
+        `
+          UPDATE tts_voice_profiles
+          SET
+            provider_sync_error = $3,
+            updated_at = NOW()
+          WHERE id = $1
+            AND user_id = $2
+        `,
+        [
+          profileId,
+          userId,
+          (error as { publicMessage?: string }).publicMessage ?? providerUnavailablePublicMessage,
+        ],
+      );
+    }
+
+    throw error;
+  }
+
+  try {
+    const updatedResult = await pool.query<TtsVoiceProfileRecord>(
+      `
+        UPDATE tts_voice_profiles
+        SET
+          provider_profile_id = $3,
+          provider_sync_status = 'ready',
+          provider_sync_error = NULL,
+          provider_synced_at = NOW(),
+          updated_at = NOW()
+        WHERE id = $1
+          AND user_id = $2
+          AND is_active = TRUE
+        RETURNING *
+      `,
+      [profileId, userId, providerProfileId],
+    );
+    const updatedProfile = updatedResult.rows[0];
+
+    if (!updatedProfile) {
+      throw withStatus('Voice profile not found.', 404);
+    }
+
+    return updatedProfile;
+  } catch (error) {
+    await tryDeactivateProviderVoiceProfile(providerProfileId);
+    throw error;
   }
 }
 
@@ -609,6 +756,10 @@ export async function setDefaultTtsVoiceProfile(profileId: number, userId: numbe
 
     if (!profile) {
       throw withStatus('Voice profile not found.', 404);
+    }
+
+    if (profile.provider_sync_status !== 'ready' || !profile.provider_profile_id) {
+      throw withStatus('Activate this voice before setting it as your default.', 409);
     }
 
     await client.query(
@@ -671,12 +822,14 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
       throw withStatus('Voice profile not found.', 404);
     }
 
-    await deactivateProviderVoiceProfile(profile.provider_profile_id).catch((error) => {
-      console.warn(
-        `Provider voice profile deactivation failed for local profile ${profile.id}; deleting local profile anyway.`,
-        error instanceof Error ? error.message : error,
-      );
-    });
+    if (profile.provider_sync_status === 'ready' && profile.provider_profile_id) {
+      await deactivateProviderVoiceProfile(profile.provider_profile_id).catch((error) => {
+        console.warn(
+          `Provider voice profile deactivation failed for local profile ${profile.id}; deleting local profile anyway.`,
+          error instanceof Error ? error.message : error,
+        );
+      });
+    }
     const profilePaths = getVoiceProfilePaths(profile);
     profileDirectoryToClean = profilePaths.profileDirectory;
     userDirectoryToClean = profilePaths.userDirectory;
