@@ -132,6 +132,14 @@ function safeVoiceProfileErrorMessage(error: unknown, fallback: string) {
     return `Reference WAV files must stay under ${Math.floor(maxVoiceReferenceFileSizeBytes / (1024 * 1024))} MB.`;
   }
 
+  if (
+    error instanceof Error
+    && 'publicMessage' in error
+    && typeof (error as Error & { publicMessage?: unknown }).publicMessage === 'string'
+  ) {
+    return (error as Error & { publicMessage: string }).publicMessage;
+  }
+
   if (error instanceof Error && statusCode < 500) {
     return error.message;
   }

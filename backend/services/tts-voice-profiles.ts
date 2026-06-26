@@ -35,10 +35,18 @@ export type TtsResolvedVoiceSelection = {
   voiceProfileId: number | null;
 };
 
-function withStatus(message: string, statusCode: number) {
+function withStatus(message: string, statusCode: number, publicMessage?: string) {
   const error = new Error(message);
-  (error as Error & { statusCode?: number }).statusCode = statusCode;
+  const enrichedError = error as Error & { publicMessage?: string; statusCode?: number };
+  enrichedError.statusCode = statusCode;
+  if (publicMessage) {
+    enrichedError.publicMessage = publicMessage;
+  }
   return error;
+}
+
+function isCloudflareOriginUnavailable(statusCode: number, responseBody: string) {
+  return statusCode === 530 || /error code:\s*1033/i.test(responseBody);
 }
 
 function getVoiceProfileConfig() {
@@ -240,6 +248,13 @@ async function createProviderVoiceProfile(input: {
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');
+    if (isCloudflareOriginUnavailable(response.status, errorBody)) {
+      throw withStatus(
+        `Keypillar voice profile API unavailable with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
+        503,
+        'Keypillar voice profile API is currently unavailable. Please try again after the API is back online.',
+      );
+    }
     throw withStatus(
       `Keypillar voice profile request failed with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
       502,
@@ -278,6 +293,12 @@ async function deactivateProviderVoiceProfile(providerProfileId: string) {
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');
+    if (isCloudflareOriginUnavailable(response.status, errorBody)) {
+      throw withStatus(
+        `Keypillar voice profile deactivate unavailable with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
+        503,
+      );
+    }
     throw withStatus(
       `Keypillar voice profile deactivate failed with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
       502,
