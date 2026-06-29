@@ -20,6 +20,7 @@ const defaultKeypillarTtsFormat = 'wav';
 const defaultKeypillarTtsPronunciationMode = 'english_preserve';
 const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
 const defaultKeypillarVoiceProfilesEndpoint = '/v1/voice-profiles';
+const defaultKeypillarTtsRequestTimeoutMs = 180_000;
 const defaultFixedVoiceDisplayName = 'Keypillar Bangla Female';
 const defaultFfmpegPath = 'ffmpeg';
 const defaultMaxActiveVoiceProfilesPerUser = 3;
@@ -77,6 +78,16 @@ function wait(milliseconds: number) {
   });
 }
 
+function normalizeTimeoutMs(value: string | undefined, fallback: number) {
+  const parsed = Number(value ?? fallback);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(5_000, Math.floor(parsed));
+}
+
 function getVoiceProfileConfig() {
   const apiKey = normalizeText(process.env.KEYPILLAR_TTS_API_KEY);
   const configuredTtsApiUrl = normalizeText(process.env.KEYPILLAR_TTS_API_URL);
@@ -87,6 +98,10 @@ function getVoiceProfileConfig() {
   const apiUrl = configuredApiUrl ?? new URL(endpoint, `${baseUrl.replace(/\/+$/, '')}/`).toString();
   const ttsApiUrl = configuredTtsApiUrl ?? new URL(ttsEndpoint, `${baseUrl.replace(/\/+$/, '')}/`).toString();
   const configuredMaxActive = Number(process.env.TTS_MAX_ACTIVE_VOICE_PROFILES ?? defaultMaxActiveVoiceProfilesPerUser);
+  const requestTimeoutMs = normalizeTimeoutMs(
+    process.env.KEYPILLAR_TTS_REQUEST_TIMEOUT_MS,
+    defaultKeypillarTtsRequestTimeoutMs,
+  );
 
   return {
     apiKey,
@@ -97,9 +112,38 @@ function getVoiceProfileConfig() {
       ? Math.floor(configuredMaxActive)
       : defaultMaxActiveVoiceProfilesPerUser,
     pronunciationMode: normalizeText(process.env.KEYPILLAR_TTS_PRONUNCIATION_MODE) ?? defaultKeypillarTtsPronunciationMode,
+    requestTimeoutMs,
     ttsApiUrl,
     voiceId: normalizeText(process.env.KEYPILLAR_TTS_VOICE_ID) ?? defaultKeypillarTtsVoiceId,
   };
+}
+
+async function fetchWithTimeout(
+  input: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  timeoutMessage: string,
+  publicMessage?: string,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw withStatus(timeoutMessage, 504, publicMessage);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function resolveFfprobePath(ffmpegPath: string) {
@@ -560,7 +604,13 @@ async function fetchProviderAudioUrl(audioUrl: string, config: ReturnType<typeof
       await wait(delayMs);
     }
 
-    const response = await fetch(resolvedUrl, { headers });
+    const response = await fetchWithTimeout(
+      resolvedUrl,
+      { headers },
+      config.requestTimeoutMs,
+      `Test preview audio fetch timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+      'Keypillar TTS API is currently unavailable. Try the custom voice test again after the API is back online.',
+    );
 
     if (response.ok) {
       return Buffer.from(await response.arrayBuffer());
@@ -610,22 +660,28 @@ async function generateProviderTestPreview(input: {
     throw withStatus('KEYPILLAR_TTS_API_KEY is missing.', 503);
   }
 
-  const response = await fetch(config.ttsApiUrl, {
-    body: JSON.stringify({
-      format: config.format,
-      pronunciation_mode: config.pronunciationMode,
-      speed: 1.0,
-      text: testPreviewText,
-      voice: config.voiceId,
-      voice_profile_id: input.providerVoiceProfileId,
-    }),
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-      'Idempotency-Key': randomUUID(),
+  const response = await fetchWithTimeout(
+    config.ttsApiUrl,
+    {
+      body: JSON.stringify({
+        format: config.format,
+        pronunciation_mode: config.pronunciationMode,
+        speed: 1.0,
+        text: testPreviewText,
+        voice: config.voiceId,
+        voice_profile_id: input.providerVoiceProfileId,
+      }),
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': randomUUID(),
+      },
+      method: 'POST',
     },
-    method: 'POST',
-  }).catch((error: unknown) => {
+    config.requestTimeoutMs,
+    `Keypillar TTS test preview timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+    'Keypillar TTS API is currently unavailable. Try the custom voice test again after the API is back online.',
+  ).catch((error: unknown) => {
     throw withStatus(
       `Keypillar TTS test preview request failed: ${error instanceof Error ? error.message : String(error)}`,
       503,
@@ -683,19 +739,25 @@ async function createProviderVoiceProfile(input: {
     throw withStatus('KEYPILLAR_TTS_API_KEY is missing.', 503);
   }
 
-  const response = await fetch(config.apiUrl, {
-    body: JSON.stringify({
-      name: input.displayName,
-      reference_audio_base64: input.audioBuffer.toString('base64'),
-      reference_text: input.referenceText,
-    }),
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-      'Idempotency-Key': randomUUID(),
+  const response = await fetchWithTimeout(
+    config.apiUrl,
+    {
+      body: JSON.stringify({
+        name: input.displayName,
+        reference_audio_base64: input.audioBuffer.toString('base64'),
+        reference_text: input.referenceText,
+      }),
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': randomUUID(),
+      },
+      method: 'POST',
     },
-    method: 'POST',
-  }).catch((error: unknown) => {
+    config.requestTimeoutMs,
+    `Keypillar voice profile request timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+    providerUnavailablePublicMessage,
+  ).catch((error: unknown) => {
     throw withStatus(
       `Keypillar voice profile API request failed: ${error instanceof Error ? error.message : String(error)}`,
       503,
@@ -747,14 +809,20 @@ async function deactivateProviderVoiceProfile(providerProfileId: string) {
   }
 
   const deactivateUrl = new URL(`${config.apiUrl.replace(/\/+$/, '')}/${encodeURIComponent(providerProfileId)}/deactivate`).toString();
-  const response = await fetch(deactivateUrl, {
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-      'Idempotency-Key': randomUUID(),
+  const response = await fetchWithTimeout(
+    deactivateUrl,
+    {
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': randomUUID(),
+      },
+      method: 'POST',
     },
-    method: 'POST',
-  });
+    config.requestTimeoutMs,
+    `Keypillar voice profile deactivate timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+    providerDeactivateUnavailablePublicMessage,
+  );
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');

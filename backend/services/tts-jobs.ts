@@ -29,6 +29,7 @@ const defaultKeypillarTtsEndpoint = '/v1/voice/generate';
 const defaultKeypillarTtsFormat = 'wav';
 const defaultKeypillarTtsPronunciationMode = 'english_preserve';
 const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
+const defaultKeypillarTtsRequestTimeoutMs = 180_000;
 const defaultFfmpegPath = 'ffmpeg';
 const defaultTtsChunkMaxChars = 1_200;
 const defaultCustomVoiceChunkMaxChars = 420;
@@ -122,6 +123,16 @@ function wait(milliseconds: number) {
   });
 }
 
+function normalizeTimeoutMs(value: string | undefined, fallback: number) {
+  const parsed = Number(value ?? fallback);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(5_000, Math.floor(parsed));
+}
+
 function getRuntimeConfig() {
   const apiKey = normalizeText(process.env.KEYPILLAR_TTS_API_KEY);
   const configuredApiUrl = normalizeText(process.env.KEYPILLAR_TTS_API_URL);
@@ -139,6 +150,10 @@ function getRuntimeConfig() {
   );
   const configuredCustomVoiceProviderRequestMaxChars = Number(
     process.env.TTS_CUSTOM_VOICE_PROVIDER_REQUEST_MAX_CHARS ?? defaultCustomVoiceProviderRequestMaxChars,
+  );
+  const requestTimeoutMs = normalizeTimeoutMs(
+    process.env.KEYPILLAR_TTS_REQUEST_TIMEOUT_MS,
+    defaultKeypillarTtsRequestTimeoutMs,
   );
 
   return {
@@ -160,8 +175,36 @@ function getRuntimeConfig() {
     ffmpegPath,
     format,
     pronunciationMode,
+    requestTimeoutMs,
     voiceId,
   };
+}
+
+async function fetchWithTimeout(
+  input: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  timeoutMessage: string,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw withStatus(timeoutMessage, 504);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function resolveTtsQualityPreset(value?: string | null) {
@@ -1098,7 +1141,12 @@ async function fetchAudioUrlWithRetry(audioUrl: string, config: ReturnType<typeo
       headers.Authorization = `Bearer ${config.apiKey}`;
     }
 
-    const response = await fetch(resolvedUrl, { headers });
+    const response = await fetchWithTimeout(
+      resolvedUrl,
+      { headers },
+      config.requestTimeoutMs,
+      `Audio fetch timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+    );
 
     if (response.ok) {
       return Buffer.from(await response.arrayBuffer());
@@ -1141,22 +1189,27 @@ async function generateWavChunk(text: string, job: TtsGenerationJobRecord) {
 
   const providerVoiceProfileId = job.provider_voice_profile_id ?? 'fixed';
 
-  const response = await fetch(config.apiUrl, {
-    body: JSON.stringify({
-      format: config.format,
-      pronunciation_mode: config.pronunciationMode,
-      speed: 1.0,
-      text,
-      voice: job.provider_voice || config.voiceId,
-      voice_profile_id: providerVoiceProfileId,
-    }),
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-      'Idempotency-Key': randomUUID(),
+  const response = await fetchWithTimeout(
+    config.apiUrl,
+    {
+      body: JSON.stringify({
+        format: config.format,
+        pronunciation_mode: config.pronunciationMode,
+        speed: 1.0,
+        text,
+        voice: job.provider_voice || config.voiceId,
+        voice_profile_id: providerVoiceProfileId,
+      }),
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': randomUUID(),
+      },
+      method: 'POST',
     },
-    method: 'POST',
-  });
+    config.requestTimeoutMs,
+    `Keypillar TTS request timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+  );
 
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
 

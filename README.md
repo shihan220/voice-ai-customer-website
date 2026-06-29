@@ -81,6 +81,7 @@ Required environment variables are documented in `.env.example`. The main ones a
 - `KEYPILLAR_TTS_FORMAT`
 - `KEYPILLAR_TTS_VOICE_PROFILES_ENDPOINT`
 - `KEYPILLAR_TTS_VOICE_PROFILES_API_URL` (optional override)
+- `KEYPILLAR_TTS_REQUEST_TIMEOUT_MS` (optional, defaults to `180000`)
 - `FFMPEG_PATH`
 - `TTS_CHUNK_MAX_CHARS`
 - `TTS_CUSTOM_VOICE_CHUNK_MAX_CHARS`
