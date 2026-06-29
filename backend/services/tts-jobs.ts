@@ -2233,6 +2233,43 @@ async function assertUserCanQueueMoreTtsJobs(
   }
 }
 
+async function assertJobVoiceProfileStillUsable(
+  client: PoolClient,
+  job: Pick<TtsGenerationJobRecord, 'provider_voice_profile_id' | 'user_id' | 'voice_profile_id'>,
+) {
+  if (!job.voice_profile_id && !job.provider_voice_profile_id) {
+    return;
+  }
+
+  if (!job.voice_profile_id) {
+    throw withStatus('This custom voice is no longer available. Create a new job with an active voice.', 409);
+  }
+
+  const profileResult = await client.query<{
+    is_active: boolean;
+    provider_profile_id: string | null;
+    provider_sync_status: string;
+  }>(
+    `
+      SELECT is_active, provider_profile_id, provider_sync_status
+      FROM tts_voice_profiles
+      WHERE id = $1
+        AND user_id = $2
+      LIMIT 1
+    `,
+    [job.voice_profile_id, job.user_id],
+  );
+  const profile = profileResult.rows[0];
+
+  if (!profile?.is_active) {
+    throw withStatus('This custom voice was deleted. Create a new job with an active voice.', 409);
+  }
+
+  if (profile.provider_sync_status !== 'ready' || !profile.provider_profile_id) {
+    throw withStatus('This custom voice is not active yet. Activate the voice before generating audio.', 409);
+  }
+}
+
 function assertUserCanUseTtsWorkspace(user: UserRecord) {
   if (user.account_status !== 'active') {
     throw withStatus('This account is disabled.', 403);
@@ -2406,6 +2443,7 @@ export async function startTtsGenerationFromPreview(jobId: number, userId: numbe
     }
 
     assertUserCanUseTtsWorkspace(user);
+    await assertJobVoiceProfileStillUsable(client, job);
     const currentBalance = assertUserHasGenerationMinutes(user, calculateEstimatedMinutesFromWords(Number(job.word_count)));
     await assertUserCanQueueMoreTtsJobs(client, userId, 'queued');
 
@@ -2486,6 +2524,7 @@ export async function retryTtsGenerationJob(jobId: number, userId: number) {
     const retryStatus = job.full_generation_requested_at ? 'queued' : 'preview_queued';
     const retryStage = retryStatus === 'queued' ? 'queued' : 'preview_queued';
     const currentBalance = assertUserCanUseTtsWorkspace(user);
+    await assertJobVoiceProfileStillUsable(client, job);
     if (retryStatus === 'queued') {
       assertUserHasGenerationMinutes(user, calculateEstimatedMinutesFromWords(Number(job.word_count)));
     }

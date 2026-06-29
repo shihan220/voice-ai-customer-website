@@ -847,6 +847,28 @@ async function countActiveProfiles(client: PoolClient, userId: number) {
   return Number(result.rows[0]?.count ?? 0);
 }
 
+async function countBlockingJobsForVoiceProfile(client: PoolClient, profileId: number, userId: number) {
+  const result = await client.query<{ count: string }>(
+    `
+      SELECT COUNT(*)::text AS count
+      FROM tts_generation_jobs
+      WHERE user_id = $1
+        AND voice_profile_id = $2
+        AND status IN (
+          'queued',
+          'processing',
+          'preview_queued',
+          'preview_processing',
+          'preview_ready',
+          'cancelling'
+        )
+    `,
+    [userId, profileId],
+  );
+
+  return Number(result.rows[0]?.count ?? 0);
+}
+
 export function getFixedTtsVoiceSelection(): TtsResolvedVoiceSelection {
   return {
     providerVoiceProfileId: null,
@@ -1373,6 +1395,15 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
 
     if (!profile) {
       throw withStatus('Voice profile not found.', 404);
+    }
+
+    const blockingJobCount = await countBlockingJobsForVoiceProfile(client, profileId, userId);
+
+    if (blockingJobCount > 0) {
+      throw withStatus(
+        'This voice is still attached to an active or preview-ready audio job. Cancel, finish, or delete those jobs before deleting the voice.',
+        409,
+      );
     }
 
     if (profile.provider_sync_status === 'ready' && profile.provider_profile_id) {
