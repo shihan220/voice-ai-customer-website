@@ -28,6 +28,7 @@ const maxReferenceTextLength = 4_000;
 const minReferenceAudioSeconds = 1;
 const maxReferenceAudioSeconds = 120;
 const providerUnavailablePublicMessage = 'Keypillar voice profile API is currently unavailable. The reference WAV was saved here and can be activated after the API is back online.';
+const providerDeactivateUnavailablePublicMessage = 'Keypillar voice profile API is currently unavailable. The voice was not deleted yet; please try again after the API is back online.';
 const testPreviewText = 'এটি আমার কাস্টম কণ্ঠের একটি ছোট পরীক্ষামূলক অডিও। বাক্যগুলো পরিষ্কারভাবে পড়া হচ্ছে, যাতে স্বর, বিরতি এবং উচ্চারণ বোঝা যায়।';
 
 type AudioMetadata = {
@@ -761,6 +762,7 @@ async function deactivateProviderVoiceProfile(providerProfileId: string) {
       throw withStatus(
         `Keypillar voice profile deactivate unavailable with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
         503,
+        providerDeactivateUnavailablePublicMessage,
       );
     }
     throw withStatus(
@@ -1407,12 +1409,7 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
     }
 
     if (profile.provider_sync_status === 'ready' && profile.provider_profile_id) {
-      await deactivateProviderVoiceProfile(profile.provider_profile_id).catch((error) => {
-        console.warn(
-          `Provider voice profile deactivation failed for local profile ${profile.id}; deleting local profile anyway.`,
-          error instanceof Error ? error.message : error,
-        );
-      });
+      await deactivateProviderVoiceProfile(profile.provider_profile_id);
     }
     const profilePaths = getVoiceProfilePaths(profile);
     profileDirectoryToClean = profilePaths.profileDirectory;
