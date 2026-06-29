@@ -103,7 +103,7 @@ export function createApp() {
     customerSessionMiddleware(req, res, next);
   });
 
-  app.use('/media/tts-jobs', (_req, res) => {
+  app.use(['/media/tts-jobs', '/media/tts-voice-profiles'], (_req, res) => {
     res.status(404).json({ error: 'Not found.' });
   });
   app.use('/media', express.static(mediaRoot));

@@ -29,6 +29,14 @@ async function expectOk(url: string, label: string) {
   return response;
 }
 
+async function expectNotFound(url: string, label: string) {
+  const response = await fetch(url);
+
+  if (response.status !== 404) {
+    throw new Error(`${label} returned ${response.status} instead of 404.`);
+  }
+}
+
 async function main() {
   const { backendUrl, frontendUrl } = getBaseUrls();
 
@@ -68,6 +76,8 @@ async function main() {
   await expectOk(`${frontendUrl}/`, 'Frontend home page');
   await expectOk(`${frontendUrl}/login`, 'Frontend login page');
   await expectOk(`${backendUrl}/admin/login`, 'Admin login page');
+  await expectNotFound(`${backendUrl}/media/tts-jobs/private-check.wav`, 'Private TTS job media guard');
+  await expectNotFound(`${backendUrl}/media/tts-voice-profiles/private-check.wav`, 'Private TTS voice profile media guard');
 
   console.log(
     JSON.stringify(
@@ -77,6 +87,10 @@ async function main() {
         firstAudio,
         frontendHome: `${frontendUrl}/`,
         frontendLogin: `${frontendUrl}/login`,
+        privateMediaGuards: [
+          '/media/tts-jobs',
+          '/media/tts-voice-profiles',
+        ],
         verifiedVoices: voices.length,
       },
       null,
