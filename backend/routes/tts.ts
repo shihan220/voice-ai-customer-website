@@ -245,7 +245,7 @@ function toTtsJobPayload(job: TtsGenerationJobRecord, options?: { includeInputTe
     status: job.status,
     tokenCost: Number(job.token_cost),
     updatedAt: job.updated_at,
-    wavDownloadUrl: job.status === 'completed' ? `/api/tts/jobs/${job.id}/download?format=wav` : null,
+    wavDownloadUrl: job.status === 'completed' && job.wav_file ? `/api/tts/jobs/${job.id}/download?format=wav` : null,
     wordCount: Number(job.word_count),
   };
 }
