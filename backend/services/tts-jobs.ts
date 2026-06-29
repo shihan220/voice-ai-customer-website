@@ -32,23 +32,23 @@ const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
 const defaultKeypillarTtsRequestTimeoutMs = 180_000;
 const defaultFfmpegPath = 'ffmpeg';
 const defaultTtsChunkMaxChars = 1_200;
-const defaultCustomVoiceChunkMaxChars = 420;
-const defaultCustomVoiceProviderRequestMaxChars = 10_000;
+const defaultCustomVoiceChunkMaxChars = defaultTtsChunkMaxChars;
+const defaultCustomVoiceProviderRequestMaxChars = defaultTtsChunkMaxChars;
 const maxInputCharacters = 120_000;
 const maxActivePreviewJobsPerUser = 2;
 const maxActiveGenerationJobsPerUser = 1;
 const maxActiveTtsJobsPerUser = 3;
-const chunkPauseMs = 120;
-const headingPauseMs = 520;
-const listItemPauseMs = 220;
-const paragraphPauseMs = 320;
-const sentencePauseMs = 140;
-const customVoiceChunkPauseMs = 140;
-const customVoiceHeadingPauseMs = 560;
-const customVoiceListItemPauseMs = 240;
-const customVoiceParagraphPauseMs = 360;
-const customVoiceSentencePauseMs = 160;
-const customVoiceProviderBoundaryPauseMs = 80;
+const chunkPauseMs = 220;
+const headingPauseMs = 900;
+const listItemPauseMs = 450;
+const paragraphPauseMs = 800;
+const sentencePauseMs = 340;
+const customVoiceChunkPauseMs = chunkPauseMs;
+const customVoiceHeadingPauseMs = headingPauseMs;
+const customVoiceListItemPauseMs = listItemPauseMs;
+const customVoiceParagraphPauseMs = paragraphPauseMs;
+const customVoiceSentencePauseMs = sentencePauseMs;
+const customVoiceProviderBoundaryPauseMs = chunkPauseMs;
 const previewWordLimit = 85;
 
 type SpeechSegment = {
@@ -163,12 +163,12 @@ function getRuntimeConfig() {
       ? Math.floor(configuredChunkMaxChars)
       : defaultTtsChunkMaxChars,
     customVoiceChunkMaxChars: Number.isFinite(configuredCustomVoiceChunkMaxChars) &&
-      configuredCustomVoiceChunkMaxChars >= 80 &&
-      configuredCustomVoiceChunkMaxChars <= 500
+      configuredCustomVoiceChunkMaxChars >= 300 &&
+      configuredCustomVoiceChunkMaxChars <= 12_000
       ? Math.floor(configuredCustomVoiceChunkMaxChars)
       : defaultCustomVoiceChunkMaxChars,
     customVoiceProviderRequestMaxChars: Number.isFinite(configuredCustomVoiceProviderRequestMaxChars) &&
-      configuredCustomVoiceProviderRequestMaxChars >= 1_000 &&
+      configuredCustomVoiceProviderRequestMaxChars >= 300 &&
       configuredCustomVoiceProviderRequestMaxChars <= 12_000
       ? Math.floor(configuredCustomVoiceProviderRequestMaxChars)
       : defaultCustomVoiceProviderRequestMaxChars,
@@ -749,7 +749,7 @@ function getFixedSpeechProfile(config = getRuntimeConfig()): SpeechProfile {
 
 function getCustomVoiceSpeechProfile(config = getRuntimeConfig()): SpeechProfile {
   return {
-    allowClauseFallback: true,
+    allowClauseFallback: false,
     chunkMaxChars: config.customVoiceChunkMaxChars,
     chunkPauseMs: customVoiceChunkPauseMs,
     headingPauseMs: customVoiceHeadingPauseMs,
@@ -972,11 +972,7 @@ function prepareCustomVoiceProviderSegments(inputText: string, maxChars: number)
 }
 
 function prepareFullSpeechSegmentsForJob(inputText: string, job: Pick<TtsGenerationJobRecord, 'provider_voice_profile_id'>) {
-  if (job.provider_voice_profile_id) {
-    return prepareCustomVoiceProviderSegments(inputText, getRuntimeConfig().customVoiceProviderRequestMaxChars);
-  }
-
-  return prepareSpeechSegmentsForTts(inputText, getFixedSpeechProfile());
+  return prepareSpeechSegmentsForTts(inputText, getSpeechProfileForJob(job));
 }
 
 function countWordsInSegment(value: string) {
