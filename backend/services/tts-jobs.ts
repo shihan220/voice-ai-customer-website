@@ -2591,10 +2591,7 @@ export async function deleteOwnedTtsGenerationJob(jobId: number, userId: number)
       throw withStatus('Cancel this active audio job before deleting it.', 409);
     }
 
-    await fs.rm(getJobPaths(job).jobDirectory, {
-      force: true,
-      recursive: true,
-    });
+    const jobPaths = getJobPaths(job);
 
     await client.query(
       `
@@ -2607,7 +2604,11 @@ export async function deleteOwnedTtsGenerationJob(jobId: number, userId: number)
 
     await client.query('COMMIT');
 
-    await fs.rmdir(getJobPaths(job).userDirectory).catch(() => undefined);
+    await fs.rm(jobPaths.jobDirectory, {
+      force: true,
+      recursive: true,
+    });
+    await fs.rmdir(jobPaths.userDirectory).catch(() => undefined);
 
     return job;
   } catch (error) {
