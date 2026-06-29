@@ -1766,6 +1766,7 @@ export function CustomerDashboardPage({
   const [voiceRecordingSeconds, setVoiceRecordingSeconds] = useState(0);
   const [recordedVoiceDuration, setRecordedVoiceDuration] = useState<number | null>(null);
   const [recordedVoiceUrl, setRecordedVoiceUrl] = useState<string | null>(null);
+  const voiceProfilesLoadedRef = useRef(false);
   const recordedVoiceUrlRef = useRef<string | null>(null);
   const voiceRecordingRef = useRef<VoiceRecordingSession | null>(null);
 
@@ -1839,6 +1840,7 @@ export function CustomerDashboardPage({
       setVoiceProfiles(payload.voiceProfiles);
       setVoiceProfileLimits(payload.limits);
       setVoiceProfilesError('');
+      const hadLoadedVoiceProfiles = voiceProfilesLoadedRef.current;
       setSelectedVoiceProfileId((current) => {
         if (
           current !== 'fixed'
@@ -1847,9 +1849,14 @@ export function CustomerDashboardPage({
           return current;
         }
 
+        if (current === 'fixed' && hadLoadedVoiceProfiles) {
+          return 'fixed';
+        }
+
         const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault && profile.providerSyncStatus === 'ready');
         return defaultProfile ? String(defaultProfile.id) : 'fixed';
       });
+      voiceProfilesLoadedRef.current = true;
     } catch (nextError) {
       setVoiceProfilesError(nextError instanceof Error ? nextError.message : 'Failed to load your custom voices.');
     } finally {
@@ -1865,7 +1872,9 @@ export function CustomerDashboardPage({
   }, [loadJobs, user.id]);
 
   useEffect(() => {
+    voiceProfilesLoadedRef.current = false;
     setVoiceProfiles([]);
+    setSelectedVoiceProfileId('fixed');
     setVoiceProfilesLoading(true);
     void loadVoiceProfiles();
   }, [loadVoiceProfiles, user.id]);
