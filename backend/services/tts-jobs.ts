@@ -32,6 +32,7 @@ const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
 const defaultFfmpegPath = 'ffmpeg';
 const defaultTtsChunkMaxChars = 1_200;
 const defaultCustomVoiceChunkMaxChars = 420;
+const defaultCustomVoiceProviderRequestMaxChars = 10_000;
 const maxInputCharacters = 120_000;
 const maxActivePreviewJobsPerUser = 2;
 const maxActiveGenerationJobsPerUser = 1;
@@ -46,6 +47,7 @@ const customVoiceHeadingPauseMs = 560;
 const customVoiceListItemPauseMs = 240;
 const customVoiceParagraphPauseMs = 360;
 const customVoiceSentencePauseMs = 160;
+const customVoiceProviderBoundaryPauseMs = 80;
 const previewWordLimit = 85;
 
 type SpeechSegment = {
@@ -135,6 +137,9 @@ function getRuntimeConfig() {
   const configuredCustomVoiceChunkMaxChars = Number(
     process.env.TTS_CUSTOM_VOICE_CHUNK_MAX_CHARS ?? defaultCustomVoiceChunkMaxChars,
   );
+  const configuredCustomVoiceProviderRequestMaxChars = Number(
+    process.env.TTS_CUSTOM_VOICE_PROVIDER_REQUEST_MAX_CHARS ?? defaultCustomVoiceProviderRequestMaxChars,
+  );
 
   return {
     apiKey,
@@ -147,6 +152,11 @@ function getRuntimeConfig() {
       configuredCustomVoiceChunkMaxChars <= 500
       ? Math.floor(configuredCustomVoiceChunkMaxChars)
       : defaultCustomVoiceChunkMaxChars,
+    customVoiceProviderRequestMaxChars: Number.isFinite(configuredCustomVoiceProviderRequestMaxChars) &&
+      configuredCustomVoiceProviderRequestMaxChars >= 1_000 &&
+      configuredCustomVoiceProviderRequestMaxChars <= 12_000
+      ? Math.floor(configuredCustomVoiceProviderRequestMaxChars)
+      : defaultCustomVoiceProviderRequestMaxChars,
     ffmpegPath,
     format,
     pronunciationMode,
@@ -846,6 +856,84 @@ function prepareSpeechSegmentsForTts(inputText: string, speechProfile: SpeechPro
   }
 
   return finalSegments;
+}
+
+function normalizeProviderParagraph(value: string) {
+  return value
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+function splitOversizedProviderParagraph(paragraph: string, maxChars: number) {
+  const normalized = normalizeProviderParagraph(paragraph);
+
+  if (!normalized) {
+    return [];
+  }
+
+  if (normalized.length <= maxChars) {
+    return [normalized];
+  }
+
+  return splitSegmentBySentences(normalized, maxChars, true);
+}
+
+function prepareCustomVoiceProviderSegments(inputText: string, maxChars: number) {
+  const normalized = normalizeGenerationText(inputText);
+  const paragraphs = normalized
+    .split(/\n\s*\n+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const providerMaxChars = Math.max(1_000, Math.min(12_000, Math.floor(maxChars)));
+  const segments: SpeechSegment[] = [];
+  let current = '';
+
+  const flushCurrent = (pauseAfterMs = customVoiceProviderBoundaryPauseMs) => {
+    if (!current.trim()) {
+      return;
+    }
+
+    segments.push({
+      pauseAfterMs,
+      text: current.trim(),
+    });
+    current = '';
+  };
+
+  for (const paragraph of paragraphs) {
+    const paragraphParts = splitOversizedProviderParagraph(paragraph, providerMaxChars);
+
+    for (const part of paragraphParts) {
+      const candidate = current ? `${current}\n\n${part}` : part;
+
+      if (candidate.length <= providerMaxChars) {
+        current = candidate;
+        continue;
+      }
+
+      flushCurrent();
+      current = part;
+    }
+  }
+
+  flushCurrent(0);
+
+  if (segments.length > 0) {
+    segments[segments.length - 1].pauseAfterMs = 0;
+  }
+
+  return segments;
+}
+
+function prepareFullSpeechSegmentsForJob(inputText: string, job: Pick<TtsGenerationJobRecord, 'provider_voice_profile_id'>) {
+  if (job.provider_voice_profile_id) {
+    return prepareCustomVoiceProviderSegments(inputText, getRuntimeConfig().customVoiceProviderRequestMaxChars);
+  }
+
+  return prepareSpeechSegmentsForTts(inputText, getFixedSpeechProfile());
 }
 
 function countWordsInSegment(value: string) {
@@ -1932,7 +2020,7 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
 async function processFullGenerationJob(job: TtsGenerationJobRecord) {
   const jobPaths = getJobPaths(job);
   const generationText = await applyActivePronunciationRules(job.input_text);
-  const segments = prepareSpeechSegmentsForTts(generationText, getSpeechProfileForJob(job));
+  const segments = prepareFullSpeechSegmentsForJob(generationText, job);
   const quality = resolveTtsQualityPreset(job.quality_preset);
 
   await fs.mkdir(jobPaths.tempDirectory, { recursive: true });
@@ -2667,6 +2755,7 @@ export function getTtsRuntimeStatus() {
   return {
     apiUrl: config.apiUrl,
     chunkMaxChars: config.chunkMaxChars,
+    customVoiceProviderRequestMaxChars: config.customVoiceProviderRequestMaxChars,
     configured: Boolean(config.apiKey),
     ffmpegPath: config.ffmpegPath,
     providerVoice: config.voiceId,
