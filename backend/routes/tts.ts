@@ -761,8 +761,25 @@ export function createTtsRouter() {
       }
 
       const filePath = await getTtsGenerationAttachmentPath(job, format);
-      await markTtsGenerationJobDownloaded(job.id, req.session.customerUser!.id);
-      res.download(filePath);
+      res.download(filePath, async (downloadError) => {
+        if (downloadError) {
+          if (!res.headersSent) {
+            const statusCode = resolveStatusCode(downloadError);
+            res.status(statusCode).json({
+              error: safeTtsErrorMessage(downloadError, 'Failed to download the generated audio.'),
+            });
+          }
+          return;
+        }
+
+        await markTtsGenerationJobDownloaded(job.id, req.session.customerUser!.id).catch((error: unknown) => {
+          console.error('Failed to mark TTS job downloaded.', {
+            error,
+            jobId: job.id,
+            userId: req.session.customerUser!.id,
+          });
+        });
+      });
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
