@@ -12,6 +12,9 @@ const {
 const {
   retryTtsGenerationJob,
 } = await import('../services/tts-jobs.ts');
+const {
+  finalizeCompletedPayment,
+} = await import('../services/customers.ts');
 
 function assertStatusCode(error: unknown, expectedStatusCode: number, label: string) {
   const actualStatusCode = error instanceof Error && 'statusCode' in error
@@ -264,12 +267,107 @@ async function assertVoiceProfileLifecycleGuards() {
   }
 }
 
+async function assertStarterExtraTokenPaymentBlocked() {
+  const userResult = await pool.query<{ id: number }>(
+    `
+      INSERT INTO users (
+        email,
+        password_hash,
+        email_verified_at,
+        phone_verified_at,
+        package_code,
+        token_balance,
+        starter_granted_at,
+        starter_last_refill_at
+      )
+      VALUES (
+        'fresh-db-starter-extra-token-check@example.test',
+        'not-a-real-password-hash',
+        NOW(),
+        NOW(),
+        'starter',
+        10000,
+        NOW(),
+        NOW()
+      )
+      RETURNING id
+    `,
+  );
+  const user = userResult.rows[0];
+
+  if (!user) {
+    throw new Error('Fresh DB starter extra-token test user was not created.');
+  }
+
+  const paymentResult = await pool.query<{ id: number }>(
+    `
+      INSERT INTO payments (
+        user_id,
+        provider,
+        payment_type,
+        status,
+        amount,
+        currency,
+        token_amount,
+        metadata
+      )
+      VALUES ($1, 'bkash', 'extra_tokens', 'pending', 49, 'BDT', 5000, '{}'::jsonb)
+      RETURNING id
+    `,
+    [user.id],
+  );
+  const payment = paymentResult.rows[0];
+
+  if (!payment) {
+    throw new Error('Fresh DB starter extra-token test payment was not created.');
+  }
+
+  const finalizedPayment = await finalizeCompletedPayment(payment.id);
+
+  if (finalizedPayment.status === 'completed') {
+    throw new Error('Starter extra-token payment was completed even though the account is not Gold or Platinum.');
+  }
+
+  if ((finalizedPayment.metadata as { finalizationBlockedReason?: unknown }).finalizationBlockedReason !== 'extra_tokens_require_paid_plan') {
+    throw new Error('Starter extra-token payment did not record the expected blocked reason.');
+  }
+
+  const balanceResult = await pool.query<{ token_balance: string }>(
+    `
+      SELECT token_balance
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [user.id],
+  );
+
+  if (Number(balanceResult.rows[0]?.token_balance) !== 10000) {
+    throw new Error('Starter extra-token payment changed the customer balance.');
+  }
+
+  const transactionResult = await pool.query<{ count: string }>(
+    `
+      SELECT COUNT(*)::text AS count
+      FROM token_transactions
+      WHERE user_id = $1
+        AND transaction_type = 'extra_purchase'
+    `,
+    [user.id],
+  );
+
+  if (Number(transactionResult.rows[0]?.count ?? 0) !== 0) {
+    throw new Error('Starter extra-token payment created an extra_purchase transaction.');
+  }
+}
+
 try {
   await ensureSchema();
   await assertStarterAllowance();
   await assertVoiceProfileSchema();
   await assertPendingVoiceProfileInsert();
   await assertVoiceProfileLifecycleGuards();
+  await assertStarterExtraTokenPaymentBlocked();
   console.log(`Fresh database schema verification passed for ${process.env.DATABASE_URL}.`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);

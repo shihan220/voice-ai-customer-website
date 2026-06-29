@@ -686,6 +686,27 @@ export async function finalizeCompletedPayment(paymentId: number) {
       return blockedPaymentResult.rows[0] ?? payment;
     }
 
+    if (payment.payment_type === 'extra_tokens' && user.package_code === 'starter') {
+      const blockedPaymentResult = await client.query<PaymentRecord>(
+        `
+          UPDATE payments
+          SET
+            metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [
+          payment.id,
+          JSON.stringify({
+            finalizationBlockedReason: 'extra_tokens_require_paid_plan',
+          }),
+        ],
+      );
+      await client.query('COMMIT');
+      return blockedPaymentResult.rows[0] ?? payment;
+    }
+
     const updatedPaymentResult = await client.query<PaymentRecord>(
       `
         UPDATE payments
