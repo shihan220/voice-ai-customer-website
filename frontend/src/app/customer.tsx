@@ -2131,6 +2131,11 @@ export function CustomerDashboardPage({
     setCustomScriptConfirmed(false);
     setVoiceActionError('');
     setVoiceActionMessage('');
+    discardVoiceRecording();
+    clearRecordedReference();
+    setVoiceFile(null);
+    setVoiceFileSource(null);
+    setVoiceFileResetKey((current) => current + 1);
 
     if (mode === 'recommended') {
       setVoiceForm((current) => ({
@@ -3046,7 +3051,10 @@ export function CustomerDashboardPage({
                           disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
                           placeholder="Paste the exact text spoken in the reference WAV"
                           value={voiceForm.referenceText}
-                          onChange={(event) => setVoiceForm((current) => ({ ...current, referenceText: event.target.value }))}
+                          onChange={(event) => {
+                            setCustomScriptConfirmed(false);
+                            setVoiceForm((current) => ({ ...current, referenceText: event.target.value }));
+                          }}
                         />
                         <div className="mt-3">
                           <InlineMessage>

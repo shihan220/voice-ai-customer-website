@@ -31,21 +31,21 @@ const defaultKeypillarTtsPronunciationMode = 'english_preserve';
 const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
 const defaultFfmpegPath = 'ffmpeg';
 const defaultTtsChunkMaxChars = 1_200;
-const defaultCustomVoiceChunkMaxChars = 220;
+const defaultCustomVoiceChunkMaxChars = 420;
 const maxInputCharacters = 120_000;
 const maxActivePreviewJobsPerUser = 2;
 const maxActiveGenerationJobsPerUser = 1;
 const maxActiveTtsJobsPerUser = 3;
-const chunkPauseMs = 220;
-const headingPauseMs = 900;
-const listItemPauseMs = 450;
-const paragraphPauseMs = 800;
-const sentencePauseMs = 340;
-const customVoiceChunkPauseMs = 220;
-const customVoiceHeadingPauseMs = 900;
-const customVoiceListItemPauseMs = 420;
-const customVoiceParagraphPauseMs = 750;
-const customVoiceSentencePauseMs = 320;
+const chunkPauseMs = 120;
+const headingPauseMs = 520;
+const listItemPauseMs = 220;
+const paragraphPauseMs = 320;
+const sentencePauseMs = 140;
+const customVoiceChunkPauseMs = 140;
+const customVoiceHeadingPauseMs = 560;
+const customVoiceListItemPauseMs = 240;
+const customVoiceParagraphPauseMs = 360;
+const customVoiceSentencePauseMs = 160;
 const previewWordLimit = 85;
 
 type SpeechSegment = {
@@ -736,6 +736,57 @@ function addSpeechTextSegment(segments: SpeechSegment[], text: string, pauseAfte
   }
 }
 
+function addSentenceSpeechSegments(
+  segments: SpeechSegment[],
+  sentences: string[],
+  pauseAfterMs: number,
+  speechProfile: SpeechProfile,
+) {
+  let current = '';
+
+  const flushCurrent = (nextPauseAfterMs: number) => {
+    if (!current.trim()) {
+      return;
+    }
+
+    segments.push({
+      pauseAfterMs: nextPauseAfterMs,
+      text: current.replace(/\s+/g, ' ').trim(),
+    });
+    current = '';
+  };
+
+  for (const sentence of sentences) {
+    const normalizedSentence = sentence.replace(/\s+/g, ' ').trim();
+
+    if (!normalizedSentence) {
+      continue;
+    }
+
+    if (normalizedSentence.length > speechProfile.chunkMaxChars) {
+      flushCurrent(speechProfile.sentencePauseMs);
+      addSpeechTextSegment(segments, normalizedSentence, speechProfile.sentencePauseMs, speechProfile);
+      continue;
+    }
+
+    const candidate = current ? `${current} ${normalizedSentence}` : normalizedSentence;
+
+    if (candidate.length <= speechProfile.chunkMaxChars) {
+      current = candidate;
+      continue;
+    }
+
+    flushCurrent(speechProfile.sentencePauseMs);
+    current = normalizedSentence;
+  }
+
+  if (current.trim()) {
+    flushCurrent(pauseAfterMs);
+  } else if (segments.length > 0) {
+    segments[segments.length - 1].pauseAfterMs = pauseAfterMs;
+  }
+}
+
 function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string, speechProfile: SpeechProfile) {
   const lines = paragraph
     .split('\n')
@@ -772,14 +823,7 @@ function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string
     return;
   }
 
-  for (const [index, sentence] of sentences.entries()) {
-    addSpeechTextSegment(
-      segments,
-      sentence,
-      index === sentences.length - 1 ? speechProfile.paragraphPauseMs : speechProfile.sentencePauseMs,
-      speechProfile,
-    );
-  }
+  addSentenceSpeechSegments(segments, sentences, speechProfile.paragraphPauseMs, speechProfile);
 }
 
 function prepareSpeechSegmentsForTts(inputText: string, speechProfile: SpeechProfile) {
@@ -912,12 +956,15 @@ function extractAudioUrlFromPayload(payload: unknown) {
     ['url'],
     ['audioUrl'],
     ['audio_url'],
+    ['audio'],
     ['data', 'url'],
     ['data', 'audioUrl'],
     ['data', 'audio_url'],
+    ['data', 'audio'],
     ['result', 'url'],
     ['result', 'audioUrl'],
     ['result', 'audio_url'],
+    ['result', 'audio'],
   ];
 
   for (const candidatePath of candidatePaths) {
@@ -1177,6 +1224,10 @@ function calculateBillableMinutes(audioSeconds: number) {
   return Math.max(1, Math.ceil(audioSeconds / 60));
 }
 
+function calculateEstimatedMinutesFromWords(wordCount: number) {
+  return wordCount > 0 ? Math.max(1, Math.ceil(wordCount / 150)) : 0;
+}
+
 function getFfmpegChannelLayout(channels: number) {
   if (channels === 1) {
     return 'mono';
@@ -1304,6 +1355,10 @@ function getOwnedPreviewPath(job: Pick<TtsGenerationJobRecord, 'preview_file'>) 
   return resolvePrivateTtsPath(job.preview_file);
 }
 
+async function removeGeneratedAudioFiles(filePaths: string[]) {
+  await Promise.all(filePaths.map((filePath) => fs.rm(filePath, { force: true }).catch(() => undefined)));
+}
+
 async function assertFileExists(filePath: string, message: string) {
   try {
     await fs.access(filePath);
@@ -1406,6 +1461,23 @@ async function completeJobAndDeductUsage(
 
     if (!user) {
       throw new Error('User not found while billing completed TTS job.');
+    }
+
+    if (user.account_status !== 'active') {
+      await client.query(
+        `
+          UPDATE tts_generation_jobs
+          SET
+            status = 'failed',
+            processing_stage = 'failed',
+            error_message = $2,
+            updated_at = NOW()
+          WHERE id = $1
+        `,
+        [job.id, 'This account is disabled.'],
+      );
+      await client.query('COMMIT');
+      return null;
     }
 
     const currentBalance = Number(user.token_balance);
@@ -1540,6 +1612,38 @@ async function completePreviewJob(jobId: number, previewRelativePath: string, pr
           WHERE id = $1
         `,
         [job.id],
+      );
+      await client.query('COMMIT');
+      return null;
+    }
+
+    const userResult = await client.query<UserRecord>(
+      `
+        SELECT *
+        FROM users
+        WHERE id = $1
+        FOR UPDATE
+      `,
+      [job.user_id],
+    );
+    const user = userResult.rows[0];
+
+    if (!user) {
+      throw new Error('User not found while completing preview.');
+    }
+
+    if (user.account_status !== 'active') {
+      await client.query(
+        `
+          UPDATE tts_generation_jobs
+          SET
+            status = 'failed',
+            processing_stage = 'failed',
+            error_message = $2,
+            updated_at = NOW()
+          WHERE id = $1
+        `,
+        [job.id, 'This account is disabled.'],
       );
       await client.query('COMMIT');
       return null;
@@ -1688,6 +1792,26 @@ async function markJobFailed(jobId: number, errorMessage: string) {
   }
 }
 
+async function failJobIfOwnerInactive(job: Pick<TtsGenerationJobRecord, 'id' | 'user_id'>) {
+  const result = await pool.query<Pick<UserRecord, 'account_status'>>(
+    `
+      SELECT account_status
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [job.user_id],
+  );
+  const user = result.rows[0];
+
+  if (user?.account_status === 'active') {
+    return false;
+  }
+
+  await markJobFailed(job.id, user ? 'This account is disabled.' : 'User account not found.');
+  return true;
+}
+
 async function claimNextQueuedJob() {
   const result = await pool.query<TtsGenerationJobRecord>(
     `
@@ -1731,10 +1855,18 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
       return false;
     }
 
+    if (await failJobIfOwnerInactive(job)) {
+      return false;
+    }
+
     const chunkAudio = await generateWavChunk(segment.text, job);
 
     if (await isJobCancellationRequested(job.id)) {
       await markJobCancelled(job.id);
+      return false;
+    }
+
+    if (await failJobIfOwnerInactive(job)) {
       return false;
     }
 
@@ -1748,6 +1880,10 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
 
   if (await isJobCancellationRequested(job.id)) {
     await markJobCancelled(job.id);
+    return false;
+  }
+
+  if (await failJobIfOwnerInactive(job)) {
     return false;
   }
 
@@ -1774,7 +1910,11 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
     await assertFileExists(jobPaths.previewAbsolutePath, 'Preview WAV output is missing after generation.');
 
     const previewAudioSeconds = await getAudioDurationSeconds(jobPaths.previewAbsolutePath);
-    await completePreviewJob(job.id, jobPaths.previewRelativePath, previewAudioSeconds);
+    const completedPreviewJob = await completePreviewJob(job.id, jobPaths.previewRelativePath, previewAudioSeconds);
+
+    if (!completedPreviewJob) {
+      await removeGeneratedAudioFiles([jobPaths.previewAbsolutePath]);
+    }
   } catch (error) {
     console.error('TTS preview generation failed.', {
       error,
@@ -1782,6 +1922,7 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
       statusCode: getStatusCode(error, 500),
       userId: job.user_id,
     });
+    await removeGeneratedAudioFiles([jobPaths.previewAbsolutePath]);
     await markJobFailed(job.id, safeGenerationFailureMessage());
   } finally {
     await fs.rm(jobPaths.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
@@ -1812,6 +1953,7 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
       : null;
 
     if (await isJobCancellationRequested(job.id)) {
+      await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
       await markJobCancelled(job.id);
       return;
     }
@@ -1823,11 +1965,22 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
     }
 
     if (await isJobCancellationRequested(job.id)) {
+      await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
       await markJobCancelled(job.id);
       return;
     }
 
-    await completeJobAndDeductUsage(job.id, jobPaths.wavRelativePath, mp3RelativePath, generatedAudioSeconds, billableMinutes);
+    const completedJob = await completeJobAndDeductUsage(
+      job.id,
+      jobPaths.wavRelativePath,
+      mp3RelativePath,
+      generatedAudioSeconds,
+      billableMinutes,
+    );
+
+    if (!completedJob) {
+      await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
+    }
   } catch (error) {
     console.error('TTS generation failed.', {
       error,
@@ -1835,6 +1988,7 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
       statusCode: getStatusCode(error, 500),
       userId: job.user_id,
     });
+    await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
     await markJobFailed(job.id, safeGenerationFailureMessage());
   } finally {
     await fs.rm(jobPaths.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
@@ -1898,7 +2052,7 @@ async function resetStaleProcessingJobs() {
           ELSE 'queued'
         END,
         processing_stage = CASE
-          WHEN status = 'preview_processing' THEN 'queued'
+          WHEN status = 'preview_processing' THEN 'preview_queued'
           WHEN status = 'cancelling' THEN 'cancelled'
           ELSE 'queued'
         END,
@@ -1971,9 +2125,9 @@ async function assertUserCanQueueMoreTtsJobs(
   userId: number,
   targetStatus: 'preview_queued' | 'queued',
 ) {
-  const activePreviewStatuses = ['preview_queued', 'preview_processing'];
-  const activeGenerationStatuses = ['queued', 'processing'];
-  const activeStatuses = [...activePreviewStatuses, ...activeGenerationStatuses];
+  const activePreviewStatuses = ['preview_queued', 'preview_processing', 'cancelling'];
+  const activeGenerationStatuses = ['queued', 'processing', 'cancelling'];
+  const activeStatuses = Array.from(new Set([...activePreviewStatuses, ...activeGenerationStatuses]));
   const activePreviewCount = await countActiveTtsJobs(client, userId, activePreviewStatuses);
   const activeGenerationCount = await countActiveTtsJobs(client, userId, activeGenerationStatuses);
   const activeTotalCount = await countActiveTtsJobs(client, userId, activeStatuses);
@@ -1991,7 +2145,7 @@ async function assertUserCanQueueMoreTtsJobs(
   }
 }
 
-function assertUserCanQueueTtsJob(user: UserRecord) {
+function assertUserCanUseTtsWorkspace(user: UserRecord) {
   if (user.account_status !== 'active') {
     throw withStatus('This account is disabled.', 403);
   }
@@ -2004,10 +2158,18 @@ function assertUserCanQueueTtsJob(user: UserRecord) {
     throw withStatus('Verify your phone before creating audio jobs.', 403);
   }
 
-  const currentBalance = Number(user.token_balance);
+  return Number(user.token_balance);
+}
 
-  if (currentBalance <= 0) {
-    throw withStatus('No generation minutes remain. Upgrade or add allowance before creating audio.', 402);
+function assertUserHasGenerationMinutes(user: UserRecord, estimatedMinutes = 1) {
+  const currentBalance = Number(user.token_balance);
+  const requiredMinutes = Math.max(1, estimatedMinutes);
+
+  if (currentBalance < requiredMinutes) {
+    const message = currentBalance <= 0
+      ? 'No generation minutes remain. Upgrade or add allowance before generating full audio.'
+      : `This job is estimated at ${requiredMinutes} minute${requiredMinutes === 1 ? '' : 's'}, but your current balance is ${currentBalance.toLocaleString()}. Add minutes before generating full audio.`;
+    throw withStatus(message, 402);
   }
 
   return currentBalance;
@@ -2039,7 +2201,10 @@ async function createQueuedTtsGenerationJob(
       throw withStatus('User not found.', 404);
     }
 
-    const currentBalance = assertUserCanQueueTtsJob(user);
+    const currentBalance = assertUserCanUseTtsWorkspace(user);
+    if (initialStatus === 'queued') {
+      assertUserHasGenerationMinutes(user, calculateEstimatedMinutesFromWords(wordCount));
+    }
     await assertUserCanQueueMoreTtsJobs(client, user.id, initialStatus);
     const voiceSelection = await resolveTtsVoiceSelectionForUser(client, user.id, input.voiceProfileId);
     const stage = initialStatus === 'preview_queued' ? 'preview_queued' : 'queued';
@@ -2152,7 +2317,8 @@ export async function startTtsGenerationFromPreview(jobId: number, userId: numbe
       throw withStatus('User not found.', 404);
     }
 
-    const currentBalance = assertUserCanQueueTtsJob(user);
+    assertUserCanUseTtsWorkspace(user);
+    const currentBalance = assertUserHasGenerationMinutes(user, calculateEstimatedMinutesFromWords(Number(job.word_count)));
     await assertUserCanQueueMoreTtsJobs(client, userId, 'queued');
 
     const startResult = await client.query<TtsGenerationJobRecord>(
@@ -2229,9 +2395,12 @@ export async function retryTtsGenerationJob(jobId: number, userId: number) {
       throw withStatus('User not found.', 404);
     }
 
-    const currentBalance = assertUserCanQueueTtsJob(user);
     const retryStatus = job.full_generation_requested_at ? 'queued' : 'preview_queued';
     const retryStage = retryStatus === 'queued' ? 'queued' : 'preview_queued';
+    const currentBalance = assertUserCanUseTtsWorkspace(user);
+    if (retryStatus === 'queued') {
+      assertUserHasGenerationMinutes(user, calculateEstimatedMinutesFromWords(Number(job.word_count)));
+    }
     await assertUserCanQueueMoreTtsJobs(client, userId, retryStatus);
 
     const retryResult = await client.query<TtsGenerationJobRecord>(

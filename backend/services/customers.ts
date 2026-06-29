@@ -461,11 +461,14 @@ export async function updatePaymentRecord(input: {
     `
       UPDATE payments
       SET
-        status = $2,
+        status = CASE
+          WHEN status = 'completed' AND $2 <> 'completed' THEN status
+          ELSE $2
+        END,
         provider_payment_id = COALESCE($3, provider_payment_id),
         provider_transaction_id = COALESCE($4, provider_transaction_id),
         metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb,
-        completed_at = CASE WHEN $2 = 'completed' THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+        completed_at = CASE WHEN status = 'completed' OR $2 = 'completed' THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
         updated_at = NOW()
       WHERE id = $1
       RETURNING *
@@ -660,6 +663,27 @@ export async function finalizeCompletedPayment(paymentId: number) {
 
     if (!user) {
       throw new Error('User not found for payment.');
+    }
+
+    if (user.account_status !== 'active') {
+      const blockedPaymentResult = await client.query<PaymentRecord>(
+        `
+          UPDATE payments
+          SET
+            metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [
+          payment.id,
+          JSON.stringify({
+            finalizationBlockedReason: 'account_disabled',
+          }),
+        ],
+      );
+      await client.query('COMMIT');
+      return blockedPaymentResult.rows[0] ?? payment;
     }
 
     const updatedPaymentResult = await client.query<PaymentRecord>(

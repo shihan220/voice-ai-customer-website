@@ -253,7 +253,7 @@ export type TtsPronunciationRuleRecord = {
 export type TtsVoiceProfileRecord = {
   id: number;
   user_id: number;
-  provider_profile_id: string;
+  provider_profile_id: string | null;
   provider_sync_status: 'pending' | 'ready';
   provider_sync_error: string | null;
   provider_synced_at: Date | null;
@@ -549,7 +549,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS tts_voice_profiles (
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-      provider_profile_id TEXT NOT NULL,
+      provider_profile_id TEXT,
       provider_sync_status TEXT NOT NULL DEFAULT 'ready'
         CHECK (provider_sync_status IN ('pending', 'ready')),
       provider_sync_error TEXT,
@@ -584,6 +584,17 @@ export async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS test_preview_file TEXT,
       ADD COLUMN IF NOT EXISTS test_preview_audio_seconds NUMERIC(12, 3),
       ADD COLUMN IF NOT EXISTS test_preview_generated_at TIMESTAMPTZ;
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_voice_profiles
+      ALTER COLUMN provider_profile_id DROP NOT NULL;
+  `);
+
+  await pool.query(`
+    UPDATE tts_voice_profiles
+    SET provider_profile_id = NULL
+    WHERE provider_profile_id = '';
   `);
 
   await pool.query(`

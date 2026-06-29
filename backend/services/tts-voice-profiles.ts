@@ -70,6 +70,12 @@ function isProviderVoiceProfileUnavailableError(error: unknown) {
   return enrichedError.statusCode === 503 && enrichedError.publicMessage === providerUnavailablePublicMessage;
 }
 
+function wait(milliseconds: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
 function getVoiceProfileConfig() {
   const apiKey = normalizeText(process.env.KEYPILLAR_TTS_API_KEY);
   const configuredTtsApiUrl = normalizeText(process.env.KEYPILLAR_TTS_API_URL);
@@ -479,12 +485,20 @@ function extractBase64AudioPayload(payload: unknown): Buffer | null {
       continue;
     }
 
+    if (/^https?:\/\//i.test(value.trim())) {
+      continue;
+    }
+
     const cleanedValue = value.includes('base64,') ? value.split('base64,').pop() ?? '' : value;
+
+    if (!/^[a-z0-9+/=\s_-]+$/i.test(cleanedValue)) {
+      continue;
+    }
 
     try {
       return Buffer.from(cleanedValue, 'base64');
     } catch {
-      return null;
+      continue;
     }
   }
 
@@ -495,14 +509,17 @@ function extractAudioUrlFromPayload(payload: unknown) {
   const candidatePaths = [
     ['audio_url'],
     ['audioUrl'],
+    ['audio'],
     ['url'],
     ['download_url'],
     ['downloadUrl'],
     ['data', 'audio_url'],
     ['data', 'audioUrl'],
+    ['data', 'audio'],
     ['data', 'url'],
     ['result', 'audio_url'],
     ['result', 'audioUrl'],
+    ['result', 'audio'],
     ['result', 'url'],
   ];
 
@@ -517,21 +534,57 @@ function extractAudioUrlFromPayload(payload: unknown) {
   return null;
 }
 
-async function fetchProviderAudioUrl(audioUrl: string, apiKey: string) {
-  const response = await fetch(audioUrl, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-  });
-
-  if (!response.ok) {
-    throw withStatus(`Test preview audio fetch failed with status ${response.status}.`, 502);
+function resolveProviderAudioUrl(audioUrl: string, apiUrl: string) {
+  try {
+    return new URL(audioUrl, apiUrl).toString();
+  } catch {
+    throw withStatus('Keypillar TTS response included an invalid audio URL.', 502);
   }
-
-  return Buffer.from(await response.arrayBuffer());
 }
 
-async function fetchAudioFromJsonPayload(payload: unknown, apiKey: string) {
+async function fetchProviderAudioUrl(audioUrl: string, config: ReturnType<typeof getVoiceProfileConfig>) {
+  const resolvedUrl = resolveProviderAudioUrl(audioUrl, config.ttsApiUrl);
+  const providerOrigin = new URL(config.ttsApiUrl).origin;
+  const audioOrigin = new URL(resolvedUrl).origin;
+  const headers: Record<string, string> = {};
+  const delaysMs = [0, 500, 1_000, 1_500, 2_500, 4_000];
+  let lastStatusCode: number | null = null;
+
+  if (audioOrigin === providerOrigin) {
+    headers.Authorization = `Bearer ${config.apiKey}`;
+  }
+
+  for (const [attemptIndex, delayMs] of delaysMs.entries()) {
+    if (delayMs > 0) {
+      await wait(delayMs);
+    }
+
+    const response = await fetch(resolvedUrl, { headers });
+
+    if (response.ok) {
+      return Buffer.from(await response.arrayBuffer());
+    }
+
+    lastStatusCode = response.status;
+    await response.arrayBuffer().catch(() => undefined);
+
+    const hasMoreAttempts = attemptIndex < delaysMs.length - 1;
+    const retryable = response.status === 404 ||
+      response.status === 408 ||
+      response.status === 409 ||
+      response.status === 425 ||
+      response.status === 429 ||
+      response.status >= 500;
+
+    if (!hasMoreAttempts || !retryable) {
+      break;
+    }
+  }
+
+  throw withStatus(`Test preview audio fetch failed with status ${lastStatusCode ?? 'unknown'}.`, 502);
+}
+
+async function fetchAudioFromJsonPayload(payload: unknown, config: ReturnType<typeof getVoiceProfileConfig>) {
   const directAudio = extractBase64AudioPayload(payload);
 
   if (directAudio) {
@@ -541,7 +594,7 @@ async function fetchAudioFromJsonPayload(payload: unknown, apiKey: string) {
   const audioUrl = extractAudioUrlFromPayload(payload);
 
   if (audioUrl) {
-    return fetchProviderAudioUrl(audioUrl, apiKey);
+    return fetchProviderAudioUrl(audioUrl, config);
   }
 
   throw withStatus('Keypillar TTS response did not include downloadable audio.', 502);
@@ -602,13 +655,13 @@ async function generateProviderTestPreview(input: {
   }
 
   if (contentType.includes('json')) {
-    return fetchAudioFromJsonPayload(await response.json(), config.apiKey);
+    return fetchAudioFromJsonPayload(await response.json(), config);
   }
 
   const rawBody = await response.text();
 
   try {
-    return fetchAudioFromJsonPayload(JSON.parse(rawBody), config.apiKey);
+    return fetchAudioFromJsonPayload(JSON.parse(rawBody), config);
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw withStatus('Keypillar TTS returned an unsupported response format.', 502);
@@ -771,9 +824,9 @@ function getVoiceProfilePaths(profile: Pick<TtsVoiceProfileRecord, 'display_name
 
 function resolvePrivateReferencePath(referenceAudioFile: string) {
   const absolutePath = path.resolve(privateMediaRoot, referenceAudioFile);
-  const privateRootWithSeparator = `${privateMediaRoot}${path.sep}`;
+  const allowedRoot = path.resolve(ttsVoiceProfilesMediaDirectory);
 
-  if (!absolutePath.startsWith(privateRootWithSeparator)) {
+  if (absolutePath !== allowedRoot && !absolutePath.startsWith(`${allowedRoot}${path.sep}`)) {
     throw withStatus('Reference audio file path is invalid.', 500);
   }
 
@@ -944,6 +997,7 @@ export async function createTtsVoiceProfile(input: {
 
   try {
     await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [input.userId]);
 
     const activeCount = await countActiveProfiles(client, input.userId);
 
@@ -988,7 +1042,7 @@ export async function createTtsVoiceProfile(input: {
       `,
       [
         input.userId,
-        providerProfileId ?? '',
+        providerProfileId,
         providerSyncStatus,
         providerSyncError,
         providerSyncStatus === 'ready' ? new Date() : null,
