@@ -87,6 +87,12 @@ export function createUserRouter() {
         return;
       }
 
+      if (user.account_status !== 'active') {
+        req.session.customerUser = undefined;
+        res.json({ authenticated: false, user: null });
+        return;
+      }
+
       req.session.customerUser = {
         email: user.email,
         id: user.id,

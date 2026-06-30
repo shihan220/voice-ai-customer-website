@@ -106,6 +106,15 @@ function getSelectionTokenAmount(selection: PurchaseSelection): number | null {
   return selection.kind === 'extra_tokens' ? selection.tokenAmount : null;
 }
 
+async function canCustomerPurchaseSelection(userId: number, selection: PurchaseSelection) {
+  if (selection.kind !== 'extra_tokens') {
+    return true;
+  }
+
+  const user = await getUserById(userId);
+  return Boolean(user && user.package_code !== 'starter');
+}
+
 function getBkashConfig() {
   const baseUrl = normalizeText(process.env.BKASH_BASE_URL);
   const username = normalizeText(process.env.BKASH_USERNAME);
@@ -316,13 +325,9 @@ export function createPaymentsRouter() {
       return;
     }
 
-    if (selection.kind === 'extra_tokens') {
-      const user = await getUserById(req.session.customerUser!.id);
-
-      if (!user || user.package_code === 'starter') {
-        res.status(403).json({ error: 'Extra token purchases are available only for Gold and Platinum accounts.' });
-        return;
-      }
+    if (!(await canCustomerPurchaseSelection(req.session.customerUser!.id, selection))) {
+      res.status(403).json({ error: 'Extra token purchases are available only for Gold and Platinum accounts.' });
+      return;
     }
 
     try {
@@ -545,6 +550,11 @@ export function createPaymentsRouter() {
 
     if (!selection) {
       res.status(400).json({ error: 'Choose Gold, Platinum, or the supported extra token package.' });
+      return;
+    }
+
+    if (!(await canCustomerPurchaseSelection(req.session.customerUser!.id, selection))) {
+      res.status(403).json({ error: 'Extra token purchases are available only for Gold and Platinum accounts.' });
       return;
     }
 

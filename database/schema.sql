@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS packages (
 
 INSERT INTO packages (package_code, name, monthly_refill_tokens, signup_token_grant, is_premium, display_order)
 VALUES
-  ('starter', 'Starter', 1000, 1000, FALSE, 0),
+  ('starter', 'Starter', 10000, 10000, FALSE, 0),
   ('gold', 'Gold', 0, 10000, TRUE, 1),
   ('platinum', 'Platinum', 0, 100000, TRUE, 2)
 ON CONFLICT (package_code) DO UPDATE
@@ -352,6 +352,38 @@ CREATE INDEX IF NOT EXISTS idx_sample_generations_user_created_at
 CREATE INDEX IF NOT EXISTS idx_sample_generations_request_created_at
   ON sample_generations (sample_request_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS tts_voice_profiles (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  provider_profile_id TEXT,
+  provider_sync_status TEXT NOT NULL DEFAULT 'ready'
+    CHECK (provider_sync_status IN ('pending', 'ready')),
+  provider_sync_error TEXT,
+  provider_synced_at TIMESTAMPTZ,
+  display_name TEXT NOT NULL,
+  reference_text TEXT NOT NULL,
+  reference_audio_seconds NUMERIC(12, 3),
+  reference_sample_rate INTEGER,
+  reference_audio_file TEXT,
+  reference_audio_file_size_bytes BIGINT,
+  reference_normalized_at TIMESTAMPTZ,
+  reference_quality_warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  test_preview_file TEXT,
+  test_preview_audio_seconds NUMERIC(12, 3),
+  test_preview_generated_at TIMESTAMPTZ,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_active_created_at
+  ON tts_voice_profiles (user_id, is_active, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_default_unique
+  ON tts_voice_profiles (user_id)
+  WHERE is_default = TRUE AND is_active = TRUE;
+
 CREATE TABLE IF NOT EXISTS tts_generation_jobs (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -370,6 +402,9 @@ CREATE TABLE IF NOT EXISTS tts_generation_jobs (
     CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'preview_queued', 'preview_processing', 'preview_ready', 'cancelling', 'cancelled')),
   processing_stage TEXT,
   provider_voice TEXT NOT NULL,
+  voice_profile_id BIGINT REFERENCES tts_voice_profiles (id) ON DELETE SET NULL,
+  voice_display_name TEXT NOT NULL DEFAULT 'Keypillar Bangla Female',
+  provider_voice_profile_id TEXT,
   wav_file TEXT,
   mp3_file TEXT,
   preview_file TEXT,

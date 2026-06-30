@@ -19,6 +19,9 @@ import {
   type TtsPronunciationRuleRecord,
   type UserRecord,
 } from '../db.ts';
+import {
+  resolveTtsVoiceSelectionForUser,
+} from './tts-voice-profiles.ts';
 
 const defaultKeypillarTtsApiUrl = 'https://api.keypillar.org/v1/voice/generate';
 const defaultKeypillarTtsBaseUrl = 'https://api.keypillar.org';
@@ -26,8 +29,11 @@ const defaultKeypillarTtsEndpoint = '/v1/voice/generate';
 const defaultKeypillarTtsFormat = 'wav';
 const defaultKeypillarTtsPronunciationMode = 'english_preserve';
 const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
+const defaultKeypillarTtsRequestTimeoutMs = 180_000;
 const defaultFfmpegPath = 'ffmpeg';
 const defaultTtsChunkMaxChars = 1_200;
+const defaultCustomVoiceChunkMaxChars = defaultTtsChunkMaxChars;
+const defaultCustomVoiceProviderRequestMaxChars = defaultTtsChunkMaxChars;
 const maxInputCharacters = 120_000;
 const maxActivePreviewJobsPerUser = 2;
 const maxActiveGenerationJobsPerUser = 1;
@@ -37,6 +43,12 @@ const headingPauseMs = 900;
 const listItemPauseMs = 450;
 const paragraphPauseMs = 800;
 const sentencePauseMs = 340;
+const customVoiceChunkPauseMs = chunkPauseMs;
+const customVoiceHeadingPauseMs = headingPauseMs;
+const customVoiceListItemPauseMs = listItemPauseMs;
+const customVoiceParagraphPauseMs = paragraphPauseMs;
+const customVoiceSentencePauseMs = sentencePauseMs;
+const customVoiceProviderBoundaryPauseMs = chunkPauseMs;
 const previewWordLimit = 85;
 
 type SpeechSegment = {
@@ -52,6 +64,16 @@ type AudioMergePart = {
 type AudioStreamFormat = {
   channels: number;
   sampleRate: number;
+};
+
+type SpeechProfile = {
+  allowClauseFallback: boolean;
+  chunkMaxChars: number;
+  chunkPauseMs: number;
+  headingPauseMs: number;
+  listItemPauseMs: number;
+  paragraphPauseMs: number;
+  sentencePauseMs: number;
 };
 
 const ttsQualityPresets: Record<TtsGenerationQualityPreset, { label: string; mp3BitrateKbps: number | null }> = {
@@ -101,6 +123,16 @@ function wait(milliseconds: number) {
   });
 }
 
+function normalizeTimeoutMs(value: string | undefined, fallback: number) {
+  const parsed = Number(value ?? fallback);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(5_000, Math.floor(parsed));
+}
+
 function getRuntimeConfig() {
   const apiKey = normalizeText(process.env.KEYPILLAR_TTS_API_KEY);
   const configuredApiUrl = normalizeText(process.env.KEYPILLAR_TTS_API_URL);
@@ -113,6 +145,16 @@ function getRuntimeConfig() {
   const voiceId = normalizeText(process.env.KEYPILLAR_TTS_VOICE_ID) ?? defaultKeypillarTtsVoiceId;
   const ffmpegPath = normalizeText(process.env.FFMPEG_PATH) ?? defaultFfmpegPath;
   const configuredChunkMaxChars = Number(process.env.TTS_CHUNK_MAX_CHARS ?? defaultTtsChunkMaxChars);
+  const configuredCustomVoiceChunkMaxChars = Number(
+    process.env.TTS_CUSTOM_VOICE_CHUNK_MAX_CHARS ?? defaultCustomVoiceChunkMaxChars,
+  );
+  const configuredCustomVoiceProviderRequestMaxChars = Number(
+    process.env.TTS_CUSTOM_VOICE_PROVIDER_REQUEST_MAX_CHARS ?? defaultCustomVoiceProviderRequestMaxChars,
+  );
+  const requestTimeoutMs = normalizeTimeoutMs(
+    process.env.KEYPILLAR_TTS_REQUEST_TIMEOUT_MS,
+    defaultKeypillarTtsRequestTimeoutMs,
+  );
 
   return {
     apiKey,
@@ -120,11 +162,49 @@ function getRuntimeConfig() {
     chunkMaxChars: Number.isFinite(configuredChunkMaxChars) && configuredChunkMaxChars >= 300
       ? Math.floor(configuredChunkMaxChars)
       : defaultTtsChunkMaxChars,
+    customVoiceChunkMaxChars: Number.isFinite(configuredCustomVoiceChunkMaxChars) &&
+      configuredCustomVoiceChunkMaxChars >= 300 &&
+      configuredCustomVoiceChunkMaxChars <= 12_000
+      ? Math.floor(configuredCustomVoiceChunkMaxChars)
+      : defaultCustomVoiceChunkMaxChars,
+    customVoiceProviderRequestMaxChars: Number.isFinite(configuredCustomVoiceProviderRequestMaxChars) &&
+      configuredCustomVoiceProviderRequestMaxChars >= 300 &&
+      configuredCustomVoiceProviderRequestMaxChars <= 12_000
+      ? Math.floor(configuredCustomVoiceProviderRequestMaxChars)
+      : defaultCustomVoiceProviderRequestMaxChars,
     ffmpegPath,
     format,
     pronunciationMode,
+    requestTimeoutMs,
     voiceId,
   };
+}
+
+async function fetchWithTimeout(
+  input: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  timeoutMessage: string,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw withStatus(timeoutMessage, 504);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function resolveTtsQualityPreset(value?: string | null) {
@@ -215,6 +295,14 @@ function getJobPaths(job: Pick<TtsGenerationJobRecord, 'id' | 'source_name' | 's
   };
 }
 
+function isActiveJobStatus(status: TtsGenerationJobRecord['status']) {
+  return status === 'queued' ||
+    status === 'processing' ||
+    status === 'preview_queued' ||
+    status === 'preview_processing' ||
+    status === 'cancelling';
+}
+
 function splitSegmentByWords(segment: string, maxChars: number) {
   const words = segment.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
@@ -250,31 +338,22 @@ function splitSegmentByWords(segment: string, maxChars: number) {
   return chunks;
 }
 
-function splitSegmentBySentences(segment: string, maxChars: number) {
-  const sentences = segment
-    .split(/(?<=[.!?।])\s+/u)
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  if (sentences.length <= 1) {
-    return splitSegmentByWords(segment, maxChars);
-  }
-
+function combineUnitsIntoChunks(units: string[], maxChars: number) {
   const chunks: string[] = [];
   let current = '';
 
-  for (const sentence of sentences) {
-    if (sentence.length > maxChars) {
+  for (const unit of units) {
+    if (unit.length > maxChars) {
       if (current) {
         chunks.push(current);
         current = '';
       }
 
-      chunks.push(...splitSegmentByWords(sentence, maxChars));
+      chunks.push(...splitSegmentByWords(unit, maxChars));
       continue;
     }
 
-    const next = current ? `${current} ${sentence}` : sentence;
+    const next = current ? `${current} ${unit}` : unit;
 
     if (next.length <= maxChars) {
       current = next;
@@ -284,7 +363,7 @@ function splitSegmentBySentences(segment: string, maxChars: number) {
     if (current) {
       chunks.push(current);
     }
-    current = sentence;
+    current = unit;
   }
 
   if (current) {
@@ -292,6 +371,30 @@ function splitSegmentBySentences(segment: string, maxChars: number) {
   }
 
   return chunks;
+}
+
+function splitSegmentBySentences(segment: string, maxChars: number, allowClauseFallback = false) {
+  const sentenceUnits = segment
+    .split(/(?<=[.!?।])\s+/u)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (sentenceUnits.length > 1) {
+    return combineUnitsIntoChunks(sentenceUnits, maxChars);
+  }
+
+  if (allowClauseFallback) {
+    const clauseUnits = segment
+      .split(/(?<=[,;:،؛，、])\s+/u)
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    if (clauseUnits.length > 1) {
+      return combineUnitsIntoChunks(clauseUnits, maxChars);
+    }
+  }
+
+  return splitSegmentByWords(segment, maxChars);
 }
 
 function splitTextIntoSentences(segment: string) {
@@ -632,29 +735,112 @@ export async function applyActivePronunciationRules(inputText: string) {
   return outputText;
 }
 
-function addSpeechTextSegment(segments: SpeechSegment[], text: string, pauseAfterMs: number, maxChars: number) {
+function getFixedSpeechProfile(config = getRuntimeConfig()): SpeechProfile {
+  return {
+    allowClauseFallback: false,
+    chunkMaxChars: config.chunkMaxChars,
+    chunkPauseMs,
+    headingPauseMs,
+    listItemPauseMs,
+    paragraphPauseMs,
+    sentencePauseMs,
+  };
+}
+
+function getCustomVoiceSpeechProfile(config = getRuntimeConfig()): SpeechProfile {
+  return {
+    allowClauseFallback: false,
+    chunkMaxChars: config.customVoiceChunkMaxChars,
+    chunkPauseMs: customVoiceChunkPauseMs,
+    headingPauseMs: customVoiceHeadingPauseMs,
+    listItemPauseMs: customVoiceListItemPauseMs,
+    paragraphPauseMs: customVoiceParagraphPauseMs,
+    sentencePauseMs: customVoiceSentencePauseMs,
+  };
+}
+
+function getSpeechProfileForJob(job: Pick<TtsGenerationJobRecord, 'provider_voice_profile_id'>) {
+  return job.provider_voice_profile_id ? getCustomVoiceSpeechProfile() : getFixedSpeechProfile();
+}
+
+function addSpeechTextSegment(segments: SpeechSegment[], text: string, pauseAfterMs: number, speechProfile: SpeechProfile) {
   const normalized = text.replace(/\s+/g, ' ').trim();
 
   if (!normalized) {
     return;
   }
 
-  if (normalized.length <= maxChars) {
+  if (normalized.length <= speechProfile.chunkMaxChars) {
     segments.push({ pauseAfterMs, text: normalized });
     return;
   }
 
-  const parts = splitSegmentBySentences(normalized, maxChars);
+  const parts = splitSegmentBySentences(
+    normalized,
+    speechProfile.chunkMaxChars,
+    speechProfile.allowClauseFallback,
+  );
 
   for (const [index, part] of parts.entries()) {
     segments.push({
-      pauseAfterMs: index === parts.length - 1 ? pauseAfterMs : chunkPauseMs,
+      pauseAfterMs: index === parts.length - 1 ? pauseAfterMs : speechProfile.chunkPauseMs,
       text: part,
     });
   }
 }
 
-function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string, maxChars: number) {
+function addSentenceSpeechSegments(
+  segments: SpeechSegment[],
+  sentences: string[],
+  pauseAfterMs: number,
+  speechProfile: SpeechProfile,
+) {
+  let current = '';
+
+  const flushCurrent = (nextPauseAfterMs: number) => {
+    if (!current.trim()) {
+      return;
+    }
+
+    segments.push({
+      pauseAfterMs: nextPauseAfterMs,
+      text: current.replace(/\s+/g, ' ').trim(),
+    });
+    current = '';
+  };
+
+  for (const sentence of sentences) {
+    const normalizedSentence = sentence.replace(/\s+/g, ' ').trim();
+
+    if (!normalizedSentence) {
+      continue;
+    }
+
+    if (normalizedSentence.length > speechProfile.chunkMaxChars) {
+      flushCurrent(speechProfile.sentencePauseMs);
+      addSpeechTextSegment(segments, normalizedSentence, speechProfile.sentencePauseMs, speechProfile);
+      continue;
+    }
+
+    const candidate = current ? `${current} ${normalizedSentence}` : normalizedSentence;
+
+    if (candidate.length <= speechProfile.chunkMaxChars) {
+      current = candidate;
+      continue;
+    }
+
+    flushCurrent(speechProfile.sentencePauseMs);
+    current = normalizedSentence;
+  }
+
+  if (current.trim()) {
+    flushCurrent(pauseAfterMs);
+  } else if (segments.length > 0) {
+    segments[segments.length - 1].pauseAfterMs = pauseAfterMs;
+  }
+}
+
+function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string, speechProfile: SpeechProfile) {
   const lines = paragraph
     .split('\n')
     .map((value) => value.trim())
@@ -669,8 +855,8 @@ function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string
       addSpeechTextSegment(
         segments,
         stripListMarker(line),
-        index === lines.length - 1 ? paragraphPauseMs : listItemPauseMs,
-        maxChars,
+        index === lines.length - 1 ? speechProfile.paragraphPauseMs : speechProfile.listItemPauseMs,
+        speechProfile,
       );
     }
     return;
@@ -679,28 +865,21 @@ function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string
   const paragraphText = lines.join(' ').trim();
 
   if (isLikelyHeading(paragraphText)) {
-    addSpeechTextSegment(segments, paragraphText, headingPauseMs, maxChars);
+    addSpeechTextSegment(segments, paragraphText, speechProfile.headingPauseMs, speechProfile);
     return;
   }
 
   const sentences = splitTextIntoSentences(paragraphText);
 
   if (sentences.length === 0) {
-    addSpeechTextSegment(segments, paragraphText, paragraphPauseMs, maxChars);
+    addSpeechTextSegment(segments, paragraphText, speechProfile.paragraphPauseMs, speechProfile);
     return;
   }
 
-  for (const [index, sentence] of sentences.entries()) {
-    addSpeechTextSegment(
-      segments,
-      sentence,
-      index === sentences.length - 1 ? paragraphPauseMs : sentencePauseMs,
-      maxChars,
-    );
-  }
+  addSentenceSpeechSegments(segments, sentences, speechProfile.paragraphPauseMs, speechProfile);
 }
 
-function prepareSpeechSegmentsForTts(inputText: string, maxChars: number) {
+function prepareSpeechSegmentsForTts(inputText: string, speechProfile: SpeechProfile) {
   const normalized = normalizeGenerationText(inputText);
   const paragraphs = normalized
     .split(/\n\s*\n+/)
@@ -710,7 +889,7 @@ function prepareSpeechSegmentsForTts(inputText: string, maxChars: number) {
   const segments: SpeechSegment[] = [];
 
   for (const paragraph of paragraphs) {
-    addParagraphSpeechSegments(segments, paragraph, maxChars);
+    addParagraphSpeechSegments(segments, paragraph, speechProfile);
   }
 
   const finalSegments = segments.filter((segment) => segment.text);
@@ -722,6 +901,80 @@ function prepareSpeechSegmentsForTts(inputText: string, maxChars: number) {
   return finalSegments;
 }
 
+function normalizeProviderParagraph(value: string) {
+  return value
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+function splitOversizedProviderParagraph(paragraph: string, maxChars: number) {
+  const normalized = normalizeProviderParagraph(paragraph);
+
+  if (!normalized) {
+    return [];
+  }
+
+  if (normalized.length <= maxChars) {
+    return [normalized];
+  }
+
+  return splitSegmentBySentences(normalized, maxChars, true);
+}
+
+function prepareCustomVoiceProviderSegments(inputText: string, maxChars: number) {
+  const normalized = normalizeGenerationText(inputText);
+  const paragraphs = normalized
+    .split(/\n\s*\n+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const providerMaxChars = Math.max(1_000, Math.min(12_000, Math.floor(maxChars)));
+  const segments: SpeechSegment[] = [];
+  let current = '';
+
+  const flushCurrent = (pauseAfterMs = customVoiceProviderBoundaryPauseMs) => {
+    if (!current.trim()) {
+      return;
+    }
+
+    segments.push({
+      pauseAfterMs,
+      text: current.trim(),
+    });
+    current = '';
+  };
+
+  for (const paragraph of paragraphs) {
+    const paragraphParts = splitOversizedProviderParagraph(paragraph, providerMaxChars);
+
+    for (const part of paragraphParts) {
+      const candidate = current ? `${current}\n\n${part}` : part;
+
+      if (candidate.length <= providerMaxChars) {
+        current = candidate;
+        continue;
+      }
+
+      flushCurrent();
+      current = part;
+    }
+  }
+
+  flushCurrent(0);
+
+  if (segments.length > 0) {
+    segments[segments.length - 1].pauseAfterMs = 0;
+  }
+
+  return segments;
+}
+
+function prepareFullSpeechSegmentsForJob(inputText: string, job: Pick<TtsGenerationJobRecord, 'provider_voice_profile_id'>) {
+  return prepareSpeechSegmentsForTts(inputText, getSpeechProfileForJob(job));
+}
+
 function countWordsInSegment(value: string) {
   return value.split(/\s+/).filter(Boolean).length;
 }
@@ -730,8 +983,8 @@ function takeFirstWords(value: string, wordLimit: number) {
   return value.split(/\s+/).filter(Boolean).slice(0, wordLimit).join(' ');
 }
 
-function preparePreviewSpeechSegments(inputText: string, maxChars: number) {
-  const fullSegments = prepareSpeechSegmentsForTts(inputText, maxChars);
+function preparePreviewSpeechSegments(inputText: string, speechProfile: SpeechProfile) {
+  const fullSegments = prepareSpeechSegmentsForTts(inputText, speechProfile);
   const previewSegments: SpeechSegment[] = [];
   let remainingWords = previewWordLimit;
 
@@ -830,12 +1083,15 @@ function extractAudioUrlFromPayload(payload: unknown) {
     ['url'],
     ['audioUrl'],
     ['audio_url'],
+    ['audio'],
     ['data', 'url'],
     ['data', 'audioUrl'],
     ['data', 'audio_url'],
+    ['data', 'audio'],
     ['result', 'url'],
     ['result', 'audioUrl'],
     ['result', 'audio_url'],
+    ['result', 'audio'],
   ];
 
   for (const candidatePath of candidatePaths) {
@@ -881,7 +1137,12 @@ async function fetchAudioUrlWithRetry(audioUrl: string, config: ReturnType<typeo
       headers.Authorization = `Bearer ${config.apiKey}`;
     }
 
-    const response = await fetch(resolvedUrl, { headers });
+    const response = await fetchWithTimeout(
+      resolvedUrl,
+      { headers },
+      config.requestTimeoutMs,
+      `Audio fetch timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+    );
 
     if (response.ok) {
       return Buffer.from(await response.arrayBuffer());
@@ -915,28 +1176,36 @@ async function fetchAudioFromJsonPayload(payload: unknown, config: ReturnType<ty
   throw withStatus('Keypillar TTS response did not include downloadable audio.', 502);
 }
 
-async function generateWavChunk(text: string) {
+async function generateWavChunk(text: string, job: TtsGenerationJobRecord) {
   const config = getRuntimeConfig();
 
   if (!config.apiKey) {
     throw withStatus('KEYPILLAR_TTS_API_KEY is missing.', 503);
   }
 
-  const response = await fetch(config.apiUrl, {
-    body: JSON.stringify({
-      format: config.format,
-      pronunciation_mode: config.pronunciationMode,
-      speed: 1.0,
-      text,
-      voice: config.voiceId,
-    }),
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-      'Idempotency-Key': randomUUID(),
+  const providerVoiceProfileId = job.provider_voice_profile_id ?? 'fixed';
+
+  const response = await fetchWithTimeout(
+    config.apiUrl,
+    {
+      body: JSON.stringify({
+        format: config.format,
+        pronunciation_mode: config.pronunciationMode,
+        speed: 1.0,
+        text,
+        voice: job.provider_voice || config.voiceId,
+        voice_profile_id: providerVoiceProfileId,
+      }),
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': randomUUID(),
+      },
+      method: 'POST',
     },
-    method: 'POST',
-  });
+    config.requestTimeoutMs,
+    `Keypillar TTS request timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+  );
 
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
 
@@ -1092,6 +1361,10 @@ function calculateBillableMinutes(audioSeconds: number) {
   return Math.max(1, Math.ceil(audioSeconds / 60));
 }
 
+function calculateEstimatedMinutesFromWords(wordCount: number) {
+  return wordCount > 0 ? Math.max(1, Math.ceil(wordCount / 150)) : 0;
+}
+
 function getFfmpegChannelLayout(channels: number) {
   if (channels === 1) {
     return 'mono';
@@ -1219,6 +1492,10 @@ function getOwnedPreviewPath(job: Pick<TtsGenerationJobRecord, 'preview_file'>) 
   return resolvePrivateTtsPath(job.preview_file);
 }
 
+async function removeGeneratedAudioFiles(filePaths: string[]) {
+  await Promise.all(filePaths.map((filePath) => fs.rm(filePath, { force: true }).catch(() => undefined)));
+}
+
 async function assertFileExists(filePath: string, message: string) {
   try {
     await fs.access(filePath);
@@ -1321,6 +1598,23 @@ async function completeJobAndDeductUsage(
 
     if (!user) {
       throw new Error('User not found while billing completed TTS job.');
+    }
+
+    if (user.account_status !== 'active') {
+      await client.query(
+        `
+          UPDATE tts_generation_jobs
+          SET
+            status = 'failed',
+            processing_stage = 'failed',
+            error_message = $2,
+            updated_at = NOW()
+          WHERE id = $1
+        `,
+        [job.id, 'This account is disabled.'],
+      );
+      await client.query('COMMIT');
+      return null;
     }
 
     const currentBalance = Number(user.token_balance);
@@ -1455,6 +1749,38 @@ async function completePreviewJob(jobId: number, previewRelativePath: string, pr
           WHERE id = $1
         `,
         [job.id],
+      );
+      await client.query('COMMIT');
+      return null;
+    }
+
+    const userResult = await client.query<UserRecord>(
+      `
+        SELECT *
+        FROM users
+        WHERE id = $1
+        FOR UPDATE
+      `,
+      [job.user_id],
+    );
+    const user = userResult.rows[0];
+
+    if (!user) {
+      throw new Error('User not found while completing preview.');
+    }
+
+    if (user.account_status !== 'active') {
+      await client.query(
+        `
+          UPDATE tts_generation_jobs
+          SET
+            status = 'failed',
+            processing_stage = 'failed',
+            error_message = $2,
+            updated_at = NOW()
+          WHERE id = $1
+        `,
+        [job.id, 'This account is disabled.'],
       );
       await client.query('COMMIT');
       return null;
@@ -1603,6 +1929,26 @@ async function markJobFailed(jobId: number, errorMessage: string) {
   }
 }
 
+async function failJobIfOwnerInactive(job: Pick<TtsGenerationJobRecord, 'id' | 'user_id'>) {
+  const result = await pool.query<Pick<UserRecord, 'account_status'>>(
+    `
+      SELECT account_status
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [job.user_id],
+  );
+  const user = result.rows[0];
+
+  if (user?.account_status === 'active') {
+    return false;
+  }
+
+  await markJobFailed(job.id, user ? 'This account is disabled.' : 'User account not found.');
+  return true;
+}
+
 async function claimNextQueuedJob() {
   const result = await pool.query<TtsGenerationJobRecord>(
     `
@@ -1646,10 +1992,18 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
       return false;
     }
 
-    const chunkAudio = await generateWavChunk(segment.text);
+    if (await failJobIfOwnerInactive(job)) {
+      return false;
+    }
+
+    const chunkAudio = await generateWavChunk(segment.text, job);
 
     if (await isJobCancellationRequested(job.id)) {
       await markJobCancelled(job.id);
+      return false;
+    }
+
+    if (await failJobIfOwnerInactive(job)) {
       return false;
     }
 
@@ -1666,6 +2020,10 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
     return false;
   }
 
+  if (await failJobIfOwnerInactive(job)) {
+    return false;
+  }
+
   await updateJobStage(job.id, 'merging_wav');
   await mergeWavChunks(mergeParts, outputPath, tempDirectory);
 
@@ -1675,7 +2033,7 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
 async function processPreviewJob(job: TtsGenerationJobRecord) {
   const jobPaths = getJobPaths(job);
   const generationText = await applyActivePronunciationRules(job.input_text);
-  const segments = preparePreviewSpeechSegments(generationText, getRuntimeConfig().chunkMaxChars);
+  const segments = preparePreviewSpeechSegments(generationText, getSpeechProfileForJob(job));
 
   await fs.mkdir(jobPaths.tempDirectory, { recursive: true });
 
@@ -1689,7 +2047,11 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
     await assertFileExists(jobPaths.previewAbsolutePath, 'Preview WAV output is missing after generation.');
 
     const previewAudioSeconds = await getAudioDurationSeconds(jobPaths.previewAbsolutePath);
-    await completePreviewJob(job.id, jobPaths.previewRelativePath, previewAudioSeconds);
+    const completedPreviewJob = await completePreviewJob(job.id, jobPaths.previewRelativePath, previewAudioSeconds);
+
+    if (!completedPreviewJob) {
+      await removeGeneratedAudioFiles([jobPaths.previewAbsolutePath]);
+    }
   } catch (error) {
     console.error('TTS preview generation failed.', {
       error,
@@ -1697,6 +2059,7 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
       statusCode: getStatusCode(error, 500),
       userId: job.user_id,
     });
+    await removeGeneratedAudioFiles([jobPaths.previewAbsolutePath]);
     await markJobFailed(job.id, safeGenerationFailureMessage());
   } finally {
     await fs.rm(jobPaths.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
@@ -1706,7 +2069,7 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
 async function processFullGenerationJob(job: TtsGenerationJobRecord) {
   const jobPaths = getJobPaths(job);
   const generationText = await applyActivePronunciationRules(job.input_text);
-  const segments = prepareSpeechSegmentsForTts(generationText, getRuntimeConfig().chunkMaxChars);
+  const segments = prepareFullSpeechSegmentsForJob(generationText, job);
   const quality = resolveTtsQualityPreset(job.quality_preset);
 
   await fs.mkdir(jobPaths.tempDirectory, { recursive: true });
@@ -1727,6 +2090,7 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
       : null;
 
     if (await isJobCancellationRequested(job.id)) {
+      await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
       await markJobCancelled(job.id);
       return;
     }
@@ -1738,11 +2102,22 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
     }
 
     if (await isJobCancellationRequested(job.id)) {
+      await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
       await markJobCancelled(job.id);
       return;
     }
 
-    await completeJobAndDeductUsage(job.id, jobPaths.wavRelativePath, mp3RelativePath, generatedAudioSeconds, billableMinutes);
+    const completedJob = await completeJobAndDeductUsage(
+      job.id,
+      jobPaths.wavRelativePath,
+      mp3RelativePath,
+      generatedAudioSeconds,
+      billableMinutes,
+    );
+
+    if (!completedJob) {
+      await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
+    }
   } catch (error) {
     console.error('TTS generation failed.', {
       error,
@@ -1750,6 +2125,7 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
       statusCode: getStatusCode(error, 500),
       userId: job.user_id,
     });
+    await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
     await markJobFailed(job.id, safeGenerationFailureMessage());
   } finally {
     await fs.rm(jobPaths.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
@@ -1813,7 +2189,7 @@ async function resetStaleProcessingJobs() {
           ELSE 'queued'
         END,
         processing_stage = CASE
-          WHEN status = 'preview_processing' THEN 'queued'
+          WHEN status = 'preview_processing' THEN 'preview_queued'
           WHEN status = 'cancelling' THEN 'cancelled'
           ELSE 'queued'
         END,
@@ -1886,9 +2262,9 @@ async function assertUserCanQueueMoreTtsJobs(
   userId: number,
   targetStatus: 'preview_queued' | 'queued',
 ) {
-  const activePreviewStatuses = ['preview_queued', 'preview_processing'];
-  const activeGenerationStatuses = ['queued', 'processing'];
-  const activeStatuses = [...activePreviewStatuses, ...activeGenerationStatuses];
+  const activePreviewStatuses = ['preview_queued', 'preview_processing', 'cancelling'];
+  const activeGenerationStatuses = ['queued', 'processing', 'cancelling'];
+  const activeStatuses = Array.from(new Set([...activePreviewStatuses, ...activeGenerationStatuses]));
   const activePreviewCount = await countActiveTtsJobs(client, userId, activePreviewStatuses);
   const activeGenerationCount = await countActiveTtsJobs(client, userId, activeGenerationStatuses);
   const activeTotalCount = await countActiveTtsJobs(client, userId, activeStatuses);
@@ -1906,7 +2282,44 @@ async function assertUserCanQueueMoreTtsJobs(
   }
 }
 
-function assertUserCanQueueTtsJob(user: UserRecord) {
+async function assertJobVoiceProfileStillUsable(
+  client: PoolClient,
+  job: Pick<TtsGenerationJobRecord, 'provider_voice_profile_id' | 'user_id' | 'voice_profile_id'>,
+) {
+  if (!job.voice_profile_id && !job.provider_voice_profile_id) {
+    return;
+  }
+
+  if (!job.voice_profile_id) {
+    throw withStatus('This custom voice is no longer available. Create a new job with an active voice.', 409);
+  }
+
+  const profileResult = await client.query<{
+    is_active: boolean;
+    provider_profile_id: string | null;
+    provider_sync_status: string;
+  }>(
+    `
+      SELECT is_active, provider_profile_id, provider_sync_status
+      FROM tts_voice_profiles
+      WHERE id = $1
+        AND user_id = $2
+      LIMIT 1
+    `,
+    [job.voice_profile_id, job.user_id],
+  );
+  const profile = profileResult.rows[0];
+
+  if (!profile?.is_active) {
+    throw withStatus('This custom voice was deleted. Create a new job with an active voice.', 409);
+  }
+
+  if (profile.provider_sync_status !== 'ready' || !profile.provider_profile_id) {
+    throw withStatus('This custom voice is not active yet. Activate the voice before generating audio.', 409);
+  }
+}
+
+function assertUserCanUseTtsWorkspace(user: UserRecord) {
   if (user.account_status !== 'active') {
     throw withStatus('This account is disabled.', 403);
   }
@@ -1919,10 +2332,18 @@ function assertUserCanQueueTtsJob(user: UserRecord) {
     throw withStatus('Verify your phone before creating audio jobs.', 403);
   }
 
-  const currentBalance = Number(user.token_balance);
+  return Number(user.token_balance);
+}
 
-  if (currentBalance <= 0) {
-    throw withStatus('No generation minutes remain. Upgrade or add allowance before creating audio.', 402);
+function assertUserHasGenerationMinutes(user: UserRecord, estimatedMinutes = 1) {
+  const currentBalance = Number(user.token_balance);
+  const requiredMinutes = Math.max(1, estimatedMinutes);
+
+  if (currentBalance < requiredMinutes) {
+    const message = currentBalance <= 0
+      ? 'No generation minutes remain. Upgrade or add allowance before generating full audio.'
+      : `This job is estimated at ${requiredMinutes} minute${requiredMinutes === 1 ? '' : 's'}, but your current balance is ${currentBalance.toLocaleString()}. Add minutes before generating full audio.`;
+    throw withStatus(message, 402);
   }
 
   return currentBalance;
@@ -1935,6 +2356,7 @@ async function createQueuedTtsGenerationJob(
     sourceName?: string | null;
     sourceType: TtsGenerationJobSourceType;
     userId: number;
+    voiceProfileId?: number | string | null;
   },
   initialStatus: 'preview_queued' | 'queued',
 ) {
@@ -1953,8 +2375,12 @@ async function createQueuedTtsGenerationJob(
       throw withStatus('User not found.', 404);
     }
 
-    const currentBalance = assertUserCanQueueTtsJob(user);
+    const currentBalance = assertUserCanUseTtsWorkspace(user);
+    if (initialStatus === 'queued') {
+      assertUserHasGenerationMinutes(user, calculateEstimatedMinutesFromWords(wordCount));
+    }
     await assertUserCanQueueMoreTtsJobs(client, user.id, initialStatus);
+    const voiceSelection = await resolveTtsVoiceSelectionForUser(client, user.id, input.voiceProfileId);
     const stage = initialStatus === 'preview_queued' ? 'preview_queued' : 'queued';
 
     const jobResult = await client.query<TtsGenerationJobRecord>(
@@ -1970,9 +2396,12 @@ async function createQueuedTtsGenerationJob(
           mp3_bitrate_kbps,
           status,
           processing_stage,
-          provider_voice
+          provider_voice,
+          voice_profile_id,
+          voice_display_name,
+          provider_voice_profile_id
         )
-        VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *
       `,
       [
@@ -1986,6 +2415,9 @@ async function createQueuedTtsGenerationJob(
         initialStatus,
         stage,
         config.voiceId,
+        voiceSelection.voiceProfileId,
+        voiceSelection.voiceDisplayName,
+        voiceSelection.providerVoiceProfileId,
       ],
     );
     const createdJob = jobResult.rows[0];
@@ -2011,6 +2443,7 @@ export async function queueTtsGenerationJob(input: {
   sourceName?: string | null;
   sourceType: TtsGenerationJobSourceType;
   userId: number;
+  voiceProfileId?: number | string | null;
 }) {
   return createQueuedTtsGenerationJob(input, 'queued');
 }
@@ -2021,6 +2454,7 @@ export async function queueTtsPreviewJob(input: {
   sourceName?: string | null;
   sourceType: TtsGenerationJobSourceType;
   userId: number;
+  voiceProfileId?: number | string | null;
 }) {
   return createQueuedTtsGenerationJob(input, 'preview_queued');
 }
@@ -2057,7 +2491,9 @@ export async function startTtsGenerationFromPreview(jobId: number, userId: numbe
       throw withStatus('User not found.', 404);
     }
 
-    const currentBalance = assertUserCanQueueTtsJob(user);
+    assertUserCanUseTtsWorkspace(user);
+    await assertJobVoiceProfileStillUsable(client, job);
+    const currentBalance = assertUserHasGenerationMinutes(user, calculateEstimatedMinutesFromWords(Number(job.word_count)));
     await assertUserCanQueueMoreTtsJobs(client, userId, 'queued');
 
     const startResult = await client.query<TtsGenerationJobRecord>(
@@ -2134,9 +2570,13 @@ export async function retryTtsGenerationJob(jobId: number, userId: number) {
       throw withStatus('User not found.', 404);
     }
 
-    const currentBalance = assertUserCanQueueTtsJob(user);
     const retryStatus = job.full_generation_requested_at ? 'queued' : 'preview_queued';
     const retryStage = retryStatus === 'queued' ? 'queued' : 'preview_queued';
+    const currentBalance = assertUserCanUseTtsWorkspace(user);
+    await assertJobVoiceProfileStillUsable(client, job);
+    if (retryStatus === 'queued') {
+      assertUserHasGenerationMinutes(user, calculateEstimatedMinutesFromWords(Number(job.word_count)));
+    }
     await assertUserCanQueueMoreTtsJobs(client, userId, retryStatus);
 
     const retryResult = await client.query<TtsGenerationJobRecord>(
@@ -2301,6 +2741,60 @@ export async function markTtsGenerationJobDownloaded(jobId: number, userId: numb
   );
 }
 
+export async function deleteOwnedTtsGenerationJob(jobId: number, userId: number) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const jobResult = await client.query<TtsGenerationJobRecord>(
+      `
+        SELECT *
+        FROM tts_generation_jobs
+        WHERE id = $1
+          AND user_id = $2
+        FOR UPDATE
+      `,
+      [jobId, userId],
+    );
+    const job = jobResult.rows[0];
+
+    if (!job) {
+      throw withStatus('Audio generation job not found.', 404);
+    }
+
+    if (isActiveJobStatus(job.status)) {
+      throw withStatus('Cancel this active audio job before deleting it.', 409);
+    }
+
+    const jobPaths = getJobPaths(job);
+
+    await client.query(
+      `
+        DELETE FROM tts_generation_jobs
+        WHERE id = $1
+          AND user_id = $2
+      `,
+      [jobId, userId],
+    );
+
+    await client.query('COMMIT');
+
+    await fs.rm(jobPaths.jobDirectory, {
+      force: true,
+      recursive: true,
+    });
+    await fs.rmdir(jobPaths.userDirectory).catch(() => undefined);
+
+    return job;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function getTtsGenerationAttachmentPath(
   job: Pick<TtsGenerationJobRecord, 'id' | 'mp3_file' | 'status' | 'wav_file'>,
   format: 'mp3' | 'wav',
@@ -2349,6 +2843,7 @@ export function getTtsRuntimeStatus() {
   return {
     apiUrl: config.apiUrl,
     chunkMaxChars: config.chunkMaxChars,
+    customVoiceProviderRequestMaxChars: config.customVoiceProviderRequestMaxChars,
     configured: Boolean(config.apiKey),
     ffmpegPath: config.ffmpegPath,
     providerVoice: config.voiceId,

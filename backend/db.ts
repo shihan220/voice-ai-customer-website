@@ -250,6 +250,30 @@ export type TtsPronunciationRuleRecord = {
   updated_at: Date;
 };
 
+export type TtsVoiceProfileRecord = {
+  id: number;
+  user_id: number;
+  provider_profile_id: string | null;
+  provider_sync_status: 'pending' | 'ready';
+  provider_sync_error: string | null;
+  provider_synced_at: Date | null;
+  display_name: string;
+  reference_text: string;
+  reference_audio_seconds: number | null;
+  reference_sample_rate: number | null;
+  reference_audio_file: string | null;
+  reference_audio_file_size_bytes: number | null;
+  reference_normalized_at: Date | null;
+  reference_quality_warnings: string[];
+  test_preview_audio_seconds: number | null;
+  test_preview_file: string | null;
+  test_preview_generated_at: Date | null;
+  is_active: boolean;
+  is_default: boolean;
+  created_at: Date;
+  updated_at: Date;
+};
+
 export type TtsGenerationJobRecord = {
   id: number;
   user_id: number;
@@ -265,6 +289,9 @@ export type TtsGenerationJobRecord = {
   status: TtsGenerationJobStatus;
   processing_stage: string | null;
   provider_voice: string;
+  voice_profile_id: number | null;
+  voice_display_name: string;
+  provider_voice_profile_id: string | null;
   wav_file: string | null;
   mp3_file: string | null;
   preview_file: string | null;
@@ -519,6 +546,80 @@ export async function ensureSchema() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS tts_voice_profiles (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      provider_profile_id TEXT,
+      provider_sync_status TEXT NOT NULL DEFAULT 'ready'
+        CHECK (provider_sync_status IN ('pending', 'ready')),
+      provider_sync_error TEXT,
+      provider_synced_at TIMESTAMPTZ,
+      display_name TEXT NOT NULL,
+      reference_text TEXT NOT NULL,
+      reference_audio_seconds NUMERIC(12, 3),
+      reference_sample_rate INTEGER,
+      reference_audio_file TEXT,
+      reference_audio_file_size_bytes BIGINT,
+      reference_normalized_at TIMESTAMPTZ,
+      reference_quality_warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      test_preview_file TEXT,
+      test_preview_audio_seconds NUMERIC(12, 3),
+      test_preview_generated_at TIMESTAMPTZ,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      is_default BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_voice_profiles
+      ADD COLUMN IF NOT EXISTS reference_audio_file TEXT,
+      ADD COLUMN IF NOT EXISTS reference_audio_file_size_bytes BIGINT,
+      ADD COLUMN IF NOT EXISTS provider_sync_status TEXT NOT NULL DEFAULT 'ready',
+      ADD COLUMN IF NOT EXISTS provider_sync_error TEXT,
+      ADD COLUMN IF NOT EXISTS provider_synced_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS reference_normalized_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS reference_quality_warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS test_preview_file TEXT,
+      ADD COLUMN IF NOT EXISTS test_preview_audio_seconds NUMERIC(12, 3),
+      ADD COLUMN IF NOT EXISTS test_preview_generated_at TIMESTAMPTZ;
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_voice_profiles
+      ALTER COLUMN provider_profile_id DROP NOT NULL;
+  `);
+
+  await pool.query(`
+    UPDATE tts_voice_profiles
+    SET provider_profile_id = NULL
+    WHERE provider_profile_id = '';
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_voice_profiles
+      DROP CONSTRAINT IF EXISTS tts_voice_profiles_provider_sync_status_check;
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_voice_profiles
+      ADD CONSTRAINT tts_voice_profiles_provider_sync_status_check
+      CHECK (provider_sync_status IN ('pending', 'ready'));
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_active_created_at
+      ON tts_voice_profiles (user_id, is_active, created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_default_unique
+      ON tts_voice_profiles (user_id)
+      WHERE is_default = TRUE AND is_active = TRUE;
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS tts_generation_jobs (
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -537,6 +638,9 @@ export async function ensureSchema() {
         CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'preview_queued', 'preview_processing', 'preview_ready', 'cancelling', 'cancelled')),
       processing_stage TEXT,
       provider_voice TEXT NOT NULL,
+      voice_profile_id BIGINT REFERENCES tts_voice_profiles (id) ON DELETE SET NULL,
+      voice_display_name TEXT NOT NULL DEFAULT 'Keypillar Bangla Female',
+      provider_voice_profile_id TEXT,
       wav_file TEXT,
       mp3_file TEXT,
       preview_file TEXT,
@@ -563,7 +667,10 @@ export async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS full_generation_requested_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS cancellation_requested_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+      ADD COLUMN IF NOT EXISTS cancel_reason TEXT,
+      ADD COLUMN IF NOT EXISTS voice_profile_id BIGINT REFERENCES tts_voice_profiles (id) ON DELETE SET NULL,
+      ADD COLUMN IF NOT EXISTS voice_display_name TEXT NOT NULL DEFAULT 'Keypillar Bangla Female',
+      ADD COLUMN IF NOT EXISTS provider_voice_profile_id TEXT;
   `);
 
   await pool.query(`

@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import twilio from 'twilio';
 import {
   createJsonRateLimiter,
@@ -63,11 +63,24 @@ function buildCustomerSession(user: { email: string; id: number }) {
   };
 }
 
-function clearCustomerSession(req: Parameters<Router['post']>[1] extends never ? never : any, res: any) {
-  req.session.customerUser = undefined;
-  req.session.save(() => {
+async function getActiveSessionCustomer(req: Request, res: Response) {
+  const user = req.session.customerUser ? await getUserById(req.session.customerUser.id) : null;
+
+  if (!user) {
+    req.session.customerUser = undefined;
+    res.status(401).json({ error: 'Log in first.' });
+    return null;
+  }
+
+  if (user.account_status !== 'active') {
+    req.session.customerUser = undefined;
     res.clearCookie(customerSessionCookieName);
-  });
+    res.status(403).json({ error: 'This account is disabled.' });
+    return null;
+  }
+
+  req.session.customerUser = buildCustomerSession(user);
+  return user;
 }
 
 async function sendEmailOtp(email: string, otpCode: string) {
@@ -286,10 +299,9 @@ export function createAuthRouter() {
 
   router.post('/api/auth/send-email-otp', otpLimiter, async (req, res) => {
     try {
-      const user = req.session.customerUser ? await getUserById(req.session.customerUser.id) : null;
+      const user = await getActiveSessionCustomer(req, res);
 
       if (!user) {
-        res.status(401).json({ error: 'Log in first.' });
         return;
       }
 
@@ -310,10 +322,9 @@ export function createAuthRouter() {
 
   router.post('/api/auth/verify-email-otp', otpLimiter, async (req, res) => {
     try {
-      const user = req.session.customerUser ? await getUserById(req.session.customerUser.id) : null;
+      const user = await getActiveSessionCustomer(req, res);
 
       if (!user) {
-        res.status(401).json({ error: 'Log in first.' });
         return;
       }
 
@@ -367,10 +378,9 @@ export function createAuthRouter() {
 
   router.post('/api/auth/send-phone-otp', otpLimiter, async (req, res) => {
     try {
-      const user = req.session.customerUser ? await getUserById(req.session.customerUser.id) : null;
+      const user = await getActiveSessionCustomer(req, res);
 
       if (!user) {
-        res.status(401).json({ error: 'Log in first.' });
         return;
       }
 
@@ -397,10 +407,9 @@ export function createAuthRouter() {
 
   router.post('/api/auth/verify-phone-otp', otpLimiter, async (req, res) => {
     try {
-      const user = req.session.customerUser ? await getUserById(req.session.customerUser.id) : null;
+      const user = await getActiveSessionCustomer(req, res);
 
       if (!user) {
-        res.status(401).json({ error: 'Log in first.' });
         return;
       }
 
@@ -463,7 +472,7 @@ export function createAuthRouter() {
 
       const user = await getUserByEmail(email);
 
-      if (!user) {
+      if (!user || user.account_status !== 'active') {
         res.json({ message: 'If the account exists, a password reset link has been prepared.' });
         return;
       }
@@ -522,6 +531,22 @@ export function createAuthRouter() {
 
       if (!passwordReset) {
         res.status(400).json({ error: 'Invalid or expired password reset token.' });
+        return;
+      }
+
+      const resetUser = await getUserById(passwordReset.user_id);
+
+      if (!resetUser) {
+        await markPasswordResetUsed(passwordReset.id);
+        res.status(404).json({ error: 'Account not found.' });
+        return;
+      }
+
+      if (resetUser.account_status !== 'active') {
+        await markPasswordResetUsed(passwordReset.id);
+        req.session.customerUser = undefined;
+        res.clearCookie(customerSessionCookieName);
+        res.status(403).json({ error: 'This account is disabled.' });
         return;
       }
 

@@ -3,13 +3,18 @@ import {
   ArrowRight,
   CheckCircle2,
   Clock3,
+  Download,
   Eye,
   EyeOff,
   FileAudio2,
   Loader2,
+  Mic,
   Play,
   RefreshCw,
   RotateCcw,
+  Square,
+  Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
@@ -118,11 +123,50 @@ type TtsGenerationJob = {
     | 'queued';
   tokenCost: number;
   updatedAt: string;
+  voiceDisplayName: string;
+  voiceProfileId: number | null;
   wavDownloadUrl: string | null;
   wordCount: number;
 };
 
+type TtsVoiceProfile = {
+  createdAt: string;
+  displayName: string;
+  id: number;
+  isDefault: boolean;
+  providerSyncError: string | null;
+  providerSyncStatus: 'pending' | 'ready';
+  providerSyncedAt: string | null;
+  referenceAudioDownloadUrl: string | null;
+  referenceAudioFileSizeBytes: number | null;
+  referenceNormalizedAt: string | null;
+  referenceQualityWarnings: string[];
+  referenceAudioSeconds: number | null;
+  referenceSampleRate: number | null;
+  referenceText: string;
+  testPreviewAudioSeconds: number | null;
+  testPreviewAudioUrl: string | null;
+  testPreviewGeneratedAt: string | null;
+  updatedAt: string;
+};
+
+type TtsVoiceProfileLimits = {
+  maxActiveProfiles: number;
+  maxAudioBytes: number;
+  maxAudioSeconds: number;
+  minAudioSeconds: number;
+};
+
 type TtsQualityPreset = 'high_mp3_wav' | 'premium_mp3_wav' | 'standard_mp3_wav' | 'wav_only';
+
+const recommendedVoiceReferenceScript = [
+  'আমি এখন আমার স্বাভাবিক কণ্ঠে একটি কণ্ঠ নমুনা পড়ছি। এই রেকর্ডিংটি পরিষ্কারভাবে করা হয়েছে, যাতে আমার কণ্ঠের স্বর, গতি, উচ্চারণ এবং বিরতির ধরন বোঝা যায়। আমি বাংলায় কথা বলছি, তবে প্রয়োজন হলে কিছু ইংরেজি শব্দও স্বাভাবিকভাবে উচ্চারণ করতে পারি। প্রতিটি বাক্যের শেষে আমি সামান্য থামছি, কমার পরে ছোট বিরতি নিচ্ছি, এবং প্রতিটি শব্দ যতটা সম্ভব পরিষ্কারভাবে বলছি।',
+  'প্রতিদিন আমরা কাজ, শিক্ষা, পরিবার, প্রযুক্তি এবং যোগাযোগের জন্য কণ্ঠ ব্যবহার করি। একটি ভালো কণ্ঠস্বর শুধু শব্দ নয়, অনুভূতি, ভরসা এবং স্পষ্টতা বহন করে। যখন কেউ গল্প বলে, সংবাদ পড়ে, বিজ্ঞাপন তৈরি করে, অথবা শিক্ষামূলক বিষয় ব্যাখ্যা করে, তখন কণ্ঠের ভঙ্গি খুব গুরুত্বপূর্ণ হয়ে ওঠে। তাই আমি এই অংশটি শান্তভাবে, স্বাভাবিক গতিতে এবং পরিষ্কার উচ্চারণে পড়ছি।',
+  'আজকের আবহাওয়া সুন্দর। সকাল থেকে আকাশ পরিষ্কার, চারপাশ শান্ত, এবং কথা বলার জন্য পরিবেশ ভালো। আমি চেষ্টা করছি যেন আমার কণ্ঠে একই রকম শক্তি, স্বাভাবিকতা এবং স্থিরতা থাকে। খুব দ্রুত বলছি না, আবার খুব ধীরে বলছি না। মাঝেমধ্যে ছোট বিরতি নিচ্ছি, যাতে বাক্যগুলো আলাদা বোঝা যায় এবং কথার অর্থ পরিষ্কার থাকে।',
+  'এই নমুনাটি ভবিষ্যতে গল্প, সংবাদ, বিজ্ঞাপন, শিক্ষা, নির্দেশনা, ফোন সিস্টেম, ব্যবসায়িক বার্তা এবং অডিও বইয়ের জন্য ব্যবহার করা যেতে পারে। আমি চাই আমার কণ্ঠ যেন শ্রোতার কাছে স্বাভাবিক, বিশ্বাসযোগ্য এবং আরামদায়ক মনে হয়। যদি কোনো ইংরেজি শব্দ আসে, যেমন online service, customer support, mobile app, বা digital payment, আমি সেগুলোও স্বাভাবিকভাবে উচ্চারণ করছি।',
+  'এখন আমি আরেকটু পড়ছি, যাতে কণ্ঠের ধারাবাহিকতা ভালোভাবে বোঝা যায়। মানুষ যখন দীর্ঘ সময় কথা বলে, তখন কণ্ঠের ওঠানামা, শ্বাস নেওয়ার ধরন, বাক্যের গতি এবং আবেগের পরিবর্তন স্পষ্ট হয়। এই কারণেই একটি দীর্ঘ, পরিষ্কার এবং একক বক্তার রেকর্ডিং কাস্টম ভয়েস তৈরির জন্য বেশি সহায়ক। আমি একই মাইক্রোফোনে, একই দূরত্বে, একই পরিবেশে কথা বলছি।',
+  'শেষ অংশে আমি আবার স্বাভাবিক ভঙ্গিতে বলছি: ধন্যবাদ, এই ছিল আমার কণ্ঠের নমুনা। আমি স্পষ্টভাবে কথা বলেছি, অযথা শব্দ করিনি, পেছনে কোনো গান বা শব্দ রাখিনি, এবং পুরো রেকর্ডিংয়ে একইভাবে পড়ার চেষ্টা করেছি। এই নমুনা থেকে আমার কণ্ঠের ধরন, উচ্চারণ, গতি এবং বিরতি বোঝা যাবে।',
+].join('\n\n');
 
 const ttsQualityOptions: Array<{
   description: string;
@@ -1337,7 +1381,26 @@ function VerifyPhonePage({
   );
 }
 
-type DashboardTab = 'create' | 'history';
+type DashboardTab = 'create' | 'history' | 'voices';
+type VoiceReferenceInputMode = 'record' | 'upload';
+type VoiceFileSource = 'recorded' | 'uploaded';
+type VoiceRecordingState = 'idle' | 'recording' | 'requesting';
+type VoiceScriptMode = 'custom' | 'recommended';
+
+type VoiceRecordingSession = {
+  audioContext: AudioContext;
+  chunks: Float32Array[];
+  processor: ScriptProcessorNode;
+  source: MediaStreamAudioSourceNode;
+  startedAt: number;
+  stopTimer: number | null;
+  stream: MediaStream;
+};
+
+type WindowWithWebkitAudioContext = Window &
+  typeof globalThis & {
+    webkitAudioContext?: typeof AudioContext;
+  };
 
 function countWordsForDashboardPreview(value: string) {
   const trimmed = value.trim();
@@ -1401,6 +1464,29 @@ function formatCountdown(seconds: number) {
   return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
 }
 
+function readAudioDurationFromFile(file: File) {
+  return new Promise<number | null>((resolve) => {
+    const audio = new Audio();
+    const objectUrl = window.URL.createObjectURL(file);
+    const cleanup = () => {
+      audio.removeAttribute('src');
+      window.URL.revokeObjectURL(objectUrl);
+    };
+
+    audio.preload = 'metadata';
+    audio.onloadedmetadata = () => {
+      const durationSeconds = Number(audio.duration);
+      cleanup();
+      resolve(Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : null);
+    };
+    audio.onerror = () => {
+      cleanup();
+      resolve(null);
+    };
+    audio.src = objectUrl;
+  });
+}
+
 function getTtsQualityOption(value: TtsQualityPreset) {
   return ttsQualityOptions.find((option) => option.value === value) ?? ttsQualityOptions[0];
 }
@@ -1417,6 +1503,10 @@ function isActiveTtsJob(job: TtsGenerationJob) {
 
 function canCancelTtsJob(job: TtsGenerationJob) {
   return job.status === 'queued' || job.status === 'processing' || job.status === 'preview_queued' || job.status === 'preview_processing';
+}
+
+function canDeleteTtsJob(job: TtsGenerationJob) {
+  return !isActiveTtsJob(job);
 }
 
 function isPreviewTtsJob(job: TtsGenerationJob) {
@@ -1439,6 +1529,64 @@ function getBillingExplanation(qualityPreset: TtsQualityPreset) {
   }
 
   return `Preview is free. Full generation is billed only after the WAV and ${quality.mp3BitrateKbps} kbps MP3 finish successfully.`;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1024 * 1024) {
+    return `${Math.floor(bytes / (1024 * 1024)).toLocaleString()} MB`;
+  }
+
+  return `${Math.ceil(bytes / 1024).toLocaleString()} KB`;
+}
+
+function mergeAudioChunks(chunks: Float32Array[]) {
+  const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const samples = new Float32Array(sampleCount);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    samples.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return samples;
+}
+
+function writeAscii(view: DataView, offset: number, value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    view.setUint8(offset + index, value.charCodeAt(index));
+  }
+}
+
+function encodeWav(samples: Float32Array, sampleRate: number) {
+  const bytesPerSample = 2;
+  const channelCount = 1;
+  const dataBytes = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataBytes);
+  const view = new DataView(buffer);
+
+  writeAscii(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataBytes, true);
+  writeAscii(view, 8, 'WAVE');
+  writeAscii(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channelCount, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * channelCount * bytesPerSample, true);
+  view.setUint16(32, channelCount * bytesPerSample, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, 'data');
+  view.setUint32(40, dataBytes, true);
+
+  let outputOffset = 44;
+  for (const sample of samples) {
+    const clamped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(outputOffset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+    outputOffset += bytesPerSample;
+  }
+
+  return new Blob([view], { type: 'audio/wav' });
 }
 
 function getActiveJobEstimateSeconds(job: TtsGenerationJob) {
@@ -1604,12 +1752,14 @@ export function CustomerDashboardPage({
   const [jobsError, setJobsError] = useState('');
   const [jobActionError, setJobActionError] = useState('');
   const [cancellingJobId, setCancellingJobId] = useState<number | null>(null);
+  const [deletingJobId, setDeletingJobId] = useState<number | null>(null);
   const [retryError, setRetryError] = useState('');
   const [retryingJobId, setRetryingJobId] = useState<number | null>(null);
   const [startingJobId, setStartingJobId] = useState<number | null>(null);
-  const [confirmJobAction, setConfirmJobAction] = useState<null | { job: TtsGenerationJob; type: 'cancel' | 'start' }>(null);
+  const [confirmJobAction, setConfirmJobAction] = useState<null | { job: TtsGenerationJob; type: 'cancel' | 'delete' | 'start' }>(null);
   const [sourceType, setSourceType] = useState<'pdf' | 'text'>('text');
   const [qualityPreset, setQualityPreset] = useState<TtsQualityPreset>('premium_mp3_wav');
+  const [selectedVoiceProfileId, setSelectedVoiceProfileId] = useState('fixed');
   const [sourceName, setSourceName] = useState('');
   const [textInput, setTextInput] = useState('');
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -1617,6 +1767,37 @@ export function CustomerDashboardPage({
   const [submitError, setSubmitError] = useState('');
   const [submitMessage, setSubmitMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [voiceProfiles, setVoiceProfiles] = useState<TtsVoiceProfile[]>([]);
+  const [voiceProfileLimits, setVoiceProfileLimits] = useState<TtsVoiceProfileLimits>({
+    maxActiveProfiles: 3,
+    maxAudioBytes: 64 * 1024 * 1024,
+    maxAudioSeconds: 300,
+    minAudioSeconds: 120,
+  });
+  const [voiceProfilesLoading, setVoiceProfilesLoading] = useState(true);
+  const [voiceProfilesError, setVoiceProfilesError] = useState('');
+  const [voiceActionError, setVoiceActionError] = useState('');
+  const [voiceActionMessage, setVoiceActionMessage] = useState('');
+  const [voiceActionId, setVoiceActionId] = useState<number | null>(null);
+  const [voiceSubmitting, setVoiceSubmitting] = useState(false);
+  const [voiceScriptMode, setVoiceScriptMode] = useState<VoiceScriptMode>('recommended');
+  const [customScriptConfirmed, setCustomScriptConfirmed] = useState(false);
+  const [voiceForm, setVoiceForm] = useState({
+    name: '',
+    referenceText: recommendedVoiceReferenceScript,
+    setDefault: false,
+  });
+  const [voiceReferenceMode, setVoiceReferenceMode] = useState<VoiceReferenceInputMode>('upload');
+  const [voiceFile, setVoiceFile] = useState<File | null>(null);
+  const [voiceFileSource, setVoiceFileSource] = useState<VoiceFileSource | null>(null);
+  const [voiceFileResetKey, setVoiceFileResetKey] = useState(0);
+  const [voiceRecordingState, setVoiceRecordingState] = useState<VoiceRecordingState>('idle');
+  const [voiceRecordingSeconds, setVoiceRecordingSeconds] = useState(0);
+  const [recordedVoiceDuration, setRecordedVoiceDuration] = useState<number | null>(null);
+  const [recordedVoiceUrl, setRecordedVoiceUrl] = useState<string | null>(null);
+  const voiceProfilesLoadedRef = useRef(false);
+  const recordedVoiceUrlRef = useRef<string | null>(null);
+  const voiceRecordingRef = useRef<VoiceRecordingSession | null>(null);
 
   const estimatedWordCount = useMemo(
     () => (sourceType === 'text' ? countWordsForDashboardPreview(textInput) : 0),
@@ -1629,6 +1810,18 @@ export function CustomerDashboardPage({
   const hasActiveJobs = jobs.some(isActiveTtsJob);
   const isInitialJobsLoading = jobsLoading && jobs.length === 0;
   const selectedQuality = getTtsQualityOption(qualityPreset);
+  const readyVoiceProfiles = useMemo(
+    () => voiceProfiles.filter((profile) => profile.providerSyncStatus === 'ready'),
+    [voiceProfiles],
+  );
+  const defaultVoiceProfile = readyVoiceProfiles.find((profile) => profile.isDefault) ?? null;
+  const selectedVoiceProfile = selectedVoiceProfileId === 'fixed'
+    ? null
+    : readyVoiceProfiles.find((profile) => String(profile.id) === selectedVoiceProfileId) ?? null;
+  const selectedVoiceName = selectedVoiceProfile?.displayName ?? 'Keypillar Bangla Female';
+  const canCreateMoreVoiceProfiles = voiceProfiles.length < voiceProfileLimits.maxActiveProfiles;
+  const isVoiceRecording = voiceRecordingState === 'recording';
+  const isVoiceRecordingBusy = voiceRecordingState !== 'idle';
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const loadJobs = useCallback(async () => {
@@ -1664,12 +1857,56 @@ export function CustomerDashboardPage({
     }
   }, [onSessionRefresh]);
 
+  const loadVoiceProfiles = useCallback(async () => {
+    setVoiceProfilesLoading(true);
+
+    try {
+      const payload = await apiRequest<{
+        limits: TtsVoiceProfileLimits;
+        voiceProfiles: TtsVoiceProfile[];
+      }>('/api/tts/voice-profiles');
+
+      setVoiceProfiles(payload.voiceProfiles);
+      setVoiceProfileLimits(payload.limits);
+      setVoiceProfilesError('');
+      const hadLoadedVoiceProfiles = voiceProfilesLoadedRef.current;
+      setSelectedVoiceProfileId((current) => {
+        if (
+          current !== 'fixed'
+          && payload.voiceProfiles.some((profile) => String(profile.id) === current && profile.providerSyncStatus === 'ready')
+        ) {
+          return current;
+        }
+
+        if (current === 'fixed' && hadLoadedVoiceProfiles) {
+          return 'fixed';
+        }
+
+        const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault && profile.providerSyncStatus === 'ready');
+        return defaultProfile ? String(defaultProfile.id) : 'fixed';
+      });
+      voiceProfilesLoadedRef.current = true;
+    } catch (nextError) {
+      setVoiceProfilesError(nextError instanceof Error ? nextError.message : 'Failed to load your custom voices.');
+    } finally {
+      setVoiceProfilesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     jobsRef.current = [];
     setJobs([]);
     setJobsLoading(true);
     void loadJobs();
   }, [loadJobs, user.id]);
+
+  useEffect(() => {
+    voiceProfilesLoadedRef.current = false;
+    setVoiceProfiles([]);
+    setSelectedVoiceProfileId('fixed');
+    setVoiceProfilesLoading(true);
+    void loadVoiceProfiles();
+  }, [loadVoiceProfiles, user.id]);
 
   useEffect(() => {
     if (!hasActiveJobs) {
@@ -1695,6 +1932,207 @@ export function CustomerDashboardPage({
     return () => window.clearInterval(timer);
   }, [hasActiveJobs]);
 
+  const setRecordedReferenceUrl = useCallback((nextUrl: string | null) => {
+    if (recordedVoiceUrlRef.current) {
+      window.URL.revokeObjectURL(recordedVoiceUrlRef.current);
+    }
+
+    recordedVoiceUrlRef.current = nextUrl;
+    setRecordedVoiceUrl(nextUrl);
+  }, []);
+
+  const clearRecordedReference = useCallback(() => {
+    setRecordedReferenceUrl(null);
+    setRecordedVoiceDuration(null);
+  }, [setRecordedReferenceUrl]);
+
+  const cleanupVoiceRecordingSession = useCallback((session: VoiceRecordingSession) => {
+    session.processor.onaudioprocess = null;
+    session.source.disconnect();
+    session.processor.disconnect();
+
+    if (session.stopTimer !== null) {
+      window.clearTimeout(session.stopTimer);
+    }
+
+    session.stream.getTracks().forEach((track) => track.stop());
+    void session.audioContext.close().catch(() => undefined);
+  }, []);
+
+  const discardVoiceRecording = useCallback(() => {
+    const session = voiceRecordingRef.current;
+
+    if (session) {
+      voiceRecordingRef.current = null;
+      cleanupVoiceRecordingSession(session);
+    }
+
+    setVoiceRecordingState('idle');
+    setVoiceRecordingSeconds(0);
+  }, [cleanupVoiceRecordingSession]);
+
+  const stopVoiceRecording = useCallback(() => {
+    const session = voiceRecordingRef.current;
+
+    if (!session) {
+      return;
+    }
+
+    voiceRecordingRef.current = null;
+    cleanupVoiceRecordingSession(session);
+    setVoiceRecordingState('idle');
+    setVoiceRecordingSeconds(0);
+
+    const samples = mergeAudioChunks(session.chunks);
+    const durationSeconds = samples.length / session.audioContext.sampleRate;
+
+    if (durationSeconds < voiceProfileLimits.minAudioSeconds) {
+      setVoiceActionError(`Record at least ${formatDuration(voiceProfileLimits.minAudioSeconds)} before creating a custom voice.`);
+      return;
+    }
+
+    const wavBlob = encodeWav(samples, session.audioContext.sampleRate);
+    const wavFile = new File([wavBlob], `recorded-reference-${Date.now()}.wav`, { type: 'audio/wav' });
+    const nextUrl = window.URL.createObjectURL(wavBlob);
+
+    setRecordedReferenceUrl(nextUrl);
+    setRecordedVoiceDuration(durationSeconds);
+    setVoiceFile(wavFile);
+    setVoiceFileSource('recorded');
+    setVoiceFileResetKey((current) => current + 1);
+    setVoiceActionError('');
+    setVoiceActionMessage(`Recorded ${formatDuration(durationSeconds)} reference WAV. Create the profile when the reference text matches this recording.`);
+  }, [cleanupVoiceRecordingSession, setRecordedReferenceUrl, voiceProfileLimits.minAudioSeconds]);
+
+  const startVoiceRecording = useCallback(async () => {
+    if (!canCreateMoreVoiceProfiles || voiceSubmitting) {
+      return;
+    }
+
+    discardVoiceRecording();
+    clearRecordedReference();
+    setVoiceFile(null);
+    setVoiceFileSource(null);
+    setVoiceFileResetKey((current) => current + 1);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+    setVoiceRecordingSeconds(0);
+    setVoiceRecordingState('requesting');
+
+    try {
+      const AudioContextConstructor = window.AudioContext ?? (window as WindowWithWebkitAudioContext).webkitAudioContext;
+
+      if (!navigator.mediaDevices?.getUserMedia || !AudioContextConstructor) {
+        throw new Error('Microphone recording is not available in this browser.');
+      }
+
+      let stream: MediaStream;
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            autoGainControl: false,
+            channelCount: 1,
+            echoCancellation: false,
+            noiseSuppression: false,
+          },
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setVoiceActionMessage('This browser could not provide raw microphone input. Record in a quiet room and keep headphones or speakers silent.');
+      }
+      const audioContext = new AudioContextConstructor();
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      const session: VoiceRecordingSession = {
+        audioContext,
+        chunks: [],
+        processor,
+        source,
+        startedAt: Date.now(),
+        stopTimer: null,
+        stream,
+      };
+
+      processor.onaudioprocess = (event) => {
+        session.chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+        event.outputBuffer.getChannelData(0).fill(0);
+      };
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      await audioContext.resume();
+
+      voiceRecordingRef.current = session;
+      session.stopTimer = window.setTimeout(() => {
+        stopVoiceRecording();
+      }, voiceProfileLimits.maxAudioSeconds * 1000);
+      setVoiceRecordingState('recording');
+    } catch (nextError) {
+      discardVoiceRecording();
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Unable to start microphone recording.');
+    }
+  }, [
+    canCreateMoreVoiceProfiles,
+    clearRecordedReference,
+    discardVoiceRecording,
+    stopVoiceRecording,
+    voiceProfileLimits.maxAudioSeconds,
+    voiceSubmitting,
+  ]);
+
+  const handleVoiceReferenceModeChange = useCallback((mode: VoiceReferenceInputMode) => {
+    if (mode === voiceReferenceMode) {
+      return;
+    }
+
+    discardVoiceRecording();
+    setVoiceReferenceMode(mode);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    if (mode === 'upload') {
+      if (voiceFileSource === 'recorded') {
+        setVoiceFile(null);
+      }
+      clearRecordedReference();
+    }
+
+    if (mode === 'record' && voiceFileSource === 'uploaded') {
+      setVoiceFile(null);
+      setVoiceFileSource(null);
+      setVoiceFileResetKey((current) => current + 1);
+    }
+  }, [clearRecordedReference, discardVoiceRecording, voiceFileSource, voiceReferenceMode]);
+
+  useEffect(() => {
+    if (!isVoiceRecording) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      const session = voiceRecordingRef.current;
+      setVoiceRecordingSeconds(session ? Math.floor((Date.now() - session.startedAt) / 1000) : 0);
+    }, 250);
+
+    return () => window.clearInterval(timer);
+  }, [isVoiceRecording]);
+
+  useEffect(() => {
+    return () => {
+      const session = voiceRecordingRef.current;
+
+      if (session) {
+        voiceRecordingRef.current = null;
+        cleanupVoiceRecordingSession(session);
+      }
+
+      if (recordedVoiceUrlRef.current) {
+        window.URL.revokeObjectURL(recordedVoiceUrlRef.current);
+      }
+    };
+  }, [cleanupVoiceRecordingSession]);
+
   const resetCreateForm = () => {
     setSourceName('');
     setTextInput('');
@@ -1708,6 +2146,215 @@ export function CustomerDashboardPage({
     }
 
     void loadJobs();
+  };
+
+  const resetVoiceForm = () => {
+    discardVoiceRecording();
+    clearRecordedReference();
+    setVoiceScriptMode('recommended');
+    setCustomScriptConfirmed(false);
+    setVoiceForm({
+      name: '',
+      referenceText: recommendedVoiceReferenceScript,
+      setDefault: false,
+    });
+    setVoiceReferenceMode('upload');
+    setVoiceFile(null);
+    setVoiceFileSource(null);
+    setVoiceFileResetKey((current) => current + 1);
+  };
+
+  const handleVoiceScriptModeChange = (mode: VoiceScriptMode) => {
+    setVoiceScriptMode(mode);
+    setCustomScriptConfirmed(false);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+    discardVoiceRecording();
+    clearRecordedReference();
+    setVoiceFile(null);
+    setVoiceFileSource(null);
+    setVoiceFileResetKey((current) => current + 1);
+
+    if (mode === 'recommended') {
+      setVoiceForm((current) => ({
+        ...current,
+        referenceText: recommendedVoiceReferenceScript,
+      }));
+    } else {
+      setVoiceForm((current) => ({
+        ...current,
+        referenceText: current.referenceText === recommendedVoiceReferenceScript ? '' : current.referenceText,
+      }));
+    }
+  };
+
+  const handleVoiceProfileSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setVoiceSubmitting(true);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    try {
+      if (!voiceForm.name.trim()) {
+        throw new Error('Enter a name for this custom voice.');
+      }
+
+      if (!voiceForm.referenceText.trim()) {
+        throw new Error('Use the recommended script or paste the exact reference text spoken in the WAV.');
+      }
+
+      if (voiceScriptMode === 'custom' && !customScriptConfirmed) {
+        throw new Error('Confirm that the WAV says exactly the custom script before creating the voice.');
+      }
+
+      if (isVoiceRecordingBusy) {
+        throw new Error('Stop the microphone recording before creating the custom voice.');
+      }
+
+      if (!voiceFile) {
+        throw new Error('Upload or record a WAV reference file.');
+      }
+
+      if (!voiceFile.name.toLowerCase().endsWith('.wav')) {
+        throw new Error('Reference audio must be a WAV file.');
+      }
+
+      if (voiceFile.size > voiceProfileLimits.maxAudioBytes) {
+        throw new Error(`Reference WAV files must stay under ${formatBytes(voiceProfileLimits.maxAudioBytes)}.`);
+      }
+
+      const referenceDurationSeconds = voiceFileSource === 'recorded'
+        ? recordedVoiceDuration
+        : await readAudioDurationFromFile(voiceFile);
+
+      if (referenceDurationSeconds !== null && referenceDurationSeconds < voiceProfileLimits.minAudioSeconds) {
+        throw new Error(`Reference WAV must be at least ${formatDuration(voiceProfileLimits.minAudioSeconds)}.`);
+      }
+
+      if (referenceDurationSeconds !== null && referenceDurationSeconds > voiceProfileLimits.maxAudioSeconds) {
+        throw new Error(`Reference WAV must be ${formatDuration(voiceProfileLimits.maxAudioSeconds)} or shorter.`);
+      }
+
+      const formData = new FormData();
+      formData.append('file', voiceFile);
+      formData.append('name', voiceForm.name.trim());
+      formData.append('referenceText', voiceForm.referenceText.trim());
+      formData.append('setDefault', String(voiceForm.setDefault));
+
+      const payload = await apiRequest<{
+        message?: string;
+        voiceProfile: TtsVoiceProfile;
+        voiceProfiles: TtsVoiceProfile[];
+      }>('/api/tts/voice-profiles', {
+        body: formData,
+        method: 'POST',
+      });
+
+      setVoiceProfiles(payload.voiceProfiles);
+      if (payload.voiceProfile.providerSyncStatus === 'ready') {
+        setSelectedVoiceProfileId(String(payload.voiceProfile.id));
+        setVoiceActionMessage(payload.message ?? 'Custom voice profile created. The reference WAV is saved privately with this account.');
+      } else {
+        const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault && profile.providerSyncStatus === 'ready');
+        setSelectedVoiceProfileId(defaultProfile ? String(defaultProfile.id) : 'fixed');
+        setVoiceActionMessage(payload.message ?? 'Reference WAV saved. Retry activation after the Keypillar API is back online.');
+      }
+      resetVoiceForm();
+      await loadVoiceProfiles();
+    } catch (nextError) {
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to create the custom voice.');
+    } finally {
+      setVoiceSubmitting(false);
+    }
+  };
+
+  const handleSyncVoiceProfile = async (profileId: number) => {
+    setVoiceActionId(profileId);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    try {
+      const payload = await apiRequest<{
+        voiceProfile: TtsVoiceProfile;
+        voiceProfiles: TtsVoiceProfile[];
+      }>(`/api/tts/voice-profiles/${profileId}/sync`, {
+        method: 'POST',
+      });
+      setVoiceProfiles(payload.voiceProfiles);
+      setSelectedVoiceProfileId(String(payload.voiceProfile.id));
+      setVoiceActionMessage('Custom voice activated. You can now use it in the generation voice selector.');
+    } catch (nextError) {
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to activate the custom voice.');
+    } finally {
+      setVoiceActionId(null);
+    }
+  };
+
+  const handleGenerateVoiceTestPreview = async (profileId: number) => {
+    setVoiceActionId(profileId);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    try {
+      const payload = await apiRequest<{
+        voiceProfile: TtsVoiceProfile;
+        voiceProfiles: TtsVoiceProfile[];
+      }>(`/api/tts/voice-profiles/${profileId}/test-preview`, {
+        method: 'POST',
+      });
+      setVoiceProfiles(payload.voiceProfiles);
+      setSelectedVoiceProfileId(String(payload.voiceProfile.id));
+      setVoiceActionMessage('Test preview generated. Play it below to check whether this custom voice sounds right.');
+    } catch (nextError) {
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to generate the custom voice test preview.');
+    } finally {
+      setVoiceActionId(null);
+    }
+  };
+
+  const handleSetDefaultVoiceProfile = async (profileId: number) => {
+    setVoiceActionId(profileId);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    try {
+      const payload = await apiRequest<{ voiceProfiles: TtsVoiceProfile[] }>(`/api/tts/voice-profiles/${profileId}/default`, {
+        method: 'POST',
+      });
+      setVoiceProfiles(payload.voiceProfiles);
+      setSelectedVoiceProfileId(String(profileId));
+      setVoiceActionMessage('Default custom voice updated.');
+    } catch (nextError) {
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to set default custom voice.');
+    } finally {
+      setVoiceActionId(null);
+    }
+  };
+
+  const handleDeactivateVoiceProfile = async (profileId: number) => {
+    setVoiceActionId(profileId);
+    setVoiceActionError('');
+    setVoiceActionMessage('');
+
+    try {
+      const payload = await apiRequest<{ deactivatedId: number; voiceProfiles: TtsVoiceProfile[] }>(`/api/tts/voice-profiles/${profileId}/deactivate`, {
+        method: 'POST',
+      });
+      setVoiceProfiles(payload.voiceProfiles);
+      setSelectedVoiceProfileId((current) => {
+        if (current !== String(profileId)) {
+          return current;
+        }
+
+        const defaultProfile = payload.voiceProfiles.find((profile) => profile.isDefault && profile.providerSyncStatus === 'ready');
+        return defaultProfile ? String(defaultProfile.id) : 'fixed';
+      });
+      setVoiceActionMessage('Custom voice profile deleted.');
+    } catch (nextError) {
+      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Failed to delete the custom voice.');
+    } finally {
+      setVoiceActionId(null);
+    }
   };
 
   const handleRetryJob = async (jobId: number) => {
@@ -1777,6 +2424,28 @@ export function CustomerDashboardPage({
     }
   };
 
+  const handleDeleteJob = async (jobId: number) => {
+    setDeletingJobId(jobId);
+    setJobActionError('');
+
+    try {
+      await apiRequest<{ deleted: boolean; jobId: number }>(`/api/tts/jobs/${jobId}`, {
+        method: 'DELETE',
+      });
+
+      setJobs((currentJobs) => {
+        const nextJobs = currentJobs.filter((job) => job.id !== jobId);
+        jobsRef.current = nextJobs;
+        return nextJobs;
+      });
+      await loadJobs();
+    } catch (nextError) {
+      setJobActionError(nextError instanceof Error ? nextError.message : 'Failed to delete the audio generation job.');
+    } finally {
+      setDeletingJobId(null);
+    }
+  };
+
   const requestStartFullGeneration = (job: TtsGenerationJob) => {
     const estimatedMinutes = estimateMinutesFromWords(job.wordCount);
 
@@ -1797,6 +2466,8 @@ export function CustomerDashboardPage({
 
     if (confirmJobAction.type === 'start') {
       await handleStartFullGeneration(confirmJobAction.job.id);
+    } else if (confirmJobAction.type === 'delete') {
+      await handleDeleteJob(confirmJobAction.job.id);
     } else {
       await handleCancelJob(confirmJobAction.job.id);
     }
@@ -1829,6 +2500,7 @@ export function CustomerDashboardPage({
             inputText: textInput,
             qualityPreset,
             sourceName,
+            voiceProfileId: selectedVoiceProfileId,
           }),
           method: 'POST',
         });
@@ -1840,6 +2512,7 @@ export function CustomerDashboardPage({
         const formData = new FormData();
         formData.append('file', pdfFile);
         formData.append('qualityPreset', qualityPreset);
+        formData.append('voiceProfileId', selectedVoiceProfileId);
 
         if (sourceName.trim()) {
           formData.append('sourceName', sourceName.trim());
@@ -1920,6 +2593,18 @@ export function CustomerDashboardPage({
         >
           History
         </button>
+        <button
+          className={cx(
+            'rounded-full px-5 py-3 text-sm font-semibold transition',
+            activeTab === 'voices'
+              ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+              : 'border border-[#d8cbbe] bg-white/88 text-[#5a514a] hover:border-[#c7b09e] hover:text-[#a96544]',
+          )}
+          onClick={() => setActiveTab('voices')}
+          type="button"
+        >
+          Create with your voice
+        </button>
       </div>
 
       {activeTab === 'create' ? (
@@ -1991,6 +2676,30 @@ export function CustomerDashboardPage({
                 )}
 
                 <div>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Voice</label>
+                  <select
+                    className={textInputClassName}
+                    value={selectedVoiceProfileId}
+                    onChange={(event) => setSelectedVoiceProfileId(event.target.value)}
+                  >
+                    <option value="fixed">Keypillar Bangla Female</option>
+                    {voiceProfiles.map((profile) => (
+                      <option
+                        key={profile.id}
+                        disabled={profile.providerSyncStatus !== 'ready'}
+                        value={String(profile.id)}
+                      >
+                        {profile.displayName}{profile.isDefault ? ' (default)' : ''}{profile.providerSyncStatus === 'pending' ? ' (pending activation)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-sm leading-6 text-[#6f645c]">
+                    Custom voices are private to your account. Provider profile IDs stay on the website backend.
+                  </p>
+                  {voiceProfilesError ? <div className="mt-2"><InlineMessage tone="error">{voiceProfilesError}</InlineMessage></div> : null}
+                </div>
+
+                <div>
                   <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Download quality</label>
                   <select
                     className={textInputClassName}
@@ -2048,7 +2757,7 @@ export function CustomerDashboardPage({
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <span>Voice</span>
-                    <span className="font-semibold text-[#2f343b]">keypillar-bd-female</span>
+                    <span className="text-right font-semibold text-[#2f343b]">{selectedVoiceName}</span>
                   </div>
                   <div className="flex items-start justify-between gap-3">
                     <span>Quality</span>
@@ -2100,6 +2809,491 @@ export function CustomerDashboardPage({
               </div>
             </div>
           </form>
+        </section>
+      ) : null}
+
+      {activeTab === 'voices' ? (
+        <section className="mt-6 rounded-[28px] border border-[#ddcfbe] bg-white/88 p-4 shadow-[0_18px_50px_rgba(55,58,64,0.08)] sm:p-6">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-[#2f343b]">Create voice notes with your own voice</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-7 text-[#64584f]">
+                Create and manage custom reference voices for this account. Saved reference WAVs are private to your login and provider profile IDs stay on the backend.
+              </p>
+            </div>
+            <div className="rounded-full border border-[#d9c6b2] bg-[#faf7f1] px-4 py-2 text-sm font-semibold text-[#8d5d45]">
+              {voiceProfiles.length}/{voiceProfileLimits.maxActiveProfiles} saved
+            </div>
+          </div>
+
+          <div className="mt-5 flex flex-col gap-5">
+            <div className="order-2 space-y-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-[#2f343b]">Saved custom voices</h3>
+                  <p className="mt-1 text-sm leading-6 text-[#64584f]">
+                    Use these saved voices when creating previews or full audio jobs.
+                  </p>
+                </div>
+              </div>
+              {voiceProfilesLoading ? (
+                <StatePanel
+                  description="Loading saved custom voices for this account."
+                  icon={<Loader2 className="h-5 w-5 animate-spin" />}
+                  title="Loading custom voices"
+                />
+              ) : null}
+              {voiceProfilesError ? (
+                <StatePanel
+                  action={(
+                    <SecondaryButton onClick={() => void loadVoiceProfiles()} type="button">
+                      <RefreshCw className="h-4 w-4" />
+                      Try again
+                    </SecondaryButton>
+                  )}
+                  description={voiceProfilesError}
+                  icon={<AlertTriangle className="h-5 w-5" />}
+                  title="Could not load custom voices"
+                  tone="error"
+                />
+              ) : null}
+              {!voiceProfilesLoading && !voiceProfilesError && voiceProfiles.length === 0 ? (
+                <StatePanel
+                  description="The built-in Keypillar Bangla Female voice is always available. Add a custom WAV reference voice when you need account-specific narration."
+                  icon={<FileAudio2 className="h-5 w-5" />}
+                  title="No custom voices yet"
+                />
+              ) : null}
+              {voiceProfiles.map((profile) => (
+                <div key={profile.id} className="rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-4 sm:p-5">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <h3 className="text-lg font-semibold text-[#2f343b]">{profile.displayName}</h3>
+                        {profile.isDefault ? (
+                          <span className="rounded-full bg-[#e5f4e5] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#355f3b]">
+                            Default
+                          </span>
+                        ) : null}
+                        {profile.providerSyncStatus === 'pending' ? (
+                          <span className="rounded-full bg-[#fff0df] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#9a5b36]">
+                            Pending activation
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-2 grid gap-2 text-sm text-[#64584f] sm:grid-cols-2">
+                        <div>Reference: {profile.referenceAudioSeconds === null ? 'Not measured' : formatDuration(profile.referenceAudioSeconds)}</div>
+                        <div>Sample rate: {profile.referenceSampleRate === null ? 'Not measured' : `${profile.referenceSampleRate.toLocaleString()} Hz`}</div>
+                        <div>
+                          Saved WAV: {profile.referenceAudioFileSizeBytes === null ? 'Not stored' : formatBytes(profile.referenceAudioFileSizeBytes)}
+                        </div>
+                        <div>
+                          Status: {profile.providerSyncStatus === 'ready' ? 'Ready to use' : 'Saved locally'}
+                        </div>
+                        <div>
+                          Normalized: {profile.referenceNormalizedAt ? 'Yes' : 'Not yet'}
+                        </div>
+                      </div>
+                      <p className="mt-3 line-clamp-3 text-sm leading-7 text-[#5f564f]">{profile.referenceText}</p>
+                      {profile.referenceQualityWarnings.length > 0 ? (
+                        <div className="mt-3 rounded-2xl border border-[#eadfce] bg-white/80 p-3">
+                          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8d5d45]">Reference quality notes</div>
+                          <ul className="mt-2 space-y-1 text-sm leading-6 text-[#64584f]">
+                            {profile.referenceQualityWarnings.map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                      {profile.providerSyncStatus === 'pending' ? (
+                        <div className="mt-3">
+                          <InlineMessage>
+                            {profile.providerSyncError ?? 'The recording is saved here. Retry activation after the Keypillar API is back online.'}
+                          </InlineMessage>
+                        </div>
+                      ) : null}
+                      {profile.testPreviewAudioUrl ? (
+                        <div className="mt-3 space-y-2">
+                          <div className="text-sm font-semibold text-[#2f343b]">
+                            Test preview{profile.testPreviewAudioSeconds === null ? '' : ` (${formatDuration(profile.testPreviewAudioSeconds)})`}
+                          </div>
+                          <audio className="w-full" controls src={profile.testPreviewAudioUrl} />
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-end">
+                      {profile.referenceAudioDownloadUrl ? (
+                        <a
+                          className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-[#d8cbbe] bg-white/80 px-4 py-2 text-sm font-semibold text-[#5a514a] transition hover:border-[#c7b09e] hover:text-[#a96544] sm:w-auto"
+                          href={profile.referenceAudioDownloadUrl}
+                        >
+                          <Download className="h-4 w-4" />
+                          Reference WAV
+                        </a>
+                      ) : null}
+                      {profile.providerSyncStatus === 'pending' ? (
+                        <SecondaryButton
+                          className="w-full px-4 py-2 text-sm sm:w-auto"
+                          disabled={voiceActionId === profile.id}
+                          onClick={() => void handleSyncVoiceProfile(profile.id)}
+                          type="button"
+                        >
+                          {voiceActionId === profile.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                          Retry activation
+                        </SecondaryButton>
+                      ) : null}
+                      {profile.providerSyncStatus === 'ready' && !profile.isDefault ? (
+                        <SecondaryButton
+                          className="w-full px-4 py-2 text-sm sm:w-auto"
+                          disabled={voiceActionId === profile.id}
+                          onClick={() => void handleSetDefaultVoiceProfile(profile.id)}
+                          type="button"
+                        >
+                          {voiceActionId === profile.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                          Set default
+                        </SecondaryButton>
+                      ) : null}
+                      {profile.providerSyncStatus === 'ready' ? (
+                        <SecondaryButton
+                          className="w-full px-4 py-2 text-sm sm:w-auto"
+                          disabled={voiceActionId === profile.id}
+                          onClick={() => void handleGenerateVoiceTestPreview(profile.id)}
+                          type="button"
+                        >
+                          {voiceActionId === profile.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                          Test this voice
+                        </SecondaryButton>
+                      ) : null}
+                      <SecondaryButton
+                        className="w-full px-4 py-2 text-sm sm:w-auto"
+                        disabled={voiceActionId === profile.id}
+                        onClick={() => void handleDeactivateVoiceProfile(profile.id)}
+                        type="button"
+                      >
+                        {voiceActionId === profile.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                        Delete
+                      </SecondaryButton>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {voiceActionError ? <InlineMessage tone="error">{voiceActionError}</InlineMessage> : null}
+              {voiceActionMessage ? <InlineMessage tone="success">{voiceActionMessage}</InlineMessage> : null}
+              {defaultVoiceProfile ? (
+                <InlineMessage>
+                  New generation forms select {defaultVoiceProfile.displayName} by default. You can still choose Keypillar Bangla Female for any job.
+                </InlineMessage>
+              ) : null}
+            </div>
+
+            <form className="order-1 rounded-[24px] border border-[#eadfce] bg-[#faf7f1] p-4 sm:p-6 lg:p-7" onSubmit={handleVoiceProfileSubmit}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-[#2f343b]">Create a voice from your recording</h3>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-[#64584f]">
+                    Upload or record a WAV reference between {formatDuration(voiceProfileLimits.minAudioSeconds)} and {formatDuration(voiceProfileLimits.maxAudioSeconds)}. The reference audio is saved privately with your account after profile creation.
+                  </p>
+                </div>
+                <span className="inline-flex w-fit items-center rounded-full border border-[#d9c6b2] bg-white/80 px-3 py-1 text-xs font-semibold text-[#8d5d45]">
+                  New voice setup
+                </span>
+              </div>
+              <div className="mt-4 rounded-2xl border border-[#eadfce] bg-white/70 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#efe2d1] text-[#9a6041]">
+                    <Mic className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold text-[#2f343b]">Reference voice quality</div>
+                    <p className="mt-1 text-sm leading-6 text-[#64584f]">
+                      Upload or record 2 to 5 minutes of clear single-speaker Bangla voice in a quiet place, with no music, echo, or background noise.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {['2-5 minutes', 'Single speaker', 'Quiet place', 'No music or echo'].map((item) => (
+                        <span
+                          key={item}
+                          className="rounded-full border border-[#ddcfbe] bg-[#faf7f1] px-3 py-1 text-xs font-semibold text-[#5f564f]"
+                        >
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {!canCreateMoreVoiceProfiles ? (
+                <div className="mt-4">
+                  <InlineMessage>
+                    You already have {voiceProfileLimits.maxActiveProfiles} active custom voices. Delete one before creating another.
+                  </InlineMessage>
+                </div>
+              ) : null}
+              <div className="mt-5 space-y-5">
+                <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">1</span>
+                    <div>
+                      <div className="text-sm font-semibold text-[#2f343b]">Read this script aloud</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">Record the exact words shown here so the reference text matches the audio.</div>
+                    </div>
+                  </div>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Voice name</label>
+                  <TextInput
+                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                    placeholder="Example: Tanim narration"
+                    value={voiceForm.name}
+                    onChange={(event) => setVoiceForm((current) => ({ ...current, name: event.target.value }))}
+                  />
+                  <div className="mt-4">
+                    <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <label className="block text-sm font-semibold text-[#4f4740]">Reference script</label>
+                      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[#d8cbbe] bg-white p-1 sm:min-w-[360px]">
+                        <button
+                          className={cx(
+                            'inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-xs font-semibold transition sm:text-sm',
+                            voiceScriptMode === 'recommended'
+                              ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+                              : 'text-[#5a514a] hover:bg-[#f8f3ec]',
+                          )}
+                          disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                          onClick={() => handleVoiceScriptModeChange('recommended')}
+                          type="button"
+                        >
+                          Recommended script
+                        </button>
+                        <button
+                          className={cx(
+                            'inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-xs font-semibold transition sm:text-sm',
+                            voiceScriptMode === 'custom'
+                              ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+                              : 'text-[#5a514a] hover:bg-[#f8f3ec]',
+                          )}
+                          disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                          onClick={() => handleVoiceScriptModeChange('custom')}
+                          type="button"
+                        >
+                          Use my own script
+                        </button>
+                      </div>
+                    </div>
+
+                    {voiceScriptMode === 'recommended' ? (
+                      <div className="rounded-2xl border border-[#ddcfbe] bg-[#fffaf4] p-4">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="text-sm font-semibold text-[#2f343b]">Read this Bangla script naturally</div>
+                          <span className="w-fit rounded-full border border-[#ddcfbe] bg-white px-3 py-1 text-xs font-semibold text-[#8d5d45]">
+                            Around 2 to 3 minutes
+                          </span>
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap text-base leading-8 text-[#3d3935]" lang="bn">
+                          {recommendedVoiceReferenceScript}
+                        </p>
+                        <div className="mt-4 grid gap-2 text-xs font-semibold text-[#6f645c] sm:grid-cols-3">
+                          <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">Read in your natural voice</span>
+                          <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">Keep the room quiet</span>
+                          <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">No music, echo, or noise</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <TextArea
+                          className="min-h-[170px]"
+                          disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                          placeholder="Paste the exact text spoken in the reference WAV"
+                          value={voiceForm.referenceText}
+                          onChange={(event) => {
+                            setCustomScriptConfirmed(false);
+                            setVoiceForm((current) => ({ ...current, referenceText: event.target.value }));
+                          }}
+                        />
+                        <div className="mt-3">
+                          <InlineMessage>
+                            Make sure the uploaded or recorded WAV says exactly this text. Mismatched text can reduce custom voice quality.
+                          </InlineMessage>
+                        </div>
+                        <label className="mt-3 flex items-start gap-3 rounded-2xl border border-[#eadfce] bg-white/80 px-4 py-3 text-sm font-semibold leading-6 text-[#4f4740]">
+                          <input
+                            checked={customScriptConfirmed}
+                            className="mt-1"
+                            disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                            type="checkbox"
+                            onChange={(event) => setCustomScriptConfirmed(event.target.checked)}
+                          />
+                          I confirm the WAV says exactly this custom script.
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">2</span>
+                    <div>
+                      <div className="text-sm font-semibold text-[#2f343b]">Upload or record the WAV</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">Read the selected script in a clear, single-speaker Bangla recording.</div>
+                    </div>
+                  </div>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Reference WAV</label>
+                  <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[#d8cbbe] bg-white p-1">
+                    <button
+                      className={cx(
+                        'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold transition',
+                        voiceReferenceMode === 'upload'
+                          ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+                          : 'text-[#5a514a] hover:bg-[#f8f3ec]',
+                      )}
+                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
+                      onClick={() => handleVoiceReferenceModeChange('upload')}
+                      type="button"
+                    >
+                      <Upload className="h-4 w-4" />
+                      Upload WAV
+                    </button>
+                    <button
+                      className={cx(
+                        'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold transition',
+                        voiceReferenceMode === 'record'
+                          ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+                          : 'text-[#5a514a] hover:bg-[#f8f3ec]',
+                      )}
+                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                      onClick={() => handleVoiceReferenceModeChange('record')}
+                      type="button"
+                    >
+                      <Mic className="h-4 w-4" />
+                      Record
+                    </button>
+                  </div>
+
+                  {voiceReferenceMode === 'upload' ? (
+                    <div className="mt-3">
+                      <input
+                        key={voiceFileResetKey}
+                        accept="audio/wav,audio/x-wav,.wav"
+                        className={textInputClassName}
+                        disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                        type="file"
+                        onChange={(event) => {
+                          clearRecordedReference();
+                          discardVoiceRecording();
+                          const nextFile = event.target.files?.[0] ?? null;
+                          setVoiceFile(nextFile);
+                          setVoiceFileSource(nextFile ? 'uploaded' : null);
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-2xl border border-[#d8cbbe] bg-white p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-[#2f343b]">
+                            {isVoiceRecording
+                              ? `Recording ${formatCountdown(voiceRecordingSeconds)}`
+                              : recordedVoiceDuration !== null
+                                ? `Recorded ${formatDuration(recordedVoiceDuration)}`
+                                : 'Ready to record'}
+                          </div>
+                          <div className="mt-1 text-xs leading-5 text-[#6f645c]">
+                            {formatDuration(voiceProfileLimits.minAudioSeconds)} minimum, {formatDuration(voiceProfileLimits.maxAudioSeconds)} maximum.
+                          </div>
+                          <div className="mt-1 text-xs leading-5 text-[#6f645c]">
+                            Recording asks the browser for raw mono input with echo cancellation, noise suppression, and auto gain turned off. Keep headphones and speakers silent.
+                          </div>
+                        </div>
+                        {isVoiceRecording ? (
+                          <SecondaryButton
+                            className="w-full px-4 py-2.5 text-sm sm:w-auto"
+                            onClick={stopVoiceRecording}
+                            type="button"
+                          >
+                            <Square className="h-4 w-4" />
+                            Stop
+                          </SecondaryButton>
+                        ) : (
+                          <PrimaryButton
+                            className="w-full px-4 py-2.5 text-sm sm:w-auto"
+                            disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || voiceRecordingState === 'requesting'}
+                            onClick={() => void startVoiceRecording()}
+                            type="button"
+                          >
+                            {voiceRecordingState === 'requesting' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
+                            {voiceRecordingState === 'requesting' ? 'Opening mic...' : 'Start recording'}
+                          </PrimaryButton>
+                        )}
+                      </div>
+                      {isVoiceRecording ? (
+                        <div className="mt-4 h-3 overflow-hidden rounded-full bg-[#eadfce]">
+                          <div
+                            className="h-full rounded-full bg-[#ae6c4a] transition-[width] duration-300"
+                            style={{
+                              width: `${Math.min(100, (voiceRecordingSeconds / voiceProfileLimits.maxAudioSeconds) * 100)}%`,
+                            }}
+                          />
+                        </div>
+                      ) : null}
+                      {recordedVoiceUrl ? (
+                        <div className="mt-4 space-y-3">
+                          <audio className="w-full" controls src={recordedVoiceUrl} />
+                          <SecondaryButton
+                            className="w-full px-4 py-2.5 text-sm sm:w-auto"
+                            disabled={voiceSubmitting}
+                            onClick={() => {
+                              clearRecordedReference();
+                              setVoiceFile(null);
+                              setVoiceFileSource(null);
+                            }}
+                            type="button"
+                          >
+                            <X className="h-4 w-4" />
+                            Clear recording
+                          </SecondaryButton>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                  {voiceFile ? (
+                    <p className="mt-2 text-sm leading-6 text-[#6f645c]">
+                      Selected: {voiceFile.name} ({formatBytes(voiceFile.size)})
+                      {voiceFileSource === 'recorded' && recordedVoiceDuration !== null ? `, ${formatDuration(recordedVoiceDuration)}` : ''}
+                    </p>
+                  ) : null}
+                  <p className="mt-2 text-sm leading-6 text-[#6f645c]">
+                    WAV only. {formatDuration(voiceProfileLimits.minAudioSeconds)} to {formatDuration(voiceProfileLimits.maxAudioSeconds)}, maximum {formatBytes(voiceProfileLimits.maxAudioBytes)}.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">3</span>
+                    <div>
+                      <div className="text-sm font-semibold text-[#2f343b]">Save the custom voice</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">
+                        The voice becomes selectable after the provider profile is active. If the provider is down, the reference WAV is saved here for retry.
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <label className="flex items-center gap-3 text-sm font-semibold text-[#4f4740]">
+                      <input
+                        checked={voiceForm.setDefault}
+                        disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
+                        type="checkbox"
+                        onChange={(event) => setVoiceForm((current) => ({ ...current, setDefault: event.target.checked }))}
+                      />
+                      Set as my default custom voice
+                    </label>
+                    <PrimaryButton
+                      className="w-full justify-center sm:w-auto"
+                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy || (voiceScriptMode === 'custom' && !customScriptConfirmed)}
+                      type="submit"
+                    >
+                      {voiceSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileAudio2 className="h-4 w-4" />}
+                      {voiceSubmitting ? 'Creating voice...' : 'Create voice profile'}
+                    </PrimaryButton>
+                  </div>
+                </div>
+              </div>
+            </form>
+          </div>
         </section>
       ) : null}
 
@@ -2200,7 +3394,7 @@ export function CustomerDashboardPage({
                       <div>Minutes: {job.billableMinutes === null ? 'Not measured' : job.billableMinutes.toLocaleString()}</div>
                     </div>
                     <div className="mt-2 text-sm leading-6 text-[#7a6f66]">
-                      Voice: {job.providerVoice} • Quality: {getTtsQualityOption(job.qualityPreset).label}
+                      Voice: {job.voiceDisplayName} • Quality: {getTtsQualityOption(job.qualityPreset).label}
                       {job.generatedAudioSeconds !== null ? ` • Duration: ${formatDuration(job.generatedAudioSeconds)}` : ''}
                       {job.processingStage ? ` • Stage: ${statusLabel(job.processingStage)}` : ''}
                     </div>
@@ -2274,6 +3468,17 @@ export function CustomerDashboardPage({
                         {retryingJobId === job.id ? 'Retrying...' : 'Retry'}
                       </SecondaryButton>
                     ) : null}
+                    {canDeleteTtsJob(job) ? (
+                      <SecondaryButton
+                        className="w-full px-4 py-2 text-sm sm:w-auto"
+                        disabled={deletingJobId === job.id}
+                        onClick={() => setConfirmJobAction({ job, type: 'delete' })}
+                        type="button"
+                      >
+                        {deletingJobId === job.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        {deletingJobId === job.id ? 'Deleting...' : 'Delete'}
+                      </SecondaryButton>
+                    ) : null}
                     {job.wavDownloadUrl ? (
                       <a
                         className="inline-flex w-full items-center justify-center rounded-full bg-[#ae6c4a] px-4 py-2 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95 sm:w-auto"
@@ -2299,21 +3504,45 @@ export function CustomerDashboardPage({
       ) : null}
       {confirmJobAction ? (
         <ConfirmationDialog
-          cancelLabel={confirmJobAction.type === 'cancel' ? 'Keep running' : 'Not yet'}
-          confirmLabel={confirmJobAction.type === 'cancel' ? 'Cancel job' : 'Generate full audio'}
-          destructive={confirmJobAction.type === 'cancel'}
-          loading={
+          cancelLabel={
             confirmJobAction.type === 'cancel'
-              ? cancellingJobId === confirmJobAction.job.id
-              : startingJobId === confirmJobAction.job.id
+              ? 'Keep running'
+              : confirmJobAction.type === 'delete'
+                ? 'Keep job'
+                : 'Not yet'
+          }
+          confirmLabel={
+            confirmJobAction.type === 'cancel'
+              ? 'Cancel job'
+              : confirmJobAction.type === 'delete'
+                ? 'Delete permanently'
+                : 'Generate full audio'
+          }
+          destructive={confirmJobAction.type === 'cancel' || confirmJobAction.type === 'delete'}
+          loading={
+            confirmJobAction.type === 'delete'
+              ? deletingJobId === confirmJobAction.job.id
+              : confirmJobAction.type === 'cancel'
+                ? cancellingJobId === confirmJobAction.job.id
+                : startingJobId === confirmJobAction.job.id
           }
           onCancel={() => setConfirmJobAction(null)}
           onConfirm={() => void handleConfirmedJobAction()}
-          title={confirmJobAction.type === 'cancel' ? 'Cancel this generation?' : 'Generate the full audio?'}
+          title={
+            confirmJobAction.type === 'cancel'
+              ? 'Cancel this generation?'
+              : confirmJobAction.type === 'delete'
+                ? 'Delete this audio job?'
+                : 'Generate the full audio?'
+          }
         >
           {confirmJobAction.type === 'cancel' ? (
             <>
               This job will stop at the next safe point between audio chunks. Unfinished cancelled jobs are not billed and no final downloads are created.
+            </>
+          ) : confirmJobAction.type === 'delete' ? (
+            <>
+              This permanently removes the job from history and deletes its preview, WAV, MP3, and temporary files from private storage. Already billed minutes are not refunded.
             </>
           ) : (
             <>
@@ -2343,8 +3572,8 @@ export function CustomerJobDetailsPage({
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [action, setAction] = useState<null | 'cancel' | 'retry' | 'start'>(null);
-  const [confirmAction, setConfirmAction] = useState<null | 'cancel' | 'start'>(null);
+  const [action, setAction] = useState<null | 'cancel' | 'delete' | 'retry' | 'start'>(null);
+  const [confirmAction, setConfirmAction] = useState<null | 'cancel' | 'delete' | 'start'>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const active = job ? isActiveTtsJob(job) : false;
 
@@ -2387,9 +3616,27 @@ export function CustomerJobDetailsPage({
     return () => window.clearInterval(timer);
   }, [active]);
 
-  const runJobAction = async (nextAction: 'cancel' | 'retry' | 'start') => {
+  const runJobAction = async (nextAction: 'cancel' | 'delete' | 'retry' | 'start') => {
     setAction(nextAction);
     setActionError('');
+
+    if (nextAction === 'delete') {
+      try {
+        await apiRequest<{ deleted: boolean; jobId: number }>(`/api/tts/jobs/${jobId}`, {
+          method: 'DELETE',
+        });
+
+        setJob(null);
+        await Promise.resolve(onSessionRefresh?.());
+        onNavigate('/dashboard');
+      } catch (nextError) {
+        setActionError(nextError instanceof Error ? nextError.message : 'Failed to delete this audio job.');
+      } finally {
+        setAction(null);
+      }
+
+      return;
+    }
 
     const endpoint =
       nextAction === 'cancel'
@@ -2516,7 +3763,7 @@ export function CustomerJobDetailsPage({
           <div>
             <h2 className="text-xl font-bold text-[#2f343b]">Status timeline</h2>
             <p className="mt-2 text-sm leading-7 text-[#64584f]">
-              Voice: {job.providerVoice} • Quality: {getTtsQualityOption(job.qualityPreset).label}
+              Voice: {job.voiceDisplayName} • Quality: {getTtsQualityOption(job.qualityPreset).label}
               {job.processingStage ? ` • Stage: ${statusLabel(job.processingStage)}` : ''}
             </p>
           </div>
@@ -2537,6 +3784,12 @@ export function CustomerJobDetailsPage({
               <SecondaryButton disabled={action === 'retry'} onClick={() => void runJobAction('retry')} type="button">
                 {action === 'retry' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                 {action === 'retry' ? 'Retrying...' : 'Retry'}
+              </SecondaryButton>
+            ) : null}
+            {canDeleteTtsJob(job) ? (
+              <SecondaryButton disabled={action === 'delete'} onClick={() => setConfirmAction('delete')} type="button">
+                {action === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {action === 'delete' ? 'Deleting...' : 'Delete'}
               </SecondaryButton>
             ) : null}
           </div>
@@ -2611,17 +3864,21 @@ export function CustomerJobDetailsPage({
       </div>
       {confirmAction ? (
         <ConfirmationDialog
-          cancelLabel={confirmAction === 'cancel' ? 'Keep running' : 'Not yet'}
-          confirmLabel={confirmAction === 'cancel' ? 'Cancel job' : 'Generate full audio'}
-          destructive={confirmAction === 'cancel'}
+          cancelLabel={confirmAction === 'cancel' ? 'Keep running' : confirmAction === 'delete' ? 'Keep job' : 'Not yet'}
+          confirmLabel={confirmAction === 'cancel' ? 'Cancel job' : confirmAction === 'delete' ? 'Delete permanently' : 'Generate full audio'}
+          destructive={confirmAction === 'cancel' || confirmAction === 'delete'}
           loading={action === confirmAction}
           onCancel={() => setConfirmAction(null)}
           onConfirm={() => void runConfirmedDetailsAction()}
-          title={confirmAction === 'cancel' ? 'Cancel this generation?' : 'Generate the full audio?'}
+          title={confirmAction === 'cancel' ? 'Cancel this generation?' : confirmAction === 'delete' ? 'Delete this audio job?' : 'Generate the full audio?'}
         >
           {confirmAction === 'cancel' ? (
             <>
               This job will stop at the next safe point between audio chunks. Cancelled unfinished jobs are not billed.
+            </>
+          ) : confirmAction === 'delete' ? (
+            <>
+              This permanently removes the job from history and deletes its preview, WAV, MP3, and temporary files from private storage. Already billed minutes are not refunded.
             </>
           ) : (
             <>
