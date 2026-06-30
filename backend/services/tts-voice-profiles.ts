@@ -26,8 +26,9 @@ const defaultFfmpegPath = 'ffmpeg';
 const defaultMaxActiveVoiceProfilesPerUser = 3;
 const maxVoiceProfileNameLength = 80;
 const maxReferenceTextLength = 4_000;
-const minReferenceAudioSeconds = 1;
-const maxReferenceAudioSeconds = 120;
+const minReferenceAudioSeconds = 120;
+const maxReferenceAudioSeconds = 300;
+const maxReferenceAudioBytes = 64 * 1024 * 1024;
 const providerUnavailablePublicMessage = 'Keypillar voice profile API is currently unavailable. The reference WAV was saved here and can be activated after the API is back online.';
 const providerDeactivateUnavailablePublicMessage = 'Keypillar voice profile API is currently unavailable. The voice was not deleted yet; please try again after the API is back online.';
 const testPreviewText = 'এটি আমার কাস্টম কণ্ঠের একটি ছোট পরীক্ষামূলক অডিও। বাক্যগুলো পরিষ্কারভাবে পড়া হচ্ছে, যাতে স্বর, বিরতি এবং উচ্চারণ বোঝা যায়।';
@@ -255,11 +256,11 @@ async function inspectReferenceWav(audioBuffer: Buffer, options: { enforceDurati
     const sampleRate = Number(payload.streams?.[0]?.sample_rate);
 
     if (!Number.isFinite(durationSeconds) || (enforceDurationLimits && durationSeconds < minReferenceAudioSeconds)) {
-      throw withStatus('Reference audio must be at least 1 second long.', 400);
+      throw withStatus('Reference audio must be at least 2 minutes long.', 400);
     }
 
     if (enforceDurationLimits && durationSeconds > maxReferenceAudioSeconds) {
-      throw withStatus('Reference audio must be 120 seconds or shorter.', 400);
+      throw withStatus('Reference audio must be 5 minutes or shorter.', 400);
     }
 
     if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
@@ -344,12 +345,12 @@ async function buildReferenceQualityWarnings(filePath: string, metadata: AudioMe
   const config = getVoiceProfileConfig();
   const warnings: string[] = [];
 
-  if (metadata.durationSeconds < 45) {
-    warnings.push('Reference audio is shorter than 45 seconds. Around 1 minute usually gives better custom voice quality.');
+  if (metadata.durationSeconds < minReferenceAudioSeconds) {
+    warnings.push('Reference audio is shorter than 2 minutes. A 2-5 minute sample gives better custom voice quality.');
   }
 
-  if (metadata.durationSeconds > 100) {
-    warnings.push('Reference audio is longer than 1 minute 40 seconds. A focused 50-90 second sample usually works best.');
+  if (metadata.durationSeconds > maxReferenceAudioSeconds) {
+    warnings.push('Reference audio is longer than 5 minutes. Keep the reference focused between 2 and 5 minutes.');
   }
 
   try {
@@ -1523,7 +1524,7 @@ export function getTtsVoiceProfileLimits() {
 
   return {
     maxActiveProfiles: config.maxActiveProfiles,
-    maxAudioBytes: 16 * 1024 * 1024,
+    maxAudioBytes: maxReferenceAudioBytes,
     maxAudioSeconds: maxReferenceAudioSeconds,
     minAudioSeconds: minReferenceAudioSeconds,
   };

@@ -159,8 +159,14 @@ type TtsVoiceProfileLimits = {
 
 type TtsQualityPreset = 'high_mp3_wav' | 'premium_mp3_wav' | 'standard_mp3_wav' | 'wav_only';
 
-const recommendedVoiceReferenceScript =
-  'আমি এখন আমার স্বাভাবিক কণ্ঠে একটি ছোট লেখা পড়ছি। এই রেকর্ডিংটি পরিষ্কারভাবে করা হয়েছে, যাতে আমার কণ্ঠের স্বর, গতি, উচ্চারণ এবং বিরতির ধরন বোঝা যায়। আমি বাংলায় কথা বলছি, তবে প্রয়োজন হলে কিছু ইংরেজি শব্দও স্বাভাবিকভাবে উচ্চারণ করতে পারি। প্রতিদিন আমরা কাজ, শিক্ষা, পরিবার, প্রযুক্তি এবং যোগাযোগের জন্য কণ্ঠ ব্যবহার করি। একটি ভালো কণ্ঠস্বর শুধু শব্দ নয়, অনুভূতি, ভরসা এবং স্পষ্টতা বহন করে। আমি বাক্যের শেষে একটু থামছি, কমার পরে ছোট বিরতি নিচ্ছি, এবং প্রতিটি শব্দ যতটা সম্ভব পরিষ্কারভাবে বলছি। আজকের আবহাওয়া সুন্দর, সকাল থেকে আকাশ পরিষ্কার, আর চারপাশ শান্ত। আমি চাই এই কণ্ঠ ভবিষ্যতে গল্প, সংবাদ, বিজ্ঞাপন, শিক্ষা, নির্দেশনা এবং অডিও বইয়ের জন্য ব্যবহার করা যাক। ধন্যবাদ, এই ছিল আমার কণ্ঠের নমুনা।';
+const recommendedVoiceReferenceScript = [
+  'আমি এখন আমার স্বাভাবিক কণ্ঠে একটি কণ্ঠ নমুনা পড়ছি। এই রেকর্ডিংটি পরিষ্কারভাবে করা হয়েছে, যাতে আমার কণ্ঠের স্বর, গতি, উচ্চারণ এবং বিরতির ধরন বোঝা যায়। আমি বাংলায় কথা বলছি, তবে প্রয়োজন হলে কিছু ইংরেজি শব্দও স্বাভাবিকভাবে উচ্চারণ করতে পারি। প্রতিটি বাক্যের শেষে আমি সামান্য থামছি, কমার পরে ছোট বিরতি নিচ্ছি, এবং প্রতিটি শব্দ যতটা সম্ভব পরিষ্কারভাবে বলছি।',
+  'প্রতিদিন আমরা কাজ, শিক্ষা, পরিবার, প্রযুক্তি এবং যোগাযোগের জন্য কণ্ঠ ব্যবহার করি। একটি ভালো কণ্ঠস্বর শুধু শব্দ নয়, অনুভূতি, ভরসা এবং স্পষ্টতা বহন করে। যখন কেউ গল্প বলে, সংবাদ পড়ে, বিজ্ঞাপন তৈরি করে, অথবা শিক্ষামূলক বিষয় ব্যাখ্যা করে, তখন কণ্ঠের ভঙ্গি খুব গুরুত্বপূর্ণ হয়ে ওঠে। তাই আমি এই অংশটি শান্তভাবে, স্বাভাবিক গতিতে এবং পরিষ্কার উচ্চারণে পড়ছি।',
+  'আজকের আবহাওয়া সুন্দর। সকাল থেকে আকাশ পরিষ্কার, চারপাশ শান্ত, এবং কথা বলার জন্য পরিবেশ ভালো। আমি চেষ্টা করছি যেন আমার কণ্ঠে একই রকম শক্তি, স্বাভাবিকতা এবং স্থিরতা থাকে। খুব দ্রুত বলছি না, আবার খুব ধীরে বলছি না। মাঝেমধ্যে ছোট বিরতি নিচ্ছি, যাতে বাক্যগুলো আলাদা বোঝা যায় এবং কথার অর্থ পরিষ্কার থাকে।',
+  'এই নমুনাটি ভবিষ্যতে গল্প, সংবাদ, বিজ্ঞাপন, শিক্ষা, নির্দেশনা, ফোন সিস্টেম, ব্যবসায়িক বার্তা এবং অডিও বইয়ের জন্য ব্যবহার করা যেতে পারে। আমি চাই আমার কণ্ঠ যেন শ্রোতার কাছে স্বাভাবিক, বিশ্বাসযোগ্য এবং আরামদায়ক মনে হয়। যদি কোনো ইংরেজি শব্দ আসে, যেমন online service, customer support, mobile app, বা digital payment, আমি সেগুলোও স্বাভাবিকভাবে উচ্চারণ করছি।',
+  'এখন আমি আরেকটু পড়ছি, যাতে কণ্ঠের ধারাবাহিকতা ভালোভাবে বোঝা যায়। মানুষ যখন দীর্ঘ সময় কথা বলে, তখন কণ্ঠের ওঠানামা, শ্বাস নেওয়ার ধরন, বাক্যের গতি এবং আবেগের পরিবর্তন স্পষ্ট হয়। এই কারণেই একটি দীর্ঘ, পরিষ্কার এবং একক বক্তার রেকর্ডিং কাস্টম ভয়েস তৈরির জন্য বেশি সহায়ক। আমি একই মাইক্রোফোনে, একই দূরত্বে, একই পরিবেশে কথা বলছি।',
+  'শেষ অংশে আমি আবার স্বাভাবিক ভঙ্গিতে বলছি: ধন্যবাদ, এই ছিল আমার কণ্ঠের নমুনা। আমি স্পষ্টভাবে কথা বলেছি, অযথা শব্দ করিনি, পেছনে কোনো গান বা শব্দ রাখিনি, এবং পুরো রেকর্ডিংয়ে একইভাবে পড়ার চেষ্টা করেছি। এই নমুনা থেকে আমার কণ্ঠের ধরন, উচ্চারণ, গতি এবং বিরতি বোঝা যাবে।',
+].join('\n\n');
 
 const ttsQualityOptions: Array<{
   description: string;
@@ -1458,6 +1464,29 @@ function formatCountdown(seconds: number) {
   return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
 }
 
+function readAudioDurationFromFile(file: File) {
+  return new Promise<number | null>((resolve) => {
+    const audio = new Audio();
+    const objectUrl = window.URL.createObjectURL(file);
+    const cleanup = () => {
+      audio.removeAttribute('src');
+      window.URL.revokeObjectURL(objectUrl);
+    };
+
+    audio.preload = 'metadata';
+    audio.onloadedmetadata = () => {
+      const durationSeconds = Number(audio.duration);
+      cleanup();
+      resolve(Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : null);
+    };
+    audio.onerror = () => {
+      cleanup();
+      resolve(null);
+    };
+    audio.src = objectUrl;
+  });
+}
+
 function getTtsQualityOption(value: TtsQualityPreset) {
   return ttsQualityOptions.find((option) => option.value === value) ?? ttsQualityOptions[0];
 }
@@ -1741,9 +1770,9 @@ export function CustomerDashboardPage({
   const [voiceProfiles, setVoiceProfiles] = useState<TtsVoiceProfile[]>([]);
   const [voiceProfileLimits, setVoiceProfileLimits] = useState<TtsVoiceProfileLimits>({
     maxActiveProfiles: 3,
-    maxAudioBytes: 16 * 1024 * 1024,
-    maxAudioSeconds: 120,
-    minAudioSeconds: 1,
+    maxAudioBytes: 64 * 1024 * 1024,
+    maxAudioSeconds: 300,
+    minAudioSeconds: 120,
   });
   const [voiceProfilesLoading, setVoiceProfilesLoading] = useState(true);
   const [voiceProfilesError, setVoiceProfilesError] = useState('');
@@ -1958,7 +1987,7 @@ export function CustomerDashboardPage({
     const durationSeconds = samples.length / session.audioContext.sampleRate;
 
     if (durationSeconds < voiceProfileLimits.minAudioSeconds) {
-      setVoiceActionError(`Record at least ${voiceProfileLimits.minAudioSeconds} second before creating a custom voice.`);
+      setVoiceActionError(`Record at least ${formatDuration(voiceProfileLimits.minAudioSeconds)} before creating a custom voice.`);
       return;
     }
 
@@ -2192,6 +2221,18 @@ export function CustomerDashboardPage({
 
       if (voiceFile.size > voiceProfileLimits.maxAudioBytes) {
         throw new Error(`Reference WAV files must stay under ${formatBytes(voiceProfileLimits.maxAudioBytes)}.`);
+      }
+
+      const referenceDurationSeconds = voiceFileSource === 'recorded'
+        ? recordedVoiceDuration
+        : await readAudioDurationFromFile(voiceFile);
+
+      if (referenceDurationSeconds !== null && referenceDurationSeconds < voiceProfileLimits.minAudioSeconds) {
+        throw new Error(`Reference WAV must be at least ${formatDuration(voiceProfileLimits.minAudioSeconds)}.`);
+      }
+
+      if (referenceDurationSeconds !== null && referenceDurationSeconds > voiceProfileLimits.maxAudioSeconds) {
+        throw new Error(`Reference WAV must be ${formatDuration(voiceProfileLimits.maxAudioSeconds)} or shorter.`);
       }
 
       const formData = new FormData();
@@ -2950,7 +2991,7 @@ export function CustomerDashboardPage({
                 <div>
                   <h3 className="text-lg font-semibold text-[#2f343b]">Create a voice from your recording</h3>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-[#64584f]">
-                    Upload or record a WAV reference between {voiceProfileLimits.minAudioSeconds}s and {voiceProfileLimits.maxAudioSeconds}s. The reference audio is saved privately with your account after profile creation.
+                    Upload or record a WAV reference between {formatDuration(voiceProfileLimits.minAudioSeconds)} and {formatDuration(voiceProfileLimits.maxAudioSeconds)}. The reference audio is saved privately with your account after profile creation.
                   </p>
                 </div>
                 <span className="inline-flex w-fit items-center rounded-full border border-[#d9c6b2] bg-white/80 px-3 py-1 text-xs font-semibold text-[#8d5d45]">
@@ -2965,10 +3006,10 @@ export function CustomerDashboardPage({
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold text-[#2f343b]">Reference voice quality</div>
                     <p className="mt-1 text-sm leading-6 text-[#64584f]">
-                      Upload or record around 1 minute of clear single-speaker Bangla voice in a quiet place, with no music, echo, or background noise.
+                      Upload or record 2 to 5 minutes of clear single-speaker Bangla voice in a quiet place, with no music, echo, or background noise.
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {['About 1 minute', 'Single speaker', 'Quiet place', 'No music or echo'].map((item) => (
+                      {['2-5 minutes', 'Single speaker', 'Quiet place', 'No music or echo'].map((item) => (
                         <span
                           key={item}
                           className="rounded-full border border-[#ddcfbe] bg-[#faf7f1] px-3 py-1 text-xs font-semibold text-[#5f564f]"
@@ -3041,7 +3082,7 @@ export function CustomerDashboardPage({
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="text-sm font-semibold text-[#2f343b]">Read this Bangla script naturally</div>
                           <span className="w-fit rounded-full border border-[#ddcfbe] bg-white px-3 py-1 text-xs font-semibold text-[#8d5d45]">
-                            Around 50s to 1m 30s
+                            Around 2 to 3 minutes
                           </span>
                         </div>
                         <p className="mt-3 whitespace-pre-wrap text-base leading-8 text-[#3d3935]" lang="bn">
@@ -3153,7 +3194,7 @@ export function CustomerDashboardPage({
                                 : 'Ready to record'}
                           </div>
                           <div className="mt-1 text-xs leading-5 text-[#6f645c]">
-                            {voiceProfileLimits.minAudioSeconds}s minimum, {formatCountdown(voiceProfileLimits.maxAudioSeconds)} maximum.
+                            {formatDuration(voiceProfileLimits.minAudioSeconds)} minimum, {formatDuration(voiceProfileLimits.maxAudioSeconds)} maximum.
                           </div>
                           <div className="mt-1 text-xs leading-5 text-[#6f645c]">
                             Recording asks the browser for raw mono input with echo cancellation, noise suppression, and auto gain turned off. Keep headphones and speakers silent.
@@ -3217,7 +3258,7 @@ export function CustomerDashboardPage({
                     </p>
                   ) : null}
                   <p className="mt-2 text-sm leading-6 text-[#6f645c]">
-                    WAV only. Maximum {formatBytes(voiceProfileLimits.maxAudioBytes)}.
+                    WAV only. {formatDuration(voiceProfileLimits.minAudioSeconds)} to {formatDuration(voiceProfileLimits.maxAudioSeconds)}, maximum {formatBytes(voiceProfileLimits.maxAudioBytes)}.
                   </p>
                 </div>
                 <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">

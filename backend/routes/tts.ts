@@ -39,7 +39,7 @@ import {
 } from '../services/tts-voice-profiles.ts';
 
 const maxPdfFileSizeBytes = 10 * 1024 * 1024;
-const maxVoiceReferenceFileSizeBytes = 16 * 1024 * 1024;
+const maxVoiceReferenceFileSizeBytes = 64 * 1024 * 1024;
 const ttsPreviewLimiter = createJsonRateLimiter({
   maxDevelopment: 20,
   maxProduction: 5,
