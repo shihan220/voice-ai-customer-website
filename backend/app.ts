@@ -24,6 +24,8 @@ import { createUserRouter } from './routes/user.ts';
 
 export function createApp() {
   const app = express();
+  app.set('trust proxy', 1);
+
   const session = expressSession as unknown as (options: SessionOptions) => ReturnType<typeof expressSession>;
   const PgSessionStore = connectPgSimple(session);
   const allowedCorsOrigins = getAllowedCorsOrigins();
@@ -77,6 +79,20 @@ export function createApp() {
   });
 
   app.use((req, res, next) => {
+    const origin = req.get('origin');
+    const host = req.get('host');
+
+    if (origin && host) {
+      try {
+        if (new URL(origin).host === host) {
+          next();
+          return;
+        }
+      } catch {
+        // Let the CORS middleware reject malformed origins below.
+      }
+    }
+
     corsMiddleware(req, res, (error) => {
       if (error) {
         res.status(403).json({ error: 'CORS origin is not allowed.' });
