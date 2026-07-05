@@ -43,6 +43,14 @@ Build both frontend bundles:
 npm run build
 ```
 
+Run the built production app:
+
+```bash
+npm run start
+```
+
+In production, the Express app serves the public website from `frontend/dist`, the admin app from `/admin`, API routes from `/api`, and public media from `/media`.
+
 Run a typecheck:
 
 ```bash
@@ -130,6 +138,20 @@ Fresh schema bootstrap against a disposable database:
 ```bash
 DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5434/bangla_voice_ai" npm run verify:db:fresh
 ```
+
+## Deploying `banglaspeechai.com`
+
+Deploy one Node service for this repository, plus a managed PostgreSQL database and persistent private media storage. Use:
+
+- build command: `npm ci && npm run build`
+- start command: `npm run start`
+- `NODE_ENV=production`
+- `FRONTEND_URL=https://banglaspeechai.com`
+- `ADMIN_FRONTEND_URL=https://banglaspeechai.com/admin`
+- `BACKEND_URL=https://banglaspeechai.com`
+- `BKASH_CALLBACK_URL=https://banglaspeechai.com/api/payments/bkash/callback`
+
+Point Cloudflare DNS for `banglaspeechai.com` and `www.banglaspeechai.com` to the deployed service target supplied by the hosting provider. Keep `KEYPILLAR_TTS_API_KEY`, session secrets, database URL, SMTP/Twilio, and payment secrets only in the deployment environment, never in the browser or repository.
 
 ## External integration verification
 

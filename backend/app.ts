@@ -2,12 +2,14 @@ import cors from 'cors';
 import connectPgSimple from 'connect-pg-simple';
 import express from 'express';
 import expressSession, { type SessionOptions } from 'express-session';
+import path from 'node:path';
 import {
   adminDistRoot,
   adminSessionCookieName,
   adminSessionSecret,
   customerSessionCookieName,
   customerSessionSecret,
+  frontendDistRoot,
   getAllowedCorsOrigins,
   mediaRoot,
 } from './core.ts';
@@ -115,6 +117,19 @@ export function createApp() {
   app.use(createSamplesRouter());
   app.use(createTtsRouter());
   app.use(createAdminRouter());
+  app.use(express.static(frontendDistRoot, { index: false }));
+  app.get(/.*/, (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/admin') || req.path.startsWith('/media')) {
+      next();
+      return;
+    }
+
+    res.sendFile(path.join(frontendDistRoot, 'index.html'), (error) => {
+      if (error) {
+        res.status(503).send('Public frontend is not built yet. Run npm run build first.');
+      }
+    });
+  });
 
   return app;
 }

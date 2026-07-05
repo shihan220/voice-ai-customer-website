@@ -26,6 +26,7 @@ export const voiceInboxDirectory = path.join(voiceMediaDirectory, 'inbox');
 export const voicePublicDirectory = path.join(voiceMediaDirectory, 'public');
 export const ttsJobsMediaDirectory = path.join(privateMediaRoot, 'tts-jobs');
 export const ttsVoiceProfilesMediaDirectory = path.join(privateMediaRoot, 'tts-voice-profiles');
+export const frontendDistRoot = path.join(projectRoot, 'frontend', 'dist');
 export const adminDistRoot = path.join(projectRoot, 'admin-frontend', 'dist');
 export const adminSessionSecret = process.env.ADMIN_SESSION_SECRET ?? randomUUID();
 export const adminSessionCookieName = 'bangla_voice_admin';
