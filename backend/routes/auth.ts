@@ -56,6 +56,44 @@ function isProductionLike() {
   return process.env.NODE_ENV === 'production';
 }
 
+class VerificationDeliveryError extends Error {
+  statusCode = 503;
+}
+
+function getVerificationDeliveryStatus() {
+  const smtpConfigured = Boolean(getSmtpConfig());
+  const twilioConfigured = Boolean(
+    normalizeText(process.env.TWILIO_ACCOUNT_SID) &&
+      normalizeText(process.env.TWILIO_AUTH_TOKEN) &&
+      normalizeText(process.env.TWILIO_PHONE_NUMBER),
+  );
+
+  return { smtpConfigured, twilioConfigured };
+}
+
+function assertProductionVerificationDelivery() {
+  if (!isProductionLike()) {
+    return;
+  }
+
+  const { smtpConfigured, twilioConfigured } = getVerificationDeliveryStatus();
+  const missing: string[] = [];
+
+  if (!smtpConfigured) {
+    missing.push('email');
+  }
+
+  if (!twilioConfigured) {
+    missing.push('phone');
+  }
+
+  if (missing.length > 0) {
+    throw new VerificationDeliveryError(
+      `Verification delivery is not configured for ${missing.join(' and ')} codes. Contact support before creating an account.`,
+    );
+  }
+}
+
 function buildCustomerSession(user: { email: string; id: number }) {
   return {
     email: user.email,
@@ -87,6 +125,10 @@ async function sendEmailOtp(email: string, otpCode: string) {
   const smtpConfig = getSmtpConfig();
 
   if (!smtpConfig) {
+    if (isProductionLike()) {
+      throw new VerificationDeliveryError('Email verification delivery is not configured. Contact support.');
+    }
+
     return {
       delivered: false,
       preview: !isProductionLike() ? otpCode : null,
@@ -128,6 +170,10 @@ async function sendPhoneOtp(phone: string, otpCode: string) {
   const from = normalizeText(process.env.TWILIO_PHONE_NUMBER);
 
   if (!accountSid || !authToken || !from) {
+    if (isProductionLike()) {
+      throw new VerificationDeliveryError('Phone verification delivery is not configured. Contact support.');
+    }
+
     return {
       delivered: false,
       preview: !isProductionLike() ? otpCode : null,
@@ -200,6 +246,8 @@ export function createAuthRouter() {
         return;
       }
 
+      assertProductionVerificationDelivery();
+
       const passwordHash = await hashPassword(password);
       const user = await createUser({
         countryCode,
@@ -246,7 +294,7 @@ export function createAuthRouter() {
         return;
       }
 
-      res.status(400).json({
+      res.status(error instanceof VerificationDeliveryError ? error.statusCode : 400).json({
         error: error instanceof Error ? error.message : 'Failed to create account.',
       });
     }
@@ -314,7 +362,7 @@ export function createAuthRouter() {
         verification: delivery,
       });
     } catch (error) {
-      res.status(400).json({
+      res.status(error instanceof VerificationDeliveryError ? error.statusCode : 400).json({
         error: error instanceof Error ? error.message : 'Failed to send email verification code.',
       });
     }
@@ -399,7 +447,7 @@ export function createAuthRouter() {
         verification: delivery,
       });
     } catch (error) {
-      res.status(400).json({
+      res.status(error instanceof VerificationDeliveryError ? error.statusCode : 400).json({
         error: error instanceof Error ? error.message : 'Failed to send phone verification code.',
       });
     }
