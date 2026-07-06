@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Pause, Play } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, Pause, Play } from 'lucide-react';
 import { DecorativeBanglaLetters, type DecorativeBanglaLetter } from './DecorativeBanglaLetters';
 
 type VoiceCard = {
@@ -531,43 +531,62 @@ export function Frame02ViralProof() {
                       </div>
 
                       {voice.audioUrl ? (
-                        <audio
-                          ref={(node) => {
-                            if (node) {
-                              audioElementsRef.current.set(voice.id, node);
-                            } else {
-                              audioElementsRef.current.delete(voice.id);
-                            }
-                          }}
-                          className="relative z-10 mb-5 h-10 w-full"
-                          controls
-                          data-sample-audio-id={voice.id}
-                          preload="metadata"
-                          src={voice.audioUrl}
-                          onPlay={() => {
-                            audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
-                              if (otherVoiceId !== voice.id) {
-                                otherAudio.pause();
-                                otherAudio.currentTime = 0;
+                        <div className="relative z-10 mb-5 rounded-2xl border border-[#D2CCBE] bg-white/45 p-3">
+                          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#AE6C4A]">
+                              Sample audio
+                            </span>
+                            <a
+                              className="inline-flex items-center gap-1.5 rounded-full border border-[#D2CCBE] bg-[#F6F2EA] px-3 py-1 text-xs font-semibold text-[#373A40] transition hover:border-[#AE6C4A] hover:text-[#AE6C4A]"
+                              href={voice.audioUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open sample
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
+                          </div>
+                          <audio
+                            ref={(node) => {
+                              if (node) {
+                                audioElementsRef.current.set(voice.id, node);
+                              } else {
+                                audioElementsRef.current.delete(voice.id);
                               }
-                            });
-                            setPlaybackErrorVoiceId(null);
-                            setActiveVoiceId(voice.id);
-                          }}
-                          onPause={(event) => {
-                            if (event.currentTarget.ended) return;
-                            setActiveVoiceId((current) => (current === voice.id ? null : current));
-                          }}
-                          onEnded={() => {
-                            setActiveVoiceId((current) => (current === voice.id ? null : current));
-                          }}
-                          onError={() => {
-                            setActiveVoiceId((current) => (current === voice.id ? null : current));
-                            setPlaybackErrorVoiceId(voice.id);
-                          }}
-                        >
-                          Your browser does not support audio playback.
-                        </audio>
+                            }}
+                            className="h-10 w-full"
+                            controls
+                            data-sample-audio-id={voice.id}
+                            preload="auto"
+                            src={voice.audioUrl}
+                            onCanPlay={() => {
+                              setPlaybackErrorVoiceId((current) => (current === voice.id ? null : current));
+                            }}
+                            onPlay={() => {
+                              audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
+                                if (otherVoiceId !== voice.id) {
+                                  otherAudio.pause();
+                                  otherAudio.currentTime = 0;
+                                }
+                              });
+                              setPlaybackErrorVoiceId(null);
+                              setActiveVoiceId(voice.id);
+                            }}
+                            onPause={(event) => {
+                              if (event.currentTarget.ended) return;
+                              setActiveVoiceId((current) => (current === voice.id ? null : current));
+                            }}
+                            onEnded={() => {
+                              setActiveVoiceId((current) => (current === voice.id ? null : current));
+                            }}
+                            onError={() => {
+                              setActiveVoiceId((current) => (current === voice.id ? null : current));
+                              setPlaybackErrorVoiceId(voice.id);
+                            }}
+                          >
+                            Your browser does not support audio playback.
+                          </audio>
+                        </div>
                       ) : null}
 
                       <div className="relative z-10 mb-5 grid gap-3">
@@ -612,7 +631,7 @@ export function Frame02ViralProof() {
 
                         {voice.audioUrl && playbackErrorVoiceId === voice.id ? (
                           <p className="mt-2 text-sm leading-5 text-[#9b4f35]">
-                            This clip could not play inline. Open it directly: <a className="font-semibold underline" href={voice.audioUrl}>sample WAV</a>.
+                            This clip could not play inline in this browser. Use the audio player above or open it directly: <a className="font-semibold underline" href={voice.audioUrl} target="_blank" rel="noreferrer">sample WAV</a>.
                           </p>
                         ) : null}
                       </div>
