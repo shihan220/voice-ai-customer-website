@@ -242,6 +242,36 @@ export function Frame02ViralProof() {
   }, []);
 
   const visibleVoices = useMemo(() => voices, [voices]);
+  const toggleSamplePlayback = useCallback((voiceId: number) => {
+    const selectedAudio = audioElementsRef.current.get(voiceId);
+    if (!selectedAudio) return;
+
+    if (!selectedAudio.paused && !selectedAudio.ended) {
+      selectedAudio.pause();
+      setActiveVoiceId(null);
+      return;
+    }
+
+    audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
+      if (otherVoiceId !== voiceId) {
+        otherAudio.pause();
+        otherAudio.currentTime = 0;
+      }
+    });
+
+    selectedAudio.currentTime = 0;
+    selectedAudio
+      .play()
+      .then(() => {
+        setPlaybackErrorVoiceId(null);
+        setActiveVoiceId(voiceId);
+      })
+      .catch(() => {
+        setActiveVoiceId(null);
+        setPlaybackErrorVoiceId(voiceId);
+      });
+  }, []);
+
   const goToSlide = useCallback((targetIndex: number, behavior: ScrollBehavior = 'smooth') => {
     if (!visibleVoices.length) return;
 
@@ -468,11 +498,10 @@ export function Frame02ViralProof() {
                         </div>
 
                         {voice.audioUrl ? (
-                          <a
-                            href={voice.audioUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            aria-label={`Open ${voice.name} sample audio`}
+                          <button
+                            type="button"
+                            onClick={() => toggleSamplePlayback(voice.id)}
+                            aria-label={`${isActive ? 'Pause' : 'Play'} ${voice.name} sample audio`}
                             className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full transition-all hover:scale-105 lg:h-14 lg:w-14"
                             style={{
                               backgroundColor: isActive ? '#AE6C4A' : '#C39680',
@@ -484,7 +513,7 @@ export function Frame02ViralProof() {
                             ) : (
                               <Play className="h-5 w-5 translate-x-0.5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
                             )}
-                          </a>
+                          </button>
                         ) : (
                           <button
                             type="button"
