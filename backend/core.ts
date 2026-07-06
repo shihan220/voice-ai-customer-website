@@ -20,6 +20,7 @@ import {
 export const port = Number(process.env.PORT ?? 5181);
 export const backendRoot = fileURLToPath(new URL('.', import.meta.url));
 export const projectRoot = path.resolve(backendRoot, '..');
+export const bundledMediaRoot = path.join(backendRoot, 'media');
 export const mediaRoot = path.resolve(process.env.VOICE_MEDIA_ROOT ?? path.join(backendRoot, 'media'));
 export const privateMediaRoot = path.resolve(process.env.PRIVATE_MEDIA_ROOT ?? path.join(backendRoot, 'private-media'));
 export const voiceMediaDirectory = path.join(mediaRoot, 'voices');

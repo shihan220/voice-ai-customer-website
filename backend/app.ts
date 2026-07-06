@@ -7,6 +7,7 @@ import {
   adminDistRoot,
   adminSessionCookieName,
   adminSessionSecret,
+  bundledMediaRoot,
   customerSessionCookieName,
   customerSessionSecret,
   frontendDistRoot,
@@ -125,6 +126,9 @@ export function createApp() {
     res.status(404).json({ error: 'Not found.' });
   });
   app.use('/media', express.static(mediaRoot));
+  if (path.resolve(bundledMediaRoot) !== path.resolve(mediaRoot)) {
+    app.use('/media', express.static(bundledMediaRoot));
+  }
   app.use('/admin', express.static(adminDistRoot, { index: false }));
   app.use(createPublicRouter());
   app.use(createAuthRouter());
