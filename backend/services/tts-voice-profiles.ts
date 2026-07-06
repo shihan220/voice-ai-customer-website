@@ -1477,9 +1477,8 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
       );
     }
 
-    if (profile.provider_sync_status === 'ready' && profile.provider_profile_id) {
-      await deactivateProviderVoiceProfile(profile.provider_profile_id);
-    }
+    await tryDeactivateProviderVoiceProfile(profile.provider_profile_id);
+
     const profilePaths = getVoiceProfilePaths(profile);
     profileDirectoryToClean = profilePaths.profileDirectory;
     userDirectoryToClean = profilePaths.userDirectory;
