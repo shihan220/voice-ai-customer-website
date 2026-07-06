@@ -357,6 +357,16 @@ export default function App() {
       return;
     }
 
+    if (session.authenticated && currentUser && location.pathname === '/verify-email' && currentUser.emailVerified) {
+      navigate(currentUser.phoneVerified ? '/dashboard' : '/verify-phone?next=dashboard', true);
+      return;
+    }
+
+    if (session.authenticated && currentUser && location.pathname === '/verify-phone' && currentUser.phoneVerified) {
+      navigate('/dashboard', true);
+      return;
+    }
+
     if (session.authenticated && (location.pathname === '/login' || location.pathname === '/signup')) {
       if (!currentUser?.emailVerified) {
         navigate('/verify-email', true);

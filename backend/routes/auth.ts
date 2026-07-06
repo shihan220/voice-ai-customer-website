@@ -361,6 +361,30 @@ export function createAuthRouter() {
         return;
       }
 
+      if (!isCustomerEmailVerificationRequired()) {
+        const verifiedUser = (await markEmailVerified(user.id)) ?? user;
+        const eligibleUser = await ensureStarterGrantIfEligible(verifiedUser);
+
+        res.json({
+          message: 'Email verification is not required.',
+          user: {
+            email: eligibleUser.email,
+            emailVerified: isCustomerEmailVerified(eligibleUser),
+            fullName: eligibleUser.full_name,
+            id: Number(eligibleUser.id),
+            packageType: eligibleUser.package_code,
+            phoneVerified: isCustomerPhoneVerified(eligibleUser),
+            tokenBalance: Number(eligibleUser.token_balance),
+          },
+          verification: {
+            delivered: false,
+            preview: null,
+            transport: 'not_required',
+          },
+        });
+        return;
+      }
+
       const otpCode = generateOtpCode();
       await createEmailVerification(user.id, user.email, otpCode);
       const delivery = await sendEmailOtp(user.email, otpCode);
@@ -381,6 +405,25 @@ export function createAuthRouter() {
       const user = await getActiveSessionCustomer(req, res);
 
       if (!user) {
+        return;
+      }
+
+      if (!isCustomerEmailVerificationRequired()) {
+        const verifiedUser = (await markEmailVerified(user.id)) ?? user;
+        const eligibleUser = await ensureStarterGrantIfEligible(verifiedUser);
+
+        res.json({
+          message: 'Email verification is not required.',
+          user: {
+            email: eligibleUser.email,
+            emailVerified: isCustomerEmailVerified(eligibleUser),
+            fullName: eligibleUser.full_name,
+            id: Number(eligibleUser.id),
+            packageType: eligibleUser.package_code,
+            phoneVerified: isCustomerPhoneVerified(eligibleUser),
+            tokenBalance: Number(eligibleUser.token_balance),
+          },
+        });
         return;
       }
 
@@ -446,6 +489,30 @@ export function createAuthRouter() {
         return;
       }
 
+      if (!isCustomerPhoneVerificationRequired()) {
+        const verifiedUser = (await markPhoneVerified(user.id)) ?? user;
+        const eligibleUser = await ensureStarterGrantIfEligible(verifiedUser);
+
+        res.json({
+          message: 'Phone verification is not required.',
+          user: {
+            email: eligibleUser.email,
+            emailVerified: isCustomerEmailVerified(eligibleUser),
+            fullName: eligibleUser.full_name,
+            id: Number(eligibleUser.id),
+            packageType: eligibleUser.package_code,
+            phoneVerified: isCustomerPhoneVerified(eligibleUser),
+            tokenBalance: Number(eligibleUser.token_balance),
+          },
+          verification: {
+            delivered: false,
+            preview: null,
+            transport: 'not_required',
+          },
+        });
+        return;
+      }
+
       const otpCode = generateOtpCode();
       await createPhoneVerification(user.id, targetPhone, otpCode);
       const delivery = await sendPhoneOtp(targetPhone, otpCode);
@@ -466,6 +533,25 @@ export function createAuthRouter() {
       const user = await getActiveSessionCustomer(req, res);
 
       if (!user) {
+        return;
+      }
+
+      if (!isCustomerPhoneVerificationRequired()) {
+        const verifiedUser = (await markPhoneVerified(user.id)) ?? user;
+        const eligibleUser = await ensureStarterGrantIfEligible(verifiedUser);
+
+        res.json({
+          message: 'Phone verification is not required.',
+          user: {
+            email: eligibleUser.email,
+            emailVerified: isCustomerEmailVerified(eligibleUser),
+            fullName: eligibleUser.full_name,
+            id: Number(eligibleUser.id),
+            packageType: eligibleUser.package_code,
+            phoneVerified: isCustomerPhoneVerified(eligibleUser),
+            tokenBalance: Number(eligibleUser.token_balance),
+          },
+        });
         return;
       }
 
