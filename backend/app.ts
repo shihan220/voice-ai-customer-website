@@ -26,6 +26,7 @@ import { createUserRouter } from './routes/user.ts';
 export function createApp() {
   const app = express();
   app.set('trust proxy', 1);
+  app.disable('x-powered-by');
 
   const session = expressSession as unknown as (options: SessionOptions) => ReturnType<typeof expressSession>;
   const PgSessionStore = connectPgSimple(session);
@@ -77,6 +78,20 @@ export function createApp() {
       sameSite: 'lax',
       secure: process.env.NODE_ENV === 'production',
     },
+  });
+
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), microphone=(self), payment=(), usb=()');
+    res.setHeader('Content-Security-Policy', "base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'");
+
+    if (req.secure || req.get('x-forwarded-proto') === 'https') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+    }
+
+    next();
   });
 
   app.use((req, res, next) => {
