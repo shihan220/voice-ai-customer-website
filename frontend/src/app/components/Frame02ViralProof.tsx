@@ -243,7 +243,10 @@ export function Frame02ViralProof() {
 
   const visibleVoices = useMemo(() => voices, [voices]);
   const toggleSamplePlayback = useCallback((voiceId: number) => {
-    const selectedAudio = audioElementsRef.current.get(voiceId);
+    const selectedAudio =
+      audioElementsRef.current.get(voiceId) ??
+      document.querySelector<HTMLAudioElement>(`audio[data-sample-audio-id="${voiceId}"]`);
+
     if (!selectedAudio) return;
 
     if (!selectedAudio.paused && !selectedAudio.ended) {
@@ -538,6 +541,7 @@ export function Frame02ViralProof() {
                           }}
                           className="relative z-10 mb-5 h-10 w-full"
                           controls
+                          data-sample-audio-id={voice.id}
                           preload="metadata"
                           src={voice.audioUrl}
                           onPlay={() => {
