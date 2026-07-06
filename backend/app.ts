@@ -12,6 +12,8 @@ import {
   customerSessionSecret,
   frontendDistRoot,
   getAllowedCorsOrigins,
+  isCustomerEmailVerificationRequired,
+  isCustomerPhoneVerificationRequired,
   mediaRoot,
 } from './core.ts';
 import { pool } from './db.ts';
@@ -166,6 +168,14 @@ export function createApp() {
   app.use(createAdminRouter());
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Not found.' });
+  });
+  app.get(['/verify-email', '/verify-phone'], (_req, res, next) => {
+    if (!isCustomerEmailVerificationRequired() && !isCustomerPhoneVerificationRequired()) {
+      res.redirect(302, '/dashboard');
+      return;
+    }
+
+    next();
   });
   app.use(express.static(frontendDistRoot, { index: false }));
   app.get(/.*/, (req, res, next) => {
