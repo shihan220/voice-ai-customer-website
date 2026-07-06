@@ -1,6 +1,6 @@
 import cors from 'cors';
 import connectPgSimple from 'connect-pg-simple';
-import express from 'express';
+import express, { type ErrorRequestHandler } from 'express';
 import expressSession, { type SessionOptions } from 'express-session';
 import path from 'node:path';
 import {
@@ -144,6 +144,9 @@ export function createApp() {
   if (path.resolve(bundledMediaRoot) !== path.resolve(mediaRoot)) {
     app.use('/media', express.static(bundledMediaRoot));
   }
+  app.use('/media', (_req, res) => {
+    res.status(404).json({ error: 'Not found.' });
+  });
   app.use('/admin', express.static(adminDistRoot, { index: false }));
   app.use(createPublicRouter());
   app.use(createAuthRouter());
@@ -152,6 +155,9 @@ export function createApp() {
   app.use(createSamplesRouter());
   app.use(createTtsRouter());
   app.use(createAdminRouter());
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'Not found.' });
+  });
   app.use(express.static(frontendDistRoot, { index: false }));
   app.get(/.*/, (req, res, next) => {
     if (req.path.startsWith('/api') || req.path.startsWith('/admin') || req.path.startsWith('/media')) {
@@ -165,6 +171,26 @@ export function createApp() {
       }
     });
   });
+
+  const errorHandler: ErrorRequestHandler = (error, req, res, next) => {
+    if (res.headersSent) {
+      next(error);
+      return;
+    }
+
+    const status = typeof error?.status === 'number' && error.status >= 400 ? error.status : 500;
+    const isClientError = status >= 400 && status < 500;
+    const message = isClientError ? 'Bad request.' : 'Internal server error.';
+
+    if (req.path.startsWith('/api') || req.path.startsWith('/media')) {
+      res.status(status).json({ error: message });
+      return;
+    }
+
+    res.status(status).send(message);
+  };
+
+  app.use(errorHandler);
 
   return app;
 }
