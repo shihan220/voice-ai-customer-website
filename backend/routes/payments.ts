@@ -632,50 +632,61 @@ export function createPaymentsRouter() {
     const status = normalizeText(req.query.status)?.toLowerCase() ?? 'unknown';
     const frontendUrl = new URL('/payment/success', getFrontendUrl());
 
-    if (!bkashPaymentId) {
-      frontendUrl.searchParams.set('status', 'failed');
-      frontendUrl.searchParams.set('reason', 'missing_payment_id');
-      res.redirect(frontendUrl.toString());
-      return;
-    }
+    try {
+      if (!bkashPaymentId) {
+        frontendUrl.searchParams.set('status', 'failed');
+        frontendUrl.searchParams.set('reason', 'missing_payment_id');
+        res.redirect(frontendUrl.toString());
+        return;
+      }
 
-    const payment = await getPaymentByBkashPaymentId(bkashPaymentId);
+      const payment = await getPaymentByBkashPaymentId(bkashPaymentId);
 
-    if (!payment) {
-      frontendUrl.searchParams.set('status', 'failed');
-      frontendUrl.searchParams.set('reason', 'payment_not_found');
-      res.redirect(frontendUrl.toString());
-      return;
-    }
+      if (!payment) {
+        frontendUrl.searchParams.set('status', 'failed');
+        frontendUrl.searchParams.set('reason', 'payment_not_found');
+        res.redirect(frontendUrl.toString());
+        return;
+      }
 
-    await upsertBkashPayment({
-      bkashPaymentId,
-      callbackPayload: req.query as Record<string, unknown>,
-      paymentId: payment.id,
-      rawMetadata: req.query as Record<string, unknown>,
-    });
-
-    if (status === 'success') {
-      await handleCompletedBkashPayment(payment, bkashPaymentId);
-    } else if (status === 'cancel' || status === 'cancelled') {
-      await updatePaymentRecord({
-        metadata: req.query as Record<string, unknown>,
+      await upsertBkashPayment({
+        bkashPaymentId,
+        callbackPayload: req.query as Record<string, unknown>,
         paymentId: payment.id,
-        providerPaymentId: bkashPaymentId,
-        status: 'cancelled',
+        rawMetadata: req.query as Record<string, unknown>,
       });
-    } else {
-      await updatePaymentRecord({
-        metadata: req.query as Record<string, unknown>,
-        paymentId: payment.id,
-        providerPaymentId: bkashPaymentId,
-        status: 'failed',
-      });
-    }
 
-    frontendUrl.searchParams.set('payment_id', String(payment.id));
-    frontendUrl.searchParams.set('provider', 'bkash');
-    res.redirect(frontendUrl.toString());
+      if (status === 'success') {
+        await handleCompletedBkashPayment(payment, bkashPaymentId);
+      } else if (status === 'cancel' || status === 'cancelled') {
+        await updatePaymentRecord({
+          metadata: req.query as Record<string, unknown>,
+          paymentId: payment.id,
+          providerPaymentId: bkashPaymentId,
+          status: 'cancelled',
+        });
+      } else {
+        await updatePaymentRecord({
+          metadata: req.query as Record<string, unknown>,
+          paymentId: payment.id,
+          providerPaymentId: bkashPaymentId,
+          status: 'failed',
+        });
+      }
+
+      frontendUrl.searchParams.set('payment_id', String(payment.id));
+      frontendUrl.searchParams.set('provider', 'bkash');
+      res.redirect(frontendUrl.toString());
+    } catch (error) {
+      console.error('Failed to process bKash callback.', {
+        bkashPaymentId,
+        error,
+        status,
+      });
+      frontendUrl.searchParams.set('status', 'failed');
+      frontendUrl.searchParams.set('reason', 'callback_error');
+      res.redirect(frontendUrl.toString());
+    }
   });
 
   router.post('/api/payments/bkash/execute-payment', requireCustomer, async (req, res) => {
