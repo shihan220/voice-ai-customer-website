@@ -241,11 +241,6 @@ export function Frame02ViralProof() {
   }, []);
 
   const visibleVoices = useMemo(() => voices, [voices]);
-  const apiAudioReadyCount = useMemo(
-    () => visibleVoices.filter((voice) => Boolean(voice.audioUrl)).length,
-    [visibleVoices],
-  );
-
   const goToSlide = useCallback((targetIndex: number, behavior: ScrollBehavior = 'smooth') => {
     if (!visibleVoices.length) return;
 
@@ -430,15 +425,9 @@ export function Frame02ViralProof() {
                   color: voiceSource === 'api' ? '#AE6C4A' : '#373A40',
                 }}
               >
-                <span>{voiceSource === 'api' ? 'Live API feed' : 'Fallback samples'}</span>
+                <span>Voice samples</span>
                 <span style={{ opacity: 0.45 }}>•</span>
-                <span>{visibleVoices.length} cards</span>
-                {voiceSource === 'api' ? (
-                  <>
-                    <span style={{ opacity: 0.45 }}>•</span>
-                    <span>{apiAudioReadyCount} audio ready</span>
-                  </>
-                ) : null}
+                <span>{visibleVoices.length} clips</span>
               </div>
 
               <div className="flex justify-end gap-2 self-end sm:self-auto">

@@ -1005,12 +1005,34 @@ function SignupPage({
         emailPreview: payload.verification.email.preview,
         phonePreview: payload.verification.phone.preview,
       });
+
+      if (payload.user.emailVerified && payload.user.phoneVerified) {
+        if (next === 'lead') {
+          onNavigate(buildLeadHref(mode), true);
+        } else if (next === 'account') {
+          onNavigate(buildAccountHref(section), true);
+        } else if (next === 'checkout' && packageCode) {
+          const dashboardParams = new URLSearchParams();
+          dashboardParams.set('checkout', packageCode);
+          dashboardParams.set('section', 'plan');
+          onNavigate(`/dashboard${createSearch(dashboardParams)}`, true);
+        } else {
+          onNavigate('/dashboard', true);
+        }
+        return;
+      }
+
       const verifyParams = new URLSearchParams();
       if (next) verifyParams.set('next', next);
       if (packageCode) verifyParams.set('package', packageCode);
       if (section) verifyParams.set('section', section);
       if (mode) verifyParams.set('mode', mode);
-      onNavigate(`/verify-email${createSearch(verifyParams)}`, true);
+      onNavigate(
+        payload.user.emailVerified
+          ? `/verify-phone${createSearch(verifyParams)}`
+          : `/verify-email${createSearch(verifyParams)}`,
+        true,
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Signup failed.');
     } finally {
@@ -1021,8 +1043,8 @@ function SignupPage({
   return (
     <AuthCard
       onNavigate={onNavigate}
-      title="Create a verified customer account."
-      description="Starter accounts begin on the free package and unlock samples after email and phone verification."
+      title="Create your Bangla voice account."
+      description="Starter accounts begin with free minutes so you can create samples and manage generated audio."
     >
       <h2 className="text-2xl font-bold text-[#2f343b]">Sign up</h2>
       <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
