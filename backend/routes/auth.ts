@@ -6,6 +6,10 @@ import {
   getBackendUrl,
   getFrontendUrl,
   getSmtpConfig,
+  isCustomerEmailVerificationRequired,
+  isCustomerEmailVerified,
+  isCustomerPhoneVerificationRequired,
+  isCustomerPhoneVerified,
   isValidEmail,
   nodemailer,
   normalizeText,
@@ -79,11 +83,11 @@ function assertProductionVerificationDelivery() {
   const { smtpConfigured, twilioConfigured } = getVerificationDeliveryStatus();
   const missing: string[] = [];
 
-  if (!smtpConfigured) {
+  if (isCustomerEmailVerificationRequired() && !smtpConfigured) {
     missing.push('email');
   }
 
-  if (!twilioConfigured) {
+  if (isCustomerPhoneVerificationRequired() && !twilioConfigured) {
     missing.push('phone');
   }
 
@@ -262,26 +266,30 @@ export function createAuthRouter() {
 
       const emailOtp = generateOtpCode();
       const phoneOtp = generateOtpCode();
+      const emailVerificationRequired = isCustomerEmailVerificationRequired();
+      const phoneVerificationRequired = isCustomerPhoneVerificationRequired();
 
       await Promise.all([
-        createEmailVerification(user.id, user.email, emailOtp),
-        normalizedPhone ? createPhoneVerification(user.id, normalizedPhone, phoneOtp) : Promise.resolve(null),
+        emailVerificationRequired ? createEmailVerification(user.id, user.email, emailOtp) : markEmailVerified(user.id),
+        phoneVerificationRequired && normalizedPhone ? createPhoneVerification(user.id, normalizedPhone, phoneOtp) : markPhoneVerified(user.id),
       ]);
 
       const [emailDelivery, phoneDelivery] = await Promise.all([
-        sendEmailOtp(user.email, emailOtp),
-        normalizedPhone ? sendPhoneOtp(normalizedPhone, phoneOtp) : Promise.resolve({ delivered: false, preview: null, transport: 'missing_phone' }),
+        emailVerificationRequired ? sendEmailOtp(user.email, emailOtp) : Promise.resolve({ delivered: false, preview: null, transport: 'not_required' }),
+        phoneVerificationRequired && normalizedPhone ? sendPhoneOtp(normalizedPhone, phoneOtp) : Promise.resolve({ delivered: false, preview: null, transport: 'not_required' }),
       ]);
+      const verifiedUser = (await getUserById(user.id)) ?? user;
+      const eligibleUser = await ensureStarterGrantIfEligible(verifiedUser);
 
       res.status(201).json({
         user: {
-          email: user.email,
-          emailVerified: false,
-          fullName: user.full_name,
-          id: Number(user.id),
-          packageType: user.package_code,
-          phoneVerified: false,
-          tokenBalance: Number(user.token_balance),
+          email: eligibleUser.email,
+          emailVerified: isCustomerEmailVerified(eligibleUser),
+          fullName: eligibleUser.full_name,
+          id: Number(eligibleUser.id),
+          packageType: eligibleUser.package_code,
+          phoneVerified: isCustomerPhoneVerified(eligibleUser),
+          tokenBalance: Number(eligibleUser.token_balance),
         },
         verification: {
           email: emailDelivery,
@@ -322,11 +330,11 @@ export function createAuthRouter() {
       res.json({
         user: {
           email: eligibleUser.email,
-          emailVerified: Boolean(eligibleUser.email_verified_at),
+          emailVerified: isCustomerEmailVerified(eligibleUser),
           fullName: eligibleUser.full_name,
           id: Number(eligibleUser.id),
           packageType: eligibleUser.package_code,
-          phoneVerified: Boolean(eligibleUser.phone_verified_at),
+          phoneVerified: isCustomerPhoneVerified(eligibleUser),
           tokenBalance: Number(eligibleUser.token_balance),
         },
       });
@@ -409,11 +417,11 @@ export function createAuthRouter() {
         message: 'Email verified successfully.',
         user: {
           email: eligibleUser.email,
-          emailVerified: Boolean(eligibleUser.email_verified_at),
+          emailVerified: isCustomerEmailVerified(eligibleUser),
           fullName: eligibleUser.full_name,
           id: Number(eligibleUser.id),
           packageType: eligibleUser.package_code,
-          phoneVerified: Boolean(eligibleUser.phone_verified_at),
+          phoneVerified: isCustomerPhoneVerified(eligibleUser),
           tokenBalance: Number(eligibleUser.token_balance),
         },
       });
@@ -494,11 +502,11 @@ export function createAuthRouter() {
         message: 'Phone verified successfully.',
         user: {
           email: eligibleUser.email,
-          emailVerified: Boolean(eligibleUser.email_verified_at),
+          emailVerified: isCustomerEmailVerified(eligibleUser),
           fullName: eligibleUser.full_name,
           id: Number(eligibleUser.id),
           packageType: eligibleUser.package_code,
-          phoneVerified: Boolean(eligibleUser.phone_verified_at),
+          phoneVerified: isCustomerPhoneVerified(eligibleUser),
           tokenBalance: Number(eligibleUser.token_balance),
         },
       });
@@ -613,11 +621,11 @@ export function createAuthRouter() {
         message: 'Password reset successful.',
         user: {
           email: updatedUser.email,
-          emailVerified: Boolean(updatedUser.email_verified_at),
+          emailVerified: isCustomerEmailVerified(updatedUser),
           fullName: updatedUser.full_name,
           id: Number(updatedUser.id),
           packageType: updatedUser.package_code,
-          phoneVerified: Boolean(updatedUser.phone_verified_at),
+          phoneVerified: isCustomerPhoneVerified(updatedUser),
           tokenBalance: Number(updatedUser.token_balance),
         },
       });

@@ -6,6 +6,8 @@ import path from 'node:path';
 import type { PoolClient } from 'pg';
 import {
   normalizeText,
+  isCustomerEmailVerified,
+  isCustomerPhoneVerified,
   privateMediaRoot,
   ttsJobsMediaDirectory,
 } from '../core.ts';
@@ -2324,11 +2326,11 @@ function assertUserCanUseTtsWorkspace(user: UserRecord) {
     throw withStatus('This account is disabled.', 403);
   }
 
-  if (!user.email_verified_at) {
+  if (!isCustomerEmailVerified(user)) {
     throw withStatus('Verify your email before creating audio jobs.', 403);
   }
 
-  if (!user.phone_verified_at) {
+  if (!isCustomerPhoneVerified(user)) {
     throw withStatus('Verify your phone before creating audio jobs.', 403);
   }
 

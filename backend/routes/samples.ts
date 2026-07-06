@@ -1,5 +1,12 @@
 import { Router } from 'express';
-import { createJsonRateLimiter, isValidEmail, normalizeText, requireText } from '../core.ts';
+import {
+  createJsonRateLimiter,
+  isCustomerEmailVerified,
+  isCustomerPhoneVerified,
+  isValidEmail,
+  normalizeText,
+  requireText,
+} from '../core.ts';
 import { type SampleGenerationRecord } from '../db.ts';
 import { requireCustomer } from './customer-auth.ts';
 import {
@@ -81,12 +88,12 @@ export function createSamplesRouter() {
         return;
       }
 
-      if (!user.email_verified_at) {
+      if (!isCustomerEmailVerified(user)) {
         res.status(403).json({ error: 'Verify your email before generating a sample preview.' });
         return;
       }
 
-      if (!user.phone_verified_at) {
+      if (!isCustomerPhoneVerified(user)) {
         res.status(403).json({ error: 'Verify your phone before generating a sample preview.' });
         return;
       }
@@ -132,12 +139,12 @@ export function createSamplesRouter() {
         return;
       }
 
-      if (!user.email_verified_at) {
+      if (!isCustomerEmailVerified(user)) {
         res.status(403).json({ error: 'Verify your email before regenerating a sample preview.' });
         return;
       }
 
-      if (!user.phone_verified_at) {
+      if (!isCustomerPhoneVerified(user)) {
         res.status(403).json({ error: 'Verify your phone before regenerating a sample preview.' });
         return;
       }

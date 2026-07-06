@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { PoolClient } from 'pg';
-import { mediaRoot, normalizeText } from '../core.ts';
+import { isCustomerEmailVerified, isCustomerPhoneVerified, mediaRoot, normalizeText } from '../core.ts';
 import {
   pool,
   type SampleGenerationRecord,
@@ -330,11 +330,11 @@ export async function finalizeSampleGeneration(sampleId: number, userId: number)
       throw withStatus('User not found.', 404);
     }
 
-    if (!user.email_verified_at) {
+    if (!isCustomerEmailVerified(user)) {
       throw withStatus('Verify your email before finalizing a sample.', 403);
     }
 
-    if (!user.phone_verified_at) {
+    if (!isCustomerPhoneVerified(user)) {
       throw withStatus('Verify your phone before finalizing a sample.', 403);
     }
 

@@ -1,5 +1,6 @@
 import argon2 from 'argon2';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
+import { isCustomerFullyVerified } from '../core.ts';
 import { pool, type AdminActionRecord, type EmailVerificationRecord, type PackageRecord, type PackageUpgradeRecord, type PasswordResetRecord, type PaymentProvider, type PaymentRecord, type PaymentStatus, type PaymentType, type PhoneVerificationRecord, type TokenTransactionRecord, type TokenTransactionType, type UserActivityRecord, type UserPackageType, type UserRecord } from '../db.ts';
 
 export type CustomerSessionUser = {
@@ -1333,7 +1334,7 @@ export async function getPaymentsForUser(userId: number) {
 }
 
 export async function ensureStarterGrantIfEligible(user: UserRecord) {
-  if (!user.email_verified_at || !user.phone_verified_at) {
+  if (!isCustomerFullyVerified(user)) {
     return user;
   }
 

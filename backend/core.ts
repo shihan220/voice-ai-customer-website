@@ -12,6 +12,7 @@ import {
   type SampleEmailLogRecord,
   type SampleRequestRecord,
   type SampleRequestStatus,
+  type UserRecord,
   type VoiceCardRecord,
   type VoiceSampleRecord,
 } from './db.ts';
@@ -92,6 +93,36 @@ export function toOptionalNumber(value: unknown) {
 
 export function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function readBooleanEnv(name: string, fallback: boolean) {
+  const value = normalizeText(process.env[name]);
+
+  if (!value) {
+    return fallback;
+  }
+
+  return !['0', 'false', 'no', 'off'].includes(value.toLowerCase());
+}
+
+export function isCustomerEmailVerificationRequired() {
+  return readBooleanEnv('CUSTOMER_EMAIL_VERIFICATION_REQUIRED', true);
+}
+
+export function isCustomerPhoneVerificationRequired() {
+  return readBooleanEnv('CUSTOMER_PHONE_VERIFICATION_REQUIRED', true);
+}
+
+export function isCustomerEmailVerified(user: Pick<UserRecord, 'email_verified_at'>) {
+  return !isCustomerEmailVerificationRequired() || Boolean(user.email_verified_at);
+}
+
+export function isCustomerPhoneVerified(user: Pick<UserRecord, 'phone_verified_at'>) {
+  return !isCustomerPhoneVerificationRequired() || Boolean(user.phone_verified_at);
+}
+
+export function isCustomerFullyVerified(user: Pick<UserRecord, 'email_verified_at' | 'phone_verified_at'>) {
+  return isCustomerEmailVerified(user) && isCustomerPhoneVerified(user);
 }
 
 export function getAdminCredentials() {

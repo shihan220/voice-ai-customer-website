@@ -1,5 +1,14 @@
 import { Router } from 'express';
-import { createJsonRateLimiter, isValidEmail, normalizeText, requireText } from '../core.ts';
+import {
+  createJsonRateLimiter,
+  isCustomerEmailVerificationRequired,
+  isCustomerEmailVerified,
+  isCustomerPhoneVerificationRequired,
+  isCustomerPhoneVerified,
+  isValidEmail,
+  normalizeText,
+  requireText,
+} from '../core.ts';
 import { requireCustomer } from './customer-auth.ts';
 import { listPackages } from '../services/customers.ts';
 import {
@@ -59,12 +68,12 @@ function toCustomerUserResponse(user: Awaited<ReturnType<typeof getHydratedCusto
     countryCode: user.country_code,
     createdAt: user.created_at,
     email: user.email,
-    emailVerified: Boolean(user.email_verified_at),
+    emailVerified: isCustomerEmailVerified(user),
     fullName: user.full_name,
     id: Number(user.id),
     mobileNumber: user.mobile_number,
     packageType: user.package_code,
-    phoneVerified: Boolean(user.phone_verified_at),
+    phoneVerified: isCustomerPhoneVerified(user),
     tokenBalance: Number(user.token_balance),
   };
 }
@@ -223,6 +232,8 @@ export function createUserRouter() {
 
       const emailChanged = nextEmail !== user.email.toLowerCase();
       const phoneChanged = nextMobileE164 !== user.mobile_e164;
+      const emailVerificationRequired = emailChanged && isCustomerEmailVerificationRequired();
+      const phoneVerificationRequired = phoneChanged && isCustomerPhoneVerificationRequired();
 
       if (emailChanged) {
         const existingUser = await getUserByEmail(nextEmail);
@@ -245,11 +256,11 @@ export function createUserRouter() {
       const updatedUser = await updateUserProfile({
         countryCode: nextCountryCode,
         email: nextEmail,
-        emailChanged,
+        emailChanged: emailVerificationRequired,
         fullName: nextFullName,
         mobileE164: nextMobileE164,
         mobileNumber: nextMobileNumber,
-        phoneChanged,
+        phoneChanged: phoneVerificationRequired,
         userId: user.id,
       });
 
@@ -262,8 +273,8 @@ export function createUserRouter() {
       const phoneOtp = phoneChanged ? generateOtpCode() : null;
 
       await Promise.all([
-        emailChanged && emailOtp ? createEmailVerification(updatedUser.id, updatedUser.email, emailOtp, 'email_change') : Promise.resolve(null),
-        phoneChanged && phoneOtp ? createPhoneVerification(updatedUser.id, nextMobileE164, phoneOtp, 'phone_change') : Promise.resolve(null),
+        emailVerificationRequired && emailOtp ? createEmailVerification(updatedUser.id, updatedUser.email, emailOtp, 'email_change') : Promise.resolve(null),
+        phoneVerificationRequired && phoneOtp ? createPhoneVerification(updatedUser.id, nextMobileE164, phoneOtp, 'phone_change') : Promise.resolve(null),
         createUserActivityLog({
           actionType: 'profile_updated',
           metadata: {
@@ -281,17 +292,17 @@ export function createUserRouter() {
 
       res.json({
         message:
-          emailChanged || phoneChanged
+          emailVerificationRequired || phoneVerificationRequired
             ? 'Profile updated. Re-verify changed contact details before using protected sample features again.'
             : 'Profile updated successfully.',
         user: toCustomerUserResponse(updatedUser),
         verification: {
-          email: emailChanged && process.env.NODE_ENV !== 'production' ? { preview: emailOtp } : null,
-          phone: phoneChanged && process.env.NODE_ENV !== 'production' ? { preview: phoneOtp } : null,
+          email: emailVerificationRequired && process.env.NODE_ENV !== 'production' ? { preview: emailOtp } : null,
+          phone: phoneVerificationRequired && process.env.NODE_ENV !== 'production' ? { preview: phoneOtp } : null,
         },
         verificationRequired: {
-          email: emailChanged,
-          phone: phoneChanged,
+          email: emailVerificationRequired,
+          phone: phoneVerificationRequired,
         },
       });
     } catch (error) {
@@ -387,12 +398,12 @@ export function createUserRouter() {
       const amount = Math.floor(amountRaw);
       const notes = normalizeText(req.body.notes) ?? normalizeText(req.body.reason) ?? 'Sample usage';
 
-      if (!user.email_verified_at) {
+      if (!isCustomerEmailVerified(user)) {
         res.status(403).json({ error: 'Verify your email before using samples.' });
         return;
       }
 
-      if (!user.phone_verified_at) {
+      if (!isCustomerPhoneVerified(user)) {
         res.status(403).json({ error: 'Verify your phone before using samples.' });
         return;
       }
