@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, ExternalLink, Pause, Play } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, Play } from 'lucide-react';
 import { DecorativeBanglaLetters, type DecorativeBanglaLetter } from './DecorativeBanglaLetters';
 
 type VoiceCard = {
@@ -242,39 +242,6 @@ export function Frame02ViralProof() {
   }, []);
 
   const visibleVoices = useMemo(() => voices, [voices]);
-  const toggleSamplePlayback = useCallback((voiceId: number) => {
-    const selectedAudio =
-      audioElementsRef.current.get(voiceId) ??
-      document.querySelector<HTMLAudioElement>(`audio[data-sample-audio-id="${voiceId}"]`);
-
-    if (!selectedAudio) return;
-
-    if (!selectedAudio.paused && !selectedAudio.ended) {
-      selectedAudio.pause();
-      setActiveVoiceId(null);
-      return;
-    }
-
-    audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
-      if (otherVoiceId !== voiceId) {
-        otherAudio.pause();
-        otherAudio.currentTime = 0;
-      }
-    });
-
-    selectedAudio.currentTime = 0;
-    selectedAudio
-      .play()
-      .then(() => {
-        setPlaybackErrorVoiceId(null);
-        setActiveVoiceId(voiceId);
-      })
-      .catch(() => {
-        setActiveVoiceId(null);
-        setPlaybackErrorVoiceId(voiceId);
-      });
-  }, []);
-
   const goToSlide = useCallback((targetIndex: number, behavior: ScrollBehavior = 'smooth') => {
     if (!visibleVoices.length) return;
 
@@ -501,22 +468,18 @@ export function Frame02ViralProof() {
                         </div>
 
                         {voice.audioUrl ? (
-                          <button
-                            type="button"
-                            onClick={() => toggleSamplePlayback(voice.id)}
-                            aria-label={`${isActive ? 'Pause' : 'Play'} ${voice.name} sample audio`}
+                          <a
+                            href={voice.audioUrl}
+                            onClick={() => setPlaybackErrorVoiceId(null)}
+                            aria-label={`Open ${voice.name} sample audio`}
                             className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full transition-all hover:scale-105 lg:h-14 lg:w-14"
                             style={{
                               backgroundColor: isActive ? '#AE6C4A' : '#C39680',
                               boxShadow: '0 14px 28px rgba(174, 108, 74, 0.22)',
                             }}
                           >
-                            {isActive ? (
-                              <Pause className="h-5 w-5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
-                            ) : (
-                              <Play className="h-5 w-5 translate-x-0.5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
-                            )}
-                          </button>
+                            <Play className="h-5 w-5 translate-x-0.5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
+                          </a>
                         ) : (
                           <button
                             type="button"
@@ -534,7 +497,7 @@ export function Frame02ViralProof() {
                         <div className="relative z-10 mb-5 rounded-2xl border border-[#D2CCBE] bg-white/45 p-3">
                           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                             <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#AE6C4A]">
-                              Sample audio
+                              Press play to hear sample
                             </span>
                             <a
                               className="inline-flex items-center gap-1.5 rounded-full border border-[#D2CCBE] bg-[#F6F2EA] px-3 py-1 text-xs font-semibold text-[#373A40] transition hover:border-[#AE6C4A] hover:text-[#AE6C4A]"
