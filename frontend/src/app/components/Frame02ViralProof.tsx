@@ -199,6 +199,7 @@ export function Frame02ViralProof() {
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [isCarouselPaused, setIsCarouselPaused] = useState(false);
   const audioElementsRef = useRef<Map<number, HTMLAudioElement>>(new Map());
+  const buttonAudioRef = useRef<HTMLAudioElement | null>(null);
   const carouselRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -236,10 +237,27 @@ export function Frame02ViralProof() {
 
   useEffect(() => {
     return () => {
+      if (buttonAudioRef.current) {
+        buttonAudioRef.current.pause();
+        buttonAudioRef.current.removeAttribute('src');
+        buttonAudioRef.current.load();
+        buttonAudioRef.current = null;
+      }
+
       audioElementsRef.current.forEach((audio) => audio.pause());
       audioElementsRef.current.clear();
     };
   }, []);
+
+  const stopButtonAudio = () => {
+    if (!buttonAudioRef.current) return;
+
+    buttonAudioRef.current.pause();
+    buttonAudioRef.current.currentTime = 0;
+    buttonAudioRef.current.removeAttribute('src');
+    buttonAudioRef.current.load();
+    buttonAudioRef.current = null;
+  };
 
   const visibleVoices = useMemo(() => voices, [voices]);
   const goToSlide = useCallback((targetIndex: number, behavior: ScrollBehavior = 'smooth') => {
@@ -281,22 +299,11 @@ export function Frame02ViralProof() {
   const toggleVoice = (voice: VoiceCard) => {
     if (!voice.audioUrl) return;
 
-    const audio = audioElementsRef.current.get(voice.id);
-    if (!audio) return;
-
     setPlaybackErrorVoiceId(null);
 
-    if (activeVoiceId === voice.id) {
-      if (audio.paused) {
-        void audio.play().catch(() => {
-          setActiveVoiceId(null);
-          setPlaybackErrorVoiceId(voice.id);
-        });
-        setActiveVoiceId(voice.id);
-      } else {
-        audio.pause();
-        setActiveVoiceId(null);
-      }
+    if (activeVoiceId === voice.id && buttonAudioRef.current && !buttonAudioRef.current.paused) {
+      stopButtonAudio();
+      setActiveVoiceId(null);
       return;
     }
 
@@ -307,9 +314,30 @@ export function Frame02ViralProof() {
       }
     });
 
+    stopButtonAudio();
+
+    const buttonAudio = new Audio(voice.audioUrl);
+    buttonAudio.preload = 'auto';
+    buttonAudio.onended = () => {
+      if (buttonAudioRef.current === buttonAudio) {
+        buttonAudioRef.current = null;
+        setActiveVoiceId((current) => (current === voice.id ? null : current));
+      }
+    };
+    buttonAudio.onerror = () => {
+      if (buttonAudioRef.current === buttonAudio) {
+        buttonAudioRef.current = null;
+      }
+      setActiveVoiceId((current) => (current === voice.id ? null : current));
+      setPlaybackErrorVoiceId(voice.id);
+    };
+    buttonAudioRef.current = buttonAudio;
     setActiveVoiceId(voice.id);
-    void audio.play().catch(() => {
-      setActiveVoiceId(null);
+    void buttonAudio.play().catch(() => {
+      if (buttonAudioRef.current === buttonAudio) {
+        buttonAudioRef.current = null;
+      }
+      setActiveVoiceId((current) => (current === voice.id ? null : current));
       setPlaybackErrorVoiceId(voice.id);
     });
   };
@@ -577,6 +605,7 @@ export function Frame02ViralProof() {
                               preload="metadata"
                               src={voice.audioUrl}
                               onPlay={() => {
+                                stopButtonAudio();
                                 audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
                                   if (otherVoiceId !== voice.id) {
                                     otherAudio.pause();
