@@ -195,9 +195,10 @@ export function Frame02ViralProof() {
   const [voices, setVoices] = useState<VoiceCard[]>(fallbackVoices);
   const [voiceSource, setVoiceSource] = useState<'api' | 'fallback'>('fallback');
   const [activeVoiceId, setActiveVoiceId] = useState<number | null>(null);
+  const [playbackErrorVoiceId, setPlaybackErrorVoiceId] = useState<number | null>(null);
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [isCarouselPaused, setIsCarouselPaused] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioElementsRef = useRef<Map<number, HTMLAudioElement>>(new Map());
   const carouselRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -235,8 +236,8 @@ export function Frame02ViralProof() {
 
   useEffect(() => {
     return () => {
-      audioRef.current?.pause();
-      audioRef.current = null;
+      audioElementsRef.current.forEach((audio) => audio.pause());
+      audioElementsRef.current.clear();
     };
   }, []);
 
@@ -280,45 +281,36 @@ export function Frame02ViralProof() {
   const toggleVoice = (voice: VoiceCard) => {
     if (!voice.audioUrl) return;
 
-    if (activeVoiceId === voice.id && audioRef.current) {
-      if (audioRef.current.paused) {
-        const audio = audioRef.current;
+    const audio = audioElementsRef.current.get(voice.id);
+    if (!audio) return;
+
+    setPlaybackErrorVoiceId(null);
+
+    if (activeVoiceId === voice.id) {
+      if (audio.paused) {
         void audio.play().catch(() => {
-          if (audioRef.current === audio) {
-            setActiveVoiceId(null);
-          }
+          setActiveVoiceId(null);
+          setPlaybackErrorVoiceId(voice.id);
         });
         setActiveVoiceId(voice.id);
       } else {
-        audioRef.current.pause();
+        audio.pause();
         setActiveVoiceId(null);
       }
       return;
     }
 
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-    }
+    audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
+      if (otherVoiceId !== voice.id) {
+        otherAudio.pause();
+        otherAudio.currentTime = 0;
+      }
+    });
 
-    const audio = new Audio(voice.audioUrl);
-    audioRef.current = audio;
-    audio.onended = () => {
-      if (audioRef.current === audio) {
-        setActiveVoiceId(null);
-      }
-    };
-    audio.onerror = () => {
-      if (audioRef.current === audio) {
-        setActiveVoiceId(null);
-      }
-    };
     setActiveVoiceId(voice.id);
     void audio.play().catch(() => {
-      if (audioRef.current === audio) {
-        setActiveVoiceId(null);
-        audioRef.current = null;
-      }
+      setActiveVoiceId(null);
+      setPlaybackErrorVoiceId(voice.id);
     });
   };
 
@@ -555,18 +547,66 @@ export function Frame02ViralProof() {
                         </div>
                       </div>
 
-                      <div className="relative z-10 flex h-16 items-end gap-1.5 rounded-2xl bg-[#E3DFD4]/55 px-4 py-3 lg:h-20" aria-hidden="true">
-                        {buildWaveform(voice.waveSeed, clipIndex).map((height, idx) => (
-                          <div
-                            key={idx}
-                            className="flex-1 rounded-full transition-all"
-                            style={{
-                              backgroundColor: isActive ? '#AE6C4A' : '#DF9E64',
-                              height: `${height}%`,
-                              opacity: isActive ? 0.86 : 0.52
-                            }}
-                          />
-                        ))}
+                      <div className="relative z-10 rounded-2xl bg-[#E3DFD4]/55 px-4 py-3">
+                        <div className="flex h-10 items-end gap-1.5 lg:h-12" aria-hidden="true">
+                          {buildWaveform(voice.waveSeed, clipIndex).map((height, idx) => (
+                            <div
+                              key={idx}
+                              className="flex-1 rounded-full transition-all"
+                              style={{
+                                backgroundColor: isActive ? '#AE6C4A' : '#DF9E64',
+                                height: `${height}%`,
+                                opacity: isActive ? 0.86 : 0.52
+                              }}
+                            />
+                          ))}
+                        </div>
+
+                        {voice.audioUrl ? (
+                          <>
+                            <audio
+                              ref={(node) => {
+                                if (node) {
+                                  audioElementsRef.current.set(voice.id, node);
+                                } else {
+                                  audioElementsRef.current.delete(voice.id);
+                                }
+                              }}
+                              className="mt-3 h-9 w-full"
+                              controls
+                              preload="metadata"
+                              src={voice.audioUrl}
+                              onPlay={() => {
+                                audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
+                                  if (otherVoiceId !== voice.id) {
+                                    otherAudio.pause();
+                                    otherAudio.currentTime = 0;
+                                  }
+                                });
+                                setPlaybackErrorVoiceId(null);
+                                setActiveVoiceId(voice.id);
+                              }}
+                              onPause={(event) => {
+                                if (event.currentTarget.ended) return;
+                                setActiveVoiceId((current) => (current === voice.id ? null : current));
+                              }}
+                              onEnded={() => {
+                                setActiveVoiceId((current) => (current === voice.id ? null : current));
+                              }}
+                              onError={() => {
+                                setActiveVoiceId((current) => (current === voice.id ? null : current));
+                                setPlaybackErrorVoiceId(voice.id);
+                              }}
+                            >
+                              Your browser does not support audio playback.
+                            </audio>
+                            {playbackErrorVoiceId === voice.id ? (
+                              <p className="mt-2 text-sm leading-5 text-[#9b4f35]">
+                                This clip could not play inline. Open it directly: <a className="font-semibold underline" href={voice.audioUrl}>sample WAV</a>.
+                              </p>
+                            ) : null}
+                          </>
+                        ) : null}
                       </div>
                     </article>
                   </div>
