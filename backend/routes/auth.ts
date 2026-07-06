@@ -565,6 +565,13 @@ export function createAuthRouter() {
         return;
       }
 
+      const smtpConfig = getSmtpConfig();
+
+      if (!smtpConfig && isProductionLike()) {
+        res.status(503).json({ error: 'Password reset email delivery is not configured. Contact support.' });
+        return;
+      }
+
       const user = await getUserByEmail(email);
 
       if (!user || user.account_status !== 'active') {
@@ -573,7 +580,6 @@ export function createAuthRouter() {
       }
 
       const { token } = await createPasswordReset(user.id);
-      const smtpConfig = getSmtpConfig();
       const resetUrl = new URL('/reset-password', getFrontendUrl());
       resetUrl.searchParams.set('token', token);
 

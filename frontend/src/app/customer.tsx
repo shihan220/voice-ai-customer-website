@@ -1187,6 +1187,7 @@ function SignupPage({
 function ForgotPasswordPage({ onNavigate }: { onNavigate: (href: string, replace?: boolean) => void }) {
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
+  const [messageTone, setMessageTone] = useState<'neutral' | 'success' | 'error'>('neutral');
   const [submitting, setSubmitting] = useState(false);
   const [resetPreview, setResetPreview] = useState<string | null>(null);
 
@@ -1194,6 +1195,8 @@ function ForgotPasswordPage({ onNavigate }: { onNavigate: (href: string, replace
     event.preventDefault();
     setSubmitting(true);
     setMessage('');
+    setMessageTone('neutral');
+    setResetPreview(null);
 
     try {
       const payload = await apiRequest<{ developmentResetToken: string | null; message: string; resetUrl: string | null }>('/api/auth/forgot-password', {
@@ -1202,8 +1205,10 @@ function ForgotPasswordPage({ onNavigate }: { onNavigate: (href: string, replace
       });
       setMessage(payload.message);
       setResetPreview(payload.resetUrl);
+      setMessageTone(payload.resetUrl ? 'success' : 'neutral');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to start password reset.');
+      setMessageTone('error');
     } finally {
       setSubmitting(false);
     }
@@ -1214,7 +1219,7 @@ function ForgotPasswordPage({ onNavigate }: { onNavigate: (href: string, replace
       <h2 className="text-2xl font-bold text-[#2f343b]">Forgot password</h2>
       <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
         <TextInput autoComplete="email" placeholder="Work email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
-        {message ? <InlineMessage tone={resetPreview ? 'success' : 'neutral'}>{message}</InlineMessage> : null}
+        {message ? <InlineMessage tone={messageTone}>{message}</InlineMessage> : null}
         {resetPreview ? <InlineMessage>{resetPreview}</InlineMessage> : null}
         <PrimaryButton className="w-full justify-center" disabled={submitting} type="submit">
           {submitting ? 'Preparing reset...' : 'Send reset link'}
