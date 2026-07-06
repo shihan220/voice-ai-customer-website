@@ -199,7 +199,6 @@ export function Frame02ViralProof() {
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [isCarouselPaused, setIsCarouselPaused] = useState(false);
   const audioElementsRef = useRef<Map<number, HTMLAudioElement>>(new Map());
-  const buttonAudioRef = useRef<HTMLAudioElement | null>(null);
   const carouselRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -237,27 +236,10 @@ export function Frame02ViralProof() {
 
   useEffect(() => {
     return () => {
-      if (buttonAudioRef.current) {
-        buttonAudioRef.current.pause();
-        buttonAudioRef.current.removeAttribute('src');
-        buttonAudioRef.current.load();
-        buttonAudioRef.current = null;
-      }
-
       audioElementsRef.current.forEach((audio) => audio.pause());
       audioElementsRef.current.clear();
     };
   }, []);
-
-  const stopButtonAudio = () => {
-    if (!buttonAudioRef.current) return;
-
-    buttonAudioRef.current.pause();
-    buttonAudioRef.current.currentTime = 0;
-    buttonAudioRef.current.removeAttribute('src');
-    buttonAudioRef.current.load();
-    buttonAudioRef.current = null;
-  };
 
   const visibleVoices = useMemo(() => voices, [voices]);
   const goToSlide = useCallback((targetIndex: number, behavior: ScrollBehavior = 'smooth') => {
@@ -295,52 +277,6 @@ export function Frame02ViralProof() {
     window.addEventListener('resize', syncCarouselPosition);
     return () => window.removeEventListener('resize', syncCarouselPosition);
   }, [carouselIndex, goToSlide]);
-
-  const toggleVoice = (voice: VoiceCard) => {
-    if (!voice.audioUrl) return;
-
-    setPlaybackErrorVoiceId(null);
-
-    if (activeVoiceId === voice.id && buttonAudioRef.current && !buttonAudioRef.current.paused) {
-      stopButtonAudio();
-      setActiveVoiceId(null);
-      return;
-    }
-
-    audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
-      if (otherVoiceId !== voice.id) {
-        otherAudio.pause();
-        otherAudio.currentTime = 0;
-      }
-    });
-
-    stopButtonAudio();
-
-    const buttonAudio = new Audio(voice.audioUrl);
-    buttonAudio.preload = 'auto';
-    buttonAudio.onended = () => {
-      if (buttonAudioRef.current === buttonAudio) {
-        buttonAudioRef.current = null;
-        setActiveVoiceId((current) => (current === voice.id ? null : current));
-      }
-    };
-    buttonAudio.onerror = () => {
-      if (buttonAudioRef.current === buttonAudio) {
-        buttonAudioRef.current = null;
-      }
-      setActiveVoiceId((current) => (current === voice.id ? null : current));
-      setPlaybackErrorVoiceId(voice.id);
-    };
-    buttonAudioRef.current = buttonAudio;
-    setActiveVoiceId(voice.id);
-    void buttonAudio.play().catch(() => {
-      if (buttonAudioRef.current === buttonAudio) {
-        buttonAudioRef.current = null;
-      }
-      setActiveVoiceId((current) => (current === voice.id ? null : current));
-      setPlaybackErrorVoiceId(voice.id);
-    });
-  };
 
   return (
     <div className="relative w-full overflow-hidden px-4 py-16 sm:px-8 sm:py-20 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
@@ -531,24 +467,75 @@ export function Frame02ViralProof() {
                           </h3>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => toggleVoice(voice)}
-                          disabled={!voice.audioUrl}
-                          aria-label={isActive ? `Pause ${voice.name}` : `Play ${voice.name}`}
-                          className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full transition-all enabled:hover:scale-105 disabled:cursor-not-allowed disabled:opacity-45 lg:h-14 lg:w-14"
-                          style={{ 
-                            backgroundColor: isActive ? '#AE6C4A' : '#C39680',
-                            boxShadow: '0 14px 28px rgba(174, 108, 74, 0.22)',
+                        {voice.audioUrl ? (
+                          <a
+                            href={voice.audioUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            aria-label={`Open ${voice.name} sample audio`}
+                            className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full transition-all hover:scale-105 lg:h-14 lg:w-14"
+                            style={{
+                              backgroundColor: isActive ? '#AE6C4A' : '#C39680',
+                              boxShadow: '0 14px 28px rgba(174, 108, 74, 0.22)',
+                            }}
+                          >
+                            {isActive ? (
+                              <Pause className="h-5 w-5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
+                            ) : (
+                              <Play className="h-5 w-5 translate-x-0.5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
+                            )}
+                          </a>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled
+                            aria-label={`${voice.name} sample audio unavailable`}
+                            className="flex h-12 w-12 flex-shrink-0 cursor-not-allowed items-center justify-center rounded-full opacity-45 lg:h-14 lg:w-14"
+                            style={{ backgroundColor: '#C39680' }}
+                          >
+                            <Play className="h-5 w-5 translate-x-0.5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
+                          </button>
+                        )}
+                      </div>
+
+                      {voice.audioUrl ? (
+                        <audio
+                          ref={(node) => {
+                            if (node) {
+                              audioElementsRef.current.set(voice.id, node);
+                            } else {
+                              audioElementsRef.current.delete(voice.id);
+                            }
+                          }}
+                          className="relative z-10 mb-5 h-10 w-full"
+                          controls
+                          preload="metadata"
+                          src={voice.audioUrl}
+                          onPlay={() => {
+                            audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
+                              if (otherVoiceId !== voice.id) {
+                                otherAudio.pause();
+                                otherAudio.currentTime = 0;
+                              }
+                            });
+                            setPlaybackErrorVoiceId(null);
+                            setActiveVoiceId(voice.id);
+                          }}
+                          onPause={(event) => {
+                            if (event.currentTarget.ended) return;
+                            setActiveVoiceId((current) => (current === voice.id ? null : current));
+                          }}
+                          onEnded={() => {
+                            setActiveVoiceId((current) => (current === voice.id ? null : current));
+                          }}
+                          onError={() => {
+                            setActiveVoiceId((current) => (current === voice.id ? null : current));
+                            setPlaybackErrorVoiceId(voice.id);
                           }}
                         >
-                          {isActive ? (
-                            <Pause className="h-5 w-5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
-                          ) : (
-                            <Play className="h-5 w-5 translate-x-0.5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
-                          )}
-                        </button>
-                      </div>
+                          Your browser does not support audio playback.
+                        </audio>
+                      ) : null}
 
                       <div className="relative z-10 mb-5 grid gap-3">
                         <div className="rounded-2xl bg-[#EEEBE4] p-4">
@@ -590,51 +577,10 @@ export function Frame02ViralProof() {
                           ))}
                         </div>
 
-                        {voice.audioUrl ? (
-                          <>
-                            <audio
-                              ref={(node) => {
-                                if (node) {
-                                  audioElementsRef.current.set(voice.id, node);
-                                } else {
-                                  audioElementsRef.current.delete(voice.id);
-                                }
-                              }}
-                              className="mt-3 h-9 w-full"
-                              controls
-                              preload="metadata"
-                              src={voice.audioUrl}
-                              onPlay={() => {
-                                stopButtonAudio();
-                                audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
-                                  if (otherVoiceId !== voice.id) {
-                                    otherAudio.pause();
-                                    otherAudio.currentTime = 0;
-                                  }
-                                });
-                                setPlaybackErrorVoiceId(null);
-                                setActiveVoiceId(voice.id);
-                              }}
-                              onPause={(event) => {
-                                if (event.currentTarget.ended) return;
-                                setActiveVoiceId((current) => (current === voice.id ? null : current));
-                              }}
-                              onEnded={() => {
-                                setActiveVoiceId((current) => (current === voice.id ? null : current));
-                              }}
-                              onError={() => {
-                                setActiveVoiceId((current) => (current === voice.id ? null : current));
-                                setPlaybackErrorVoiceId(voice.id);
-                              }}
-                            >
-                              Your browser does not support audio playback.
-                            </audio>
-                            {playbackErrorVoiceId === voice.id ? (
-                              <p className="mt-2 text-sm leading-5 text-[#9b4f35]">
-                                This clip could not play inline. Open it directly: <a className="font-semibold underline" href={voice.audioUrl}>sample WAV</a>.
-                              </p>
-                            ) : null}
-                          </>
+                        {voice.audioUrl && playbackErrorVoiceId === voice.id ? (
+                          <p className="mt-2 text-sm leading-5 text-[#9b4f35]">
+                            This clip could not play inline. Open it directly: <a className="font-semibold underline" href={voice.audioUrl}>sample WAV</a>.
+                          </p>
                         ) : null}
                       </div>
                     </article>
