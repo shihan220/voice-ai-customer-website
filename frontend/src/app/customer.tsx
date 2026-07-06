@@ -77,6 +77,20 @@ export type PurchaseSelection =
       packageCode: 'starter' | 'gold' | 'platinum';
     };
 
+type PaymentProviderAvailability = {
+  providers: {
+    bkash: {
+      configured: boolean;
+    };
+    stripe: {
+      configured: boolean;
+      extra5000: boolean;
+      gold: boolean;
+      platinum: boolean;
+    };
+  };
+};
+
 type TokenLedgerItem = {
   balanceAfter: number;
   createdAt: string;
@@ -324,6 +338,35 @@ function buildLeadHref(mode?: string | null) {
   }
 
   return `/${createSearch(params)}`;
+}
+
+function buildPostVerificationHref({
+  mode,
+  next,
+  packageCode,
+  section,
+}: {
+  mode?: string | null;
+  next?: string | null;
+  packageCode?: string | null;
+  section?: string | null;
+}) {
+  if (next === 'checkout' && packageCode) {
+    const dashboardParams = new URLSearchParams();
+    dashboardParams.set('checkout', packageCode);
+    dashboardParams.set('section', 'plan');
+    return `/dashboard${createSearch(dashboardParams)}`;
+  }
+
+  if (next === 'lead') {
+    return buildLeadHref(mode);
+  }
+
+  if (next === 'account') {
+    return buildAccountHref(section);
+  }
+
+  return '/dashboard';
 }
 
 function InlineMessage({ children, tone = 'neutral' }: InlineMessageProps) {
@@ -780,6 +823,45 @@ export function PaymentMethodDialog({
 }) {
   const [submitting, setSubmitting] = useState<null | 'bkash' | 'stripe'>(null);
   const [message, setMessage] = useState('');
+  const [providerAvailability, setProviderAvailability] = useState<PaymentProviderAvailability | null>(null);
+  const [loadingProviders, setLoadingProviders] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+
+    if (!selection) {
+      setLoadingProviders(false);
+      setProviderAvailability(null);
+      setMessage('');
+      return () => {
+        active = false;
+      };
+    }
+
+    setLoadingProviders(true);
+    setProviderAvailability(null);
+
+    void apiRequest<PaymentProviderAvailability>('/api/payments/config')
+      .then((payload) => {
+        if (active) {
+          setProviderAvailability(payload);
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setMessage(error instanceof Error ? error.message : 'Failed to load payment methods.');
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoadingProviders(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selection]);
 
   if (!selection) {
     return null;
@@ -793,8 +875,29 @@ export function PaymentMethodDialog({
           ? 'Platinum package'
           : 'Starter package'
       : selection.label;
+  const stripeAvailable = providerAvailability
+    ? 'extraTokenAmount' in selection
+      ? providerAvailability.providers.stripe.extra5000
+      : selection.packageCode === 'gold'
+        ? providerAvailability.providers.stripe.gold
+        : selection.packageCode === 'platinum'
+          ? providerAvailability.providers.stripe.platinum
+          : false
+    : false;
+  const bkashAvailable = Boolean(providerAvailability?.providers.bkash.configured);
+  const noProviderAvailable = Boolean(providerAvailability && !stripeAvailable && !bkashAvailable);
 
   const handleProvider = async (provider: 'bkash' | 'stripe') => {
+    if (provider === 'stripe' && !stripeAvailable) {
+      setMessage('Card payments are not configured for this purchase yet.');
+      return;
+    }
+
+    if (provider === 'bkash' && !bkashAvailable) {
+      setMessage('bKash payments are not configured yet.');
+      return;
+    }
+
     setSubmitting(provider);
     setMessage('');
 
@@ -837,23 +940,29 @@ export function PaymentMethodDialog({
         <p className="mt-3 text-sm leading-7 text-[#64584f]">
           Choose how to continue the payment. Final package and token updates are applied by the backend after provider confirmation.
         </p>
+        {loadingProviders ? <div className="mt-4"><InlineMessage>Checking available payment methods...</InlineMessage></div> : null}
+        {noProviderAvailable ? (
+          <div className="mt-4">
+            <InlineMessage tone="error">Online payments are not configured yet. Contact support to upgrade your account.</InlineMessage>
+          </div>
+        ) : null}
         {message ? <div className="mt-4"><InlineMessage tone="error">{message}</InlineMessage></div> : null}
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
           <PrimaryButton
             className="w-full justify-center"
-            disabled={Boolean(submitting)}
+            disabled={Boolean(submitting) || loadingProviders || !stripeAvailable}
             onClick={() => void handleProvider('stripe')}
             type="button"
           >
-            {submitting === 'stripe' ? 'Redirecting...' : 'Pay with Card'}
+            {submitting === 'stripe' ? 'Redirecting...' : stripeAvailable ? 'Pay with Card' : 'Card unavailable'}
           </PrimaryButton>
           <SecondaryButton
             className="w-full justify-center"
-            disabled={Boolean(submitting)}
+            disabled={Boolean(submitting) || loadingProviders || !bkashAvailable}
             onClick={() => void handleProvider('bkash')}
             type="button"
           >
-            {submitting === 'bkash' ? 'Redirecting...' : 'Pay with bKash'}
+            {submitting === 'bkash' ? 'Redirecting...' : bkashAvailable ? 'Pay with bKash' : 'bKash unavailable'}
           </SecondaryButton>
         </div>
         <button className="mt-5 text-sm font-medium text-[#6a5f57]" onClick={onClose} type="button">
@@ -1188,13 +1297,21 @@ function VerifyEmailPage({
   const [submitting, setSubmitting] = useState(false);
 
   const sendEmailCode = useCallback(async () => {
-    const payload = await apiRequest<{ verification: { preview: string | null } }>('/api/auth/send-email-otp', {
+    const payload = await apiRequest<{
+      message?: string;
+      user?: CustomerUser;
+      verification: { preview: string | null };
+    }>('/api/auth/send-email-otp', {
       method: 'POST',
     });
 
     return {
       localPreview: Boolean(payload.verification.preview),
-      message: payload.verification.preview ? `Email OTP for local testing: ${payload.verification.preview}` : 'Email code sent.',
+      message: payload.verification.preview
+        ? `Email OTP for local testing: ${payload.verification.preview}`
+        : payload.message || 'Email code sent.',
+      notRequired: payload.message === 'Email verification is not required.',
+      user: payload.user ?? null,
     };
   }, []);
 
@@ -1205,6 +1322,22 @@ function VerifyEmailPage({
       try {
         const result = await sendEmailCode();
         if (active) {
+          if (result.notRequired && result.user) {
+            onAuthenticated({ authenticated: true, user: result.user });
+
+            if (result.user.phoneVerified) {
+              onNavigate(buildPostVerificationHref({ mode, next, packageCode, section }), true);
+            } else {
+              const verifyParams = new URLSearchParams();
+              if (next) verifyParams.set('next', next);
+              if (packageCode) verifyParams.set('package', packageCode);
+              if (section) verifyParams.set('section', section);
+              if (mode) verifyParams.set('mode', mode);
+              onNavigate(`/verify-phone${createSearch(verifyParams)}`, true);
+            }
+            return;
+          }
+
           setLocalDevelopmentCode(result.localPreview);
           setMessage(result.message);
         }
@@ -1219,7 +1352,7 @@ function VerifyEmailPage({
     return () => {
       active = false;
     };
-  }, [sendEmailCode]);
+  }, [mode, next, onAuthenticated, onNavigate, packageCode, section, sendEmailCode]);
 
   const handleVerify = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1233,18 +1366,7 @@ function VerifyEmailPage({
       });
       onAuthenticated({ authenticated: true, user: payload.user });
       if (payload.user.phoneVerified) {
-        if (next === 'checkout' && packageCode) {
-          const dashboardParams = new URLSearchParams();
-          dashboardParams.set('checkout', packageCode);
-          dashboardParams.set('section', 'plan');
-          onNavigate(`/dashboard${createSearch(dashboardParams)}`, true);
-        } else if (next === 'lead') {
-          onNavigate(buildLeadHref(mode), true);
-        } else if (next === 'account') {
-          onNavigate(buildAccountHref(section), true);
-        } else {
-          onNavigate('/dashboard', true);
-        }
+        onNavigate(buildPostVerificationHref({ mode, next, packageCode, section }), true);
       } else {
         const verifyParams = new URLSearchParams();
         if (next) verifyParams.set('next', next);
@@ -1265,6 +1387,12 @@ function VerifyEmailPage({
     setLocalDevelopmentCode(false);
     try {
       const result = await sendEmailCode();
+      if (result.notRequired && result.user) {
+        onAuthenticated({ authenticated: true, user: result.user });
+        onNavigate(buildPostVerificationHref({ mode, next, packageCode, section }), true);
+        return;
+      }
+
       setLocalDevelopmentCode(result.localPreview);
       setMessage(result.message);
     } catch (error) {
@@ -1310,13 +1438,21 @@ function VerifyPhonePage({
   const [submitting, setSubmitting] = useState(false);
 
   const sendPhoneCode = useCallback(async () => {
-    const payload = await apiRequest<{ verification: { preview: string | null } }>('/api/auth/send-phone-otp', {
+    const payload = await apiRequest<{
+      message?: string;
+      user?: CustomerUser;
+      verification: { preview: string | null };
+    }>('/api/auth/send-phone-otp', {
       method: 'POST',
     });
 
     return {
       localPreview: Boolean(payload.verification.preview),
-      message: payload.verification.preview ? `Phone OTP for local testing: ${payload.verification.preview}` : 'Phone code sent.',
+      message: payload.verification.preview
+        ? `Phone OTP for local testing: ${payload.verification.preview}`
+        : payload.message || 'Phone code sent.',
+      notRequired: payload.message === 'Phone verification is not required.',
+      user: payload.user ?? null,
     };
   }, []);
 
@@ -1327,6 +1463,12 @@ function VerifyPhonePage({
       try {
         const result = await sendPhoneCode();
         if (active) {
+          if (result.notRequired && result.user) {
+            onAuthenticated({ authenticated: true, user: result.user });
+            onNavigate(buildPostVerificationHref({ mode, next, packageCode, section }), true);
+            return;
+          }
+
           setLocalDevelopmentCode(result.localPreview);
           setMessage(result.message);
         }
@@ -1341,7 +1483,7 @@ function VerifyPhonePage({
     return () => {
       active = false;
     };
-  }, [sendPhoneCode]);
+  }, [mode, next, onAuthenticated, onNavigate, packageCode, section, sendPhoneCode]);
 
   const handleVerify = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1354,18 +1496,7 @@ function VerifyPhonePage({
         method: 'POST',
       });
       onAuthenticated({ authenticated: true, user: payload.user });
-      if (next === 'checkout' && packageCode) {
-        const dashboardParams = new URLSearchParams();
-        dashboardParams.set('checkout', packageCode);
-        dashboardParams.set('section', 'plan');
-        onNavigate(`/dashboard${createSearch(dashboardParams)}`, true);
-      } else if (next === 'lead') {
-        onNavigate(buildLeadHref(mode), true);
-      } else if (next === 'account') {
-        onNavigate(buildAccountHref(section), true);
-      } else {
-        onNavigate('/dashboard', true);
-      }
+      onNavigate(buildPostVerificationHref({ mode, next, packageCode, section }), true);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Phone verification failed.');
     } finally {
@@ -1378,6 +1509,12 @@ function VerifyPhonePage({
     setLocalDevelopmentCode(false);
     try {
       const result = await sendPhoneCode();
+      if (result.notRequired && result.user) {
+        onAuthenticated({ authenticated: true, user: result.user });
+        onNavigate(buildPostVerificationHref({ mode, next, packageCode, section }), true);
+        return;
+      }
+
       setLocalDevelopmentCode(result.localPreview);
       setMessage(result.message);
     } catch (error) {

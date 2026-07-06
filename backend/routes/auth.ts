@@ -41,6 +41,7 @@ import {
   updateUserPassword,
   verifyPassword,
 } from '../services/customers.ts';
+import { type UserRecord } from '../db.ts';
 
 const emailOtpPurposeText = 'Your BANGLA SPEECH AI email verification code';
 const phoneOtpPurposeText = 'Your BANGLA SPEECH AI phone verification code';
@@ -102,6 +103,22 @@ function buildCustomerSession(user: { email: string; id: number }) {
   return {
     email: user.email,
     id: Number(user.id),
+  };
+}
+
+function toCustomerUserResponse(user: UserRecord) {
+  return {
+    accountStatus: user.account_status,
+    countryCode: user.country_code,
+    createdAt: user.created_at,
+    email: user.email,
+    emailVerified: isCustomerEmailVerified(user),
+    fullName: user.full_name,
+    id: Number(user.id),
+    mobileNumber: user.mobile_number,
+    packageType: user.package_code,
+    phoneVerified: isCustomerPhoneVerified(user),
+    tokenBalance: Number(user.token_balance),
   };
 }
 
@@ -282,15 +299,7 @@ export function createAuthRouter() {
       const eligibleUser = await ensureStarterGrantIfEligible(verifiedUser);
 
       res.status(201).json({
-        user: {
-          email: eligibleUser.email,
-          emailVerified: isCustomerEmailVerified(eligibleUser),
-          fullName: eligibleUser.full_name,
-          id: Number(eligibleUser.id),
-          packageType: eligibleUser.package_code,
-          phoneVerified: isCustomerPhoneVerified(eligibleUser),
-          tokenBalance: Number(eligibleUser.token_balance),
-        },
+        user: toCustomerUserResponse(eligibleUser),
         verification: {
           email: emailDelivery,
           phone: phoneDelivery,
@@ -328,15 +337,7 @@ export function createAuthRouter() {
       const eligibleUser = await ensureStarterGrantIfEligible(user);
 
       res.json({
-        user: {
-          email: eligibleUser.email,
-          emailVerified: isCustomerEmailVerified(eligibleUser),
-          fullName: eligibleUser.full_name,
-          id: Number(eligibleUser.id),
-          packageType: eligibleUser.package_code,
-          phoneVerified: isCustomerPhoneVerified(eligibleUser),
-          tokenBalance: Number(eligibleUser.token_balance),
-        },
+        user: toCustomerUserResponse(eligibleUser),
       });
     } catch (error) {
       res.status(400).json({
@@ -367,15 +368,7 @@ export function createAuthRouter() {
 
         res.json({
           message: 'Email verification is not required.',
-          user: {
-            email: eligibleUser.email,
-            emailVerified: isCustomerEmailVerified(eligibleUser),
-            fullName: eligibleUser.full_name,
-            id: Number(eligibleUser.id),
-            packageType: eligibleUser.package_code,
-            phoneVerified: isCustomerPhoneVerified(eligibleUser),
-            tokenBalance: Number(eligibleUser.token_balance),
-          },
+          user: toCustomerUserResponse(eligibleUser),
           verification: {
             delivered: false,
             preview: null,
@@ -414,15 +407,7 @@ export function createAuthRouter() {
 
         res.json({
           message: 'Email verification is not required.',
-          user: {
-            email: eligibleUser.email,
-            emailVerified: isCustomerEmailVerified(eligibleUser),
-            fullName: eligibleUser.full_name,
-            id: Number(eligibleUser.id),
-            packageType: eligibleUser.package_code,
-            phoneVerified: isCustomerPhoneVerified(eligibleUser),
-            tokenBalance: Number(eligibleUser.token_balance),
-          },
+          user: toCustomerUserResponse(eligibleUser),
         });
         return;
       }
@@ -458,15 +443,7 @@ export function createAuthRouter() {
 
       res.json({
         message: 'Email verified successfully.',
-        user: {
-          email: eligibleUser.email,
-          emailVerified: isCustomerEmailVerified(eligibleUser),
-          fullName: eligibleUser.full_name,
-          id: Number(eligibleUser.id),
-          packageType: eligibleUser.package_code,
-          phoneVerified: isCustomerPhoneVerified(eligibleUser),
-          tokenBalance: Number(eligibleUser.token_balance),
-        },
+        user: toCustomerUserResponse(eligibleUser),
       });
     } catch (error) {
       res.status(400).json({
@@ -495,15 +472,7 @@ export function createAuthRouter() {
 
         res.json({
           message: 'Phone verification is not required.',
-          user: {
-            email: eligibleUser.email,
-            emailVerified: isCustomerEmailVerified(eligibleUser),
-            fullName: eligibleUser.full_name,
-            id: Number(eligibleUser.id),
-            packageType: eligibleUser.package_code,
-            phoneVerified: isCustomerPhoneVerified(eligibleUser),
-            tokenBalance: Number(eligibleUser.token_balance),
-          },
+          user: toCustomerUserResponse(eligibleUser),
           verification: {
             delivered: false,
             preview: null,
@@ -542,15 +511,7 @@ export function createAuthRouter() {
 
         res.json({
           message: 'Phone verification is not required.',
-          user: {
-            email: eligibleUser.email,
-            emailVerified: isCustomerEmailVerified(eligibleUser),
-            fullName: eligibleUser.full_name,
-            id: Number(eligibleUser.id),
-            packageType: eligibleUser.package_code,
-            phoneVerified: isCustomerPhoneVerified(eligibleUser),
-            tokenBalance: Number(eligibleUser.token_balance),
-          },
+          user: toCustomerUserResponse(eligibleUser),
         });
         return;
       }
@@ -586,15 +547,7 @@ export function createAuthRouter() {
 
       res.json({
         message: 'Phone verified successfully.',
-        user: {
-          email: eligibleUser.email,
-          emailVerified: isCustomerEmailVerified(eligibleUser),
-          fullName: eligibleUser.full_name,
-          id: Number(eligibleUser.id),
-          packageType: eligibleUser.package_code,
-          phoneVerified: isCustomerPhoneVerified(eligibleUser),
-          tokenBalance: Number(eligibleUser.token_balance),
-        },
+        user: toCustomerUserResponse(eligibleUser),
       });
     } catch (error) {
       res.status(400).json({
@@ -705,15 +658,7 @@ export function createAuthRouter() {
 
       res.json({
         message: 'Password reset successful.',
-        user: {
-          email: updatedUser.email,
-          emailVerified: isCustomerEmailVerified(updatedUser),
-          fullName: updatedUser.full_name,
-          id: Number(updatedUser.id),
-          packageType: updatedUser.package_code,
-          phoneVerified: isCustomerPhoneVerified(updatedUser),
-          tokenBalance: Number(updatedUser.token_balance),
-        },
+        user: toCustomerUserResponse(updatedUser),
       });
     } catch (error) {
       res.status(400).json({

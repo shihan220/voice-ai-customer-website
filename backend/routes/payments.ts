@@ -106,6 +106,26 @@ function getSelectionTokenAmount(selection: PurchaseSelection): number | null {
   return selection.kind === 'extra_tokens' ? selection.tokenAmount : null;
 }
 
+function getPaymentProviderAvailability() {
+  const stripeConfigured = Boolean(getStripeClient());
+
+  return {
+    bkash: {
+      configured: Boolean(getBkashConfig()),
+    },
+    stripe: {
+      configured: stripeConfigured,
+      extra5000: Boolean(stripeConfigured && purchaseCatalog.extra5000.stripePriceId),
+      gold: Boolean(stripeConfigured && purchaseCatalog.gold.stripePriceId),
+      platinum: Boolean(stripeConfigured && purchaseCatalog.platinum.stripePriceId),
+    },
+  };
+}
+
+function isStripeAvailableForSelection(selection: PurchaseSelection) {
+  return Boolean(getStripeClient() && selection.stripePriceId);
+}
+
 async function canCustomerPurchaseSelection(userId: number, selection: PurchaseSelection) {
   if (selection.kind !== 'extra_tokens') {
     return true;
@@ -314,6 +334,12 @@ async function handleCompletedBkashPayment(localPayment: PaymentRecord, bkashPay
 export function createPaymentsRouter() {
   const router = Router();
 
+  router.get('/api/payments/config', requireCustomer, async (_req, res) => {
+    res.json({
+      providers: getPaymentProviderAvailability(),
+    });
+  });
+
   router.post('/api/payments/create', requireCustomer, paymentCreationLimiter, async (req, res) => {
     const provider = normalizeText(req.body.provider) as PaymentProvider | null;
     const packageCode = normalizeText(req.body.packageCode);
@@ -334,7 +360,7 @@ export function createPaymentsRouter() {
       if (provider === 'stripe') {
         const stripe = getStripeClient();
 
-        if (!stripe || !selection.stripePriceId) {
+        if (!isStripeAvailableForSelection(selection) || !stripe || !selection.stripePriceId) {
           res.status(503).json({ error: 'Stripe is not configured.' });
           return;
         }
@@ -396,6 +422,11 @@ export function createPaymentsRouter() {
       }
 
       if (provider === 'bkash') {
+        if (!getBkashConfig()) {
+          res.status(503).json({ error: 'bKash is not configured.' });
+          return;
+        }
+
         const payment = await createPayment({
           amount: selection.amount,
           currency: 'BDT',
@@ -559,6 +590,11 @@ export function createPaymentsRouter() {
     }
 
     try {
+      if (!getBkashConfig()) {
+        res.status(503).json({ error: 'bKash is not configured.' });
+        return;
+      }
+
       const payment = await createPayment({
         amount: selection.amount,
         currency: 'BDT',
