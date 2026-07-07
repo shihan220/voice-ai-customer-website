@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool, type SampleRequestRecord, type VoiceCardRecord } from '../db.ts';
+import { defaultVoiceCards } from '../default-voice-cards.ts';
 import {
   isValidEmail,
   normalizeText,
@@ -60,7 +61,12 @@ export function createPublicRouter() {
         ORDER BY display_order ASC, id ASC
       `);
 
-      res.json({ voices: result.rows.map(toVoiceResponse) });
+      const voiceCards = result.rows.length ? result.rows : defaultVoiceCards;
+
+      res.json({
+        source: result.rows.length ? 'database' : 'default',
+        voices: voiceCards.map(toVoiceResponse),
+      });
     } catch (error) {
       res.status(500).json({
         error: 'Failed to load voice cards',
