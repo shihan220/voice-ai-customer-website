@@ -28,6 +28,7 @@ type CustomerSessionResponse = {
 };
 
 type AppLocation = {
+  notFoundPath: string | null;
   pathname: CustomerRoute;
   search: string;
 };
@@ -51,11 +52,11 @@ function isValidRoute(pathname: string) {
 }
 
 function readLocation(): AppLocation {
-  const pathname = isValidRoute(window.location.pathname)
-    ? (window.location.pathname as CustomerRoute)
-    : '/';
+  const isKnownRoute = isValidRoute(window.location.pathname);
+  const pathname = isKnownRoute ? (window.location.pathname as CustomerRoute) : '/';
 
   return {
+    notFoundPath: isKnownRoute ? null : window.location.pathname,
     pathname,
     search: window.location.search,
   };
@@ -307,6 +308,39 @@ function LandingPage({
   );
 }
 
+function NotFoundPage({ onNavigate, path }: { onNavigate: (href: string, replace?: boolean) => void; path: string }) {
+  return (
+    <main className="min-h-[calc(100vh-160px)] bg-[#F2EFE7] px-5 py-20 sm:px-8 lg:px-10">
+      <section className="mx-auto max-w-3xl rounded-[28px] border border-[#d8cbbe] bg-white/80 p-8 shadow-[0_24px_70px_rgba(55,58,64,0.10)] sm:p-10">
+        <div className="inline-flex rounded-full border border-[#d9c6b2] bg-[#efe2d1] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#a96544]">
+          Page not found
+        </div>
+        <h1 className="mt-5 text-3xl font-bold text-[#2f343b] sm:text-4xl">This page is not available.</h1>
+        <p className="mt-4 text-base leading-7 text-[#64584f]">
+          The address <span className="font-semibold text-[#2f343b]">{path}</span> does not match a customer website route.
+          Use the homepage or account workspace to continue.
+        </p>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <button
+            className="rounded-full bg-[#ae6c4a] px-5 py-3 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95"
+            onClick={() => onNavigate('/')}
+            type="button"
+          >
+            Back to website
+          </button>
+          <button
+            className="rounded-full border border-[#d2ccbe] bg-white/80 px-5 py-3 text-sm font-semibold text-[#5a514a] transition hover:border-[#c39680] hover:text-[#ae6c4a]"
+            onClick={() => onNavigate('/dashboard')}
+            type="button"
+          >
+            Open dashboard
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 export default function App() {
   const [location, setLocation] = useState<AppLocation>(readLocation);
   const [leadMode, setLeadMode] = useState<LeadDialogMode | null>(null);
@@ -317,15 +351,22 @@ export default function App() {
 
   const navigate = (href: string, replace = false) => {
     const nextUrl = new URL(href, window.location.origin);
-    const nextPathname = isValidRoute(nextUrl.pathname) ? (nextUrl.pathname as CustomerRoute) : '/';
+    const isKnownRoute = isValidRoute(nextUrl.pathname);
+    const nextPathname = isKnownRoute ? (nextUrl.pathname as CustomerRoute) : '/';
+    const nextNotFoundPath = isKnownRoute ? null : nextUrl.pathname;
 
-    if (nextPathname === location.pathname && nextUrl.search === location.search) {
+    if (
+      nextPathname === location.pathname &&
+      nextUrl.search === location.search &&
+      nextNotFoundPath === location.notFoundPath
+    ) {
       return;
     }
 
     const method = replace ? 'replaceState' : 'pushState';
-    window.history[method]({}, '', `${nextPathname}${nextUrl.search}`);
+    window.history[method]({}, '', `${isKnownRoute ? nextPathname : nextUrl.pathname}${nextUrl.search}`);
     setLocation({
+      notFoundPath: nextNotFoundPath,
       pathname: nextPathname,
       search: nextUrl.search,
     });
@@ -342,7 +383,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (loading) {
+    if (loading || location.notFoundPath) {
       return;
     }
 
@@ -389,10 +430,17 @@ export default function App() {
 
       navigate('/dashboard', true);
     }
-  }, [currentUser?.emailVerified, currentUser?.phoneVerified, loading, location.pathname, session.authenticated]);
+  }, [currentUser?.emailVerified, currentUser?.phoneVerified, loading, location.notFoundPath, location.pathname, session.authenticated]);
 
   useEffect(() => {
-    if (loading || location.pathname !== '/' || !session.authenticated || !currentUser?.emailVerified || !currentUser.phoneVerified) {
+    if (
+      loading ||
+      location.notFoundPath ||
+      location.pathname !== '/' ||
+      !session.authenticated ||
+      !currentUser?.emailVerified ||
+      !currentUser.phoneVerified
+    ) {
       return;
     }
 
@@ -420,7 +468,7 @@ export default function App() {
       ...current,
       search: nextSearch,
     }));
-  }, [currentUser?.emailVerified, currentUser?.phoneVerified, loading, location.pathname, location.search, session.authenticated]);
+  }, [currentUser?.emailVerified, currentUser?.phoneVerified, loading, location.notFoundPath, location.pathname, location.search, session.authenticated]);
 
   const planLabels = useMemo(
     () => ({
@@ -511,6 +559,18 @@ export default function App() {
     setSession({ authenticated: false, user: null });
     navigate('/', true);
   };
+
+  if (location.notFoundPath) {
+    return (
+      <>
+        <Header loading={loading} onNavigate={navigate} onLogout={handleLogout} session={session} />
+        <NotFoundPage onNavigate={navigate} path={location.notFoundPath} />
+        <footer className="border-t border-[#d8cbbd] bg-[#f8f3ec] px-5 py-8 text-center text-sm text-[#6a5f57] sm:px-8 lg:px-10">
+          BANGLA SPEECH AI · Page not found
+        </footer>
+      </>
+    );
+  }
 
   if (location.pathname === '/login' || location.pathname === '/signup' || location.pathname === '/forgot-password' || location.pathname === '/reset-password' || location.pathname === '/verify-email' || location.pathname === '/verify-phone') {
     return (
