@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, ExternalLink, Pause, Play } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, Play } from 'lucide-react';
 import { DecorativeBanglaLetters, type DecorativeBanglaLetter } from './DecorativeBanglaLetters';
 
 type VoiceCard = {
@@ -242,37 +242,6 @@ export function Frame02ViralProof() {
   }, []);
 
   const visibleVoices = useMemo(() => voices, [voices]);
-  const toggleVoicePlayback = useCallback(async (voice: VoiceCard) => {
-    const audio = audioElementsRef.current.get(voice.id);
-
-    if (!audio) {
-      setPlaybackErrorVoiceId(voice.id);
-      return;
-    }
-
-    try {
-      if (!audio.paused) {
-        audio.pause();
-        setActiveVoiceId((current) => (current === voice.id ? null : current));
-        return;
-      }
-
-      audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
-        if (otherVoiceId !== voice.id) {
-          otherAudio.pause();
-          otherAudio.currentTime = 0;
-        }
-      });
-
-      setPlaybackErrorVoiceId(null);
-      audio.currentTime = 0;
-      setActiveVoiceId(voice.id);
-      await audio.play();
-    } catch {
-      setActiveVoiceId((current) => (current === voice.id ? null : current));
-      setPlaybackErrorVoiceId(voice.id);
-    }
-  }, []);
 
   const goToSlide = useCallback((targetIndex: number, behavior: ScrollBehavior = 'smooth') => {
     if (!visibleVoices.length) return;
@@ -500,22 +469,20 @@ export function Frame02ViralProof() {
                         </div>
 
                         {voice.audioUrl ? (
-                          <button
-                            type="button"
-                            onClick={() => void toggleVoicePlayback(voice)}
-                            aria-label={`${isActive ? 'Pause' : 'Play'} ${voice.name} sample audio`}
+                          <a
+                            href={voice.audioUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={() => setPlaybackErrorVoiceId(null)}
+                            aria-label={`Open ${voice.name} sample audio`}
                             className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full transition-all hover:scale-105 lg:h-14 lg:w-14"
                             style={{
                               backgroundColor: isActive ? '#AE6C4A' : '#C39680',
                               boxShadow: '0 14px 28px rgba(174, 108, 74, 0.22)',
                             }}
                           >
-                            {isActive ? (
-                              <Pause className="h-5 w-5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
-                            ) : (
-                              <Play className="h-5 w-5 translate-x-0.5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
-                            )}
-                          </button>
+                            <Play className="h-5 w-5 translate-x-0.5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
+                          </a>
                         ) : (
                           <button
                             type="button"
