@@ -43,6 +43,7 @@ const validRoutes = new Set<CustomerRoute>([
   '/dashboard',
   '/account',
   '/payment/success',
+  '/payment/failed',
 ]);
 
 function isValidRoute(pathname: string) {
@@ -63,6 +64,14 @@ function readLocation(): AppLocation {
 function createSearch(params: URLSearchParams) {
   const nextSearch = params.toString();
   return nextSearch ? `?${nextSearch}` : '';
+}
+
+function failedPaymentSearch(search: string) {
+  const params = new URLSearchParams(search);
+  if (!params.get('status')) {
+    params.set('status', 'failed');
+  }
+  return createSearch(params);
 }
 
 function parseLeadIntent(search: string): LeadDialogMode | null {
@@ -516,7 +525,7 @@ export default function App() {
     );
   }
 
-  if (loading && !currentUser && (location.pathname.startsWith('/dashboard') || location.pathname === '/account' || location.pathname === '/payment/success')) {
+  if (loading && !currentUser && (location.pathname.startsWith('/dashboard') || location.pathname === '/account' || location.pathname === '/payment/success' || location.pathname === '/payment/failed')) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F2EFE7] px-6">
         <div className="rounded-3xl border border-[#ddcfbe] bg-white/85 px-6 py-4 text-sm font-medium text-[#5c5048] shadow-[0_20px_60px_rgba(92,80,72,0.12)]">
@@ -526,12 +535,12 @@ export default function App() {
     );
   }
 
-  if (location.pathname === '/payment/success') {
+  if (location.pathname === '/payment/success' || location.pathname === '/payment/failed') {
     return (
       <CustomerPaymentSuccessPage
         onNavigate={navigate}
         onRefreshSession={refresh}
-        search={location.search}
+        search={location.pathname === '/payment/failed' ? failedPaymentSearch(location.search) : location.search}
       />
     );
   }

@@ -230,7 +230,8 @@ export type CustomerRoute =
   | '/dashboard'
   | `/dashboard/jobs/${number}`
   | '/account'
-  | '/payment/success';
+  | '/payment/success'
+  | '/payment/failed';
 
 const publicRoutes = new Set<CustomerRoute>([
   '/',
@@ -243,6 +244,7 @@ const publicRoutes = new Set<CustomerRoute>([
   '/dashboard',
   '/account',
   '/payment/success',
+  '/payment/failed',
 ]);
 
 function cx(...values: Array<string | false | null | undefined>) {
@@ -704,13 +706,24 @@ export function CustomerPaymentSuccessPage({
 }) {
   const params = new URLSearchParams(search);
   const paymentId = params.get('payment_id');
+  const statusParam = params.get('status')?.toLowerCase() ?? null;
+  const reasonParam = params.get('reason');
   const [payment, setPayment] = useState<PaymentHistoryItem | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!paymentId) {
-      setError('Payment id is missing.');
+      if (statusParam === 'failed' || statusParam === 'cancelled') {
+        const reason = reasonParam ? ` Reason: ${reasonParam.replace(/[_-]+/g, ' ')}.` : '';
+        setError(
+          statusParam === 'cancelled'
+            ? `Payment was cancelled.${reason}`
+            : `Payment did not complete successfully.${reason}`,
+        );
+      } else {
+        setError('Payment id is missing.');
+      }
       setLoading(false);
       return;
     }
