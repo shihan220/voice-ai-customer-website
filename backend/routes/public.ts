@@ -9,6 +9,7 @@ import {
 } from '../core.ts';
 
 const publicSiteUrl = 'https://banglaspeechai.com';
+const sitemapLastModified = new Date().toISOString();
 
 export function createPublicRouter() {
   const router = Router();
@@ -25,13 +26,11 @@ export function createPublicRouter() {
   });
 
   router.get('/sitemap.xml', (_req, res) => {
-    const now = new Date().toISOString();
-
     res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>${publicSiteUrl}/</loc>
-    <lastmod>${now}</lastmod>
+    <lastmod>${sitemapLastModified}</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
