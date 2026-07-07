@@ -440,41 +440,64 @@ const textInputClassName =
 const textAreaClassName = `${textInputClassName} min-h-[220px] resize-y`;
 
 function TextInput({
+  'aria-label': ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
   className,
+  placeholder,
   ...props
 }: React.InputHTMLAttributes<HTMLInputElement> & { className?: string }) {
+  const fallbackLabel = !ariaLabelledBy && typeof placeholder === 'string' ? placeholder : undefined;
+
   return (
     <input
       {...props}
+      aria-label={ariaLabel ?? fallbackLabel}
+      aria-labelledby={ariaLabelledBy}
       className={cx(textInputClassName, className)}
+      placeholder={placeholder}
     />
   );
 }
 
 function TextArea({
+  'aria-label': ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
   className,
+  placeholder,
   ...props
 }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { className?: string }) {
+  const fallbackLabel = !ariaLabelledBy && typeof placeholder === 'string' ? placeholder : undefined;
+
   return (
     <textarea
       {...props}
+      aria-label={ariaLabel ?? fallbackLabel}
+      aria-labelledby={ariaLabelledBy}
       className={cx(textAreaClassName, className)}
+      placeholder={placeholder}
     />
   );
 }
 
 function PasswordInput({
+  'aria-label': ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
   className,
+  placeholder,
   ...props
 }: React.InputHTMLAttributes<HTMLInputElement> & { className?: string }) {
   const [visible, setVisible] = useState(false);
+  const fallbackLabel = !ariaLabelledBy && typeof placeholder === 'string' ? placeholder : undefined;
 
   return (
     <div className="relative">
       <input
         {...props}
+        aria-label={ariaLabel ?? fallbackLabel}
+        aria-labelledby={ariaLabelledBy}
         type={visible ? 'text' : 'password'}
         className={cx(textInputClassName, 'pr-12', className)}
+        placeholder={placeholder}
       />
       <button
         aria-label={visible ? 'Hide password' : 'Show password'}
