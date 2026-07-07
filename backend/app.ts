@@ -25,6 +25,24 @@ import { createSamplesRouter } from './routes/samples.ts';
 import { createTtsRouter } from './routes/tts.ts';
 import { createUserRouter } from './routes/user.ts';
 
+const publicFrontendRoutes = new Set([
+  '/',
+  '/login',
+  '/signup',
+  '/forgot-password',
+  '/reset-password',
+  '/verify-email',
+  '/verify-phone',
+  '/dashboard',
+  '/account',
+  '/payment/success',
+  '/payment/failed',
+]);
+
+function isPublicFrontendRoute(pathname: string) {
+  return publicFrontendRoutes.has(pathname) || /^\/dashboard\/jobs\/\d+$/.test(pathname);
+}
+
 export function createApp() {
   const app = express();
   app.set('trust proxy', 1);
@@ -185,6 +203,10 @@ export function createApp() {
     if (req.path.startsWith('/api') || req.path.startsWith('/admin') || req.path.startsWith('/media')) {
       next();
       return;
+    }
+
+    if (!isPublicFrontendRoute(req.path)) {
+      res.status(404);
     }
 
     res.sendFile(path.join(frontendDistRoot, 'index.html'), (error) => {
