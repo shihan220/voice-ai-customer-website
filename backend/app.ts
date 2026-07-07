@@ -158,6 +158,9 @@ export function createApp() {
   app.use('/media', (_req, res) => {
     res.status(404).json({ error: 'Not found.' });
   });
+  app.get('/favicon.ico', (_req, res) => {
+    res.redirect(302, '/favicon.png');
+  });
   app.use('/admin', express.static(adminDistRoot, { index: false }));
   app.use(createPublicRouter());
   app.use(createAuthRouter());
