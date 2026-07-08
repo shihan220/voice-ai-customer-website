@@ -1083,8 +1083,8 @@ function LoginPage({
       <p className="mt-2 text-sm leading-6 text-[#6a5f57]">Use your account to continue to samples and dashboard access.</p>
 
       <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
-        <TextInput autoComplete="username" placeholder="Work email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
-        <PasswordInput autoComplete="current-password" placeholder="Password" value={password} onChange={(event) => setPassword(event.target.value)} />
+        <TextInput autoComplete="username" placeholder="Work email" required type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+        <PasswordInput autoComplete="current-password" placeholder="Password" required value={password} onChange={(event) => setPassword(event.target.value)} />
         {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
         <PrimaryButton className="w-full justify-center" disabled={submitting} type="submit">
           {submitting ? 'Signing in...' : 'Sign in'}
@@ -1130,8 +1130,19 @@ function SignupPage({
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setSubmitting(true);
     setMessage('');
+
+    if (form.password.length < 8) {
+      setMessage('Password must be at least 8 characters long.');
+      return;
+    }
+
+    if (form.password !== form.confirmPassword) {
+      setMessage('Passwords do not match.');
+      return;
+    }
+
+    setSubmitting(true);
 
     try {
       const payload = await apiRequest<{
@@ -1194,13 +1205,13 @@ function SignupPage({
       <h2 className="text-2xl font-bold text-[#2f343b]">Sign up</h2>
       <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
         <TextInput autoComplete="name" placeholder="Full name" required value={form.fullName} onChange={(event) => setForm((current) => ({ ...current, fullName: event.target.value }))} />
-        <TextInput autoComplete="email" placeholder="Work email" type="email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} />
+        <TextInput autoComplete="email" placeholder="Work email" required type="email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} />
         <div className="grid gap-4 sm:grid-cols-[150px_1fr]">
-          <TextInput placeholder="Country code" value={form.countryCode} onChange={(event) => setForm((current) => ({ ...current, countryCode: event.target.value }))} />
-          <TextInput placeholder="Mobile number" value={form.mobileNumber} onChange={(event) => setForm((current) => ({ ...current, mobileNumber: event.target.value }))} />
+          <TextInput placeholder="Country code" required value={form.countryCode} onChange={(event) => setForm((current) => ({ ...current, countryCode: event.target.value }))} />
+          <TextInput placeholder="Mobile number" required value={form.mobileNumber} onChange={(event) => setForm((current) => ({ ...current, mobileNumber: event.target.value }))} />
         </div>
-        <PasswordInput autoComplete="new-password" placeholder="Password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
-        <PasswordInput autoComplete="new-password" placeholder="Confirm password" value={form.confirmPassword} onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))} />
+        <PasswordInput autoComplete="new-password" minLength={8} placeholder="Password" required value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
+        <PasswordInput autoComplete="new-password" minLength={8} placeholder="Confirm password" required value={form.confirmPassword} onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))} />
         {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
         {verificationInfo.emailPreview || verificationInfo.phonePreview ? (
           <InlineMessage>
@@ -1254,7 +1265,7 @@ function ForgotPasswordPage({ onNavigate }: { onNavigate: (href: string, replace
     <AuthCard description="Use your email address to begin the reset flow." onNavigate={onNavigate} title="Reset your password.">
       <h2 className="text-2xl font-bold text-[#2f343b]">Forgot password</h2>
       <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
-        <TextInput autoComplete="email" placeholder="Work email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+        <TextInput autoComplete="email" placeholder="Work email" required type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
         {message ? <InlineMessage tone={messageTone}>{message}</InlineMessage> : null}
         {resetPreview ? <InlineMessage>{resetPreview}</InlineMessage> : null}
         <PrimaryButton className="w-full justify-center" disabled={submitting} type="submit">
@@ -1286,8 +1297,19 @@ function ResetPasswordPage({
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setSubmitting(true);
     setMessage('');
+
+    if (password.length < 8) {
+      setMessage('Password must be at least 8 characters long.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setMessage('Passwords do not match.');
+      return;
+    }
+
+    setSubmitting(true);
 
     try {
       const payload = await apiRequest<{ message: string; user: CustomerUser }>('/api/auth/reset-password', {
@@ -1307,8 +1329,8 @@ function ResetPasswordPage({
     <AuthCard description="Complete your password reset and continue to your dashboard." onNavigate={onNavigate} title="Choose a new password.">
       <h2 className="text-2xl font-bold text-[#2f343b]">Reset password</h2>
       <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
-        <PasswordInput autoComplete="new-password" placeholder="New password" value={password} onChange={(event) => setPassword(event.target.value)} />
-        <PasswordInput autoComplete="new-password" placeholder="Confirm password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
+        <PasswordInput autoComplete="new-password" minLength={8} placeholder="New password" required value={password} onChange={(event) => setPassword(event.target.value)} />
+        <PasswordInput autoComplete="new-password" minLength={8} placeholder="Confirm password" required value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
         {message ? <InlineMessage tone="error">{message}</InlineMessage> : null}
         <PrimaryButton className="w-full justify-center" disabled={submitting} type="submit">
           {submitting ? 'Resetting...' : 'Reset password'}
@@ -4231,9 +4253,25 @@ export function CustomerAccountPage({
 
   const handlePasswordSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setPasswordSubmitting(true);
     setPasswordError('');
     setPasswordMessage('');
+
+    if (!passwordForm.currentPassword) {
+      setPasswordError('Current password is required.');
+      return;
+    }
+
+    if (passwordForm.newPassword.length < 8) {
+      setPasswordError('New password must be at least 8 characters long.');
+      return;
+    }
+
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError('New passwords do not match.');
+      return;
+    }
+
+    setPasswordSubmitting(true);
 
     try {
       const payload = await apiRequest<{ message: string }>('/api/user/change-password', {
@@ -4575,18 +4613,23 @@ export function CustomerAccountPage({
               <PasswordInput
                 autoComplete="current-password"
                 placeholder="Current password"
+                required
                 value={passwordForm.currentPassword}
                 onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))}
               />
               <PasswordInput
                 autoComplete="new-password"
+                minLength={8}
                 placeholder="New password"
+                required
                 value={passwordForm.newPassword}
                 onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))}
               />
               <PasswordInput
                 autoComplete="new-password"
+                minLength={8}
                 placeholder="Confirm new password"
+                required
                 value={passwordForm.confirmPassword}
                 onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))}
               />
