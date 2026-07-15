@@ -401,6 +401,9 @@ CREATE TABLE IF NOT EXISTS tts_generation_jobs (
   status TEXT NOT NULL DEFAULT 'queued'
     CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'preview_queued', 'preview_processing', 'preview_ready', 'cancelling', 'cancelled')),
   processing_stage TEXT,
+  provider_attempt_count INTEGER NOT NULL DEFAULT 0,
+  provider_next_attempt_at TIMESTAMPTZ,
+  provider_last_error TEXT,
   provider_voice TEXT NOT NULL,
   voice_profile_id BIGINT REFERENCES tts_voice_profiles (id) ON DELETE SET NULL,
   voice_display_name TEXT NOT NULL DEFAULT 'Keypillar Bangla Female',
@@ -427,6 +430,9 @@ CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_user_created_at
 
 CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_status_created_at
   ON tts_generation_jobs (status, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_retry_schedule
+  ON tts_generation_jobs (status, provider_next_attempt_at, created_at ASC);
 
 CREATE TABLE IF NOT EXISTS tts_usage_ledger (
   id BIGSERIAL PRIMARY KEY,

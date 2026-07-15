@@ -288,6 +288,9 @@ export type TtsGenerationJobRecord = {
   billable_minutes: number | null;
   status: TtsGenerationJobStatus;
   processing_stage: string | null;
+  provider_attempt_count: number;
+  provider_next_attempt_at: Date | null;
+  provider_last_error: string | null;
   provider_voice: string;
   voice_profile_id: number | null;
   voice_display_name: string;
@@ -637,6 +640,9 @@ export async function ensureSchema() {
       status TEXT NOT NULL DEFAULT 'queued'
         CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'preview_queued', 'preview_processing', 'preview_ready', 'cancelling', 'cancelled')),
       processing_stage TEXT,
+      provider_attempt_count INTEGER NOT NULL DEFAULT 0,
+      provider_next_attempt_at TIMESTAMPTZ,
+      provider_last_error TEXT,
       provider_voice TEXT NOT NULL,
       voice_profile_id BIGINT REFERENCES tts_voice_profiles (id) ON DELETE SET NULL,
       voice_display_name TEXT NOT NULL DEFAULT 'Keypillar Bangla Female',
@@ -668,6 +674,9 @@ export async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS cancellation_requested_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS cancel_reason TEXT,
+      ADD COLUMN IF NOT EXISTS provider_attempt_count INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS provider_next_attempt_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS provider_last_error TEXT,
       ADD COLUMN IF NOT EXISTS voice_profile_id BIGINT REFERENCES tts_voice_profiles (id) ON DELETE SET NULL,
       ADD COLUMN IF NOT EXISTS voice_display_name TEXT NOT NULL DEFAULT 'Keypillar Bangla Female',
       ADD COLUMN IF NOT EXISTS provider_voice_profile_id TEXT;
@@ -708,6 +717,11 @@ export async function ensureSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_status_created_at
       ON tts_generation_jobs (status, created_at ASC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_retry_schedule
+      ON tts_generation_jobs (status, provider_next_attempt_at, created_at ASC);
   `);
 
   await pool.query(`

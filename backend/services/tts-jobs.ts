@@ -1,5 +1,5 @@
 import { PDFParse } from 'pdf-parse';
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -32,6 +32,9 @@ const defaultKeypillarTtsFormat = 'wav';
 const defaultKeypillarTtsPronunciationMode = 'english_preserve';
 const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
 const defaultKeypillarTtsRequestTimeoutMs = 180_000;
+const defaultTtsProviderRetryMaxAttempts = 6;
+const defaultTtsProviderRetryBaseDelayMs = 30_000;
+const defaultTtsProviderRetryMaxDelayMs = 300_000;
 const defaultFfmpegPath = 'ffmpeg';
 const defaultTtsChunkMaxChars = 1_200;
 const defaultCustomVoiceChunkMaxChars = defaultTtsChunkMaxChars;
@@ -101,9 +104,15 @@ let workerStarted = false;
 let workerRunning = false;
 let workerTimer: NodeJS.Timeout | null = null;
 
-function withStatus(message: string, statusCode: number) {
+type ServiceError = Error & {
+  providerRetryable?: boolean;
+  statusCode?: number;
+};
+
+function withStatus(message: string, statusCode: number, options?: { providerRetryable?: boolean }) {
   const error = new Error(message);
-  (error as Error & { statusCode?: number }).statusCode = statusCode;
+  (error as ServiceError).statusCode = statusCode;
+  (error as ServiceError).providerRetryable = options?.providerRetryable;
   return error;
 }
 
@@ -135,6 +144,21 @@ function normalizeTimeoutMs(value: string | undefined, fallback: number) {
   return Math.max(5_000, Math.floor(parsed));
 }
 
+function normalizeInteger(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const parsed = Number(value ?? fallback);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
+}
+
 function getRuntimeConfig() {
   const apiKey = normalizeText(process.env.KEYPILLAR_TTS_API_KEY);
   const configuredApiUrl = normalizeText(process.env.KEYPILLAR_TTS_API_URL);
@@ -157,6 +181,24 @@ function getRuntimeConfig() {
     process.env.KEYPILLAR_TTS_REQUEST_TIMEOUT_MS,
     defaultKeypillarTtsRequestTimeoutMs,
   );
+  const providerRetryMaxAttempts = normalizeInteger(
+    process.env.TTS_PROVIDER_RETRY_MAX_ATTEMPTS,
+    defaultTtsProviderRetryMaxAttempts,
+    1,
+    20,
+  );
+  const providerRetryBaseDelayMs = normalizeInteger(
+    process.env.TTS_PROVIDER_RETRY_BASE_DELAY_MS,
+    defaultTtsProviderRetryBaseDelayMs,
+    1_000,
+    600_000,
+  );
+  const providerRetryMaxDelayMs = normalizeInteger(
+    process.env.TTS_PROVIDER_RETRY_MAX_DELAY_MS,
+    defaultTtsProviderRetryMaxDelayMs,
+    providerRetryBaseDelayMs,
+    1_800_000,
+  );
 
   return {
     apiKey,
@@ -177,6 +219,9 @@ function getRuntimeConfig() {
     ffmpegPath,
     format,
     pronunciationMode,
+    providerRetryBaseDelayMs,
+    providerRetryMaxAttempts,
+    providerRetryMaxDelayMs,
     requestTimeoutMs,
     voiceId,
   };
@@ -1125,6 +1170,7 @@ async function fetchAudioUrlWithRetry(audioUrl: string, config: ReturnType<typeo
   const audioOrigin = new URL(resolvedUrl).origin;
   const delaysMs = [0, 500, 1_000, 1_500, 2_500, 4_000];
   let lastStatusCode: number | null = null;
+  let lastFailureWasRetryable = false;
 
   for (const [attemptIndex, delayMs] of delaysMs.entries()) {
     if (delayMs > 0) {
@@ -1139,18 +1185,35 @@ async function fetchAudioUrlWithRetry(audioUrl: string, config: ReturnType<typeo
       headers.Authorization = `Bearer ${config.apiKey}`;
     }
 
-    const response = await fetchWithTimeout(
-      resolvedUrl,
-      { headers },
-      config.requestTimeoutMs,
-      `Audio fetch timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
-    );
+    let response: Response;
+
+    try {
+      response = await fetchWithTimeout(
+        resolvedUrl,
+        { headers },
+        config.requestTimeoutMs,
+        `Audio fetch timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+      );
+    } catch (error) {
+      const statusCode = getStatusCode(error, 0);
+
+      if (statusCode === 504 || error instanceof TypeError) {
+        throw withStatus(
+          error instanceof Error ? error.message : 'Generated audio could not be downloaded from the voice service.',
+          statusCode || 502,
+          { providerRetryable: true },
+        );
+      }
+
+      throw error;
+    }
 
     if (response.ok) {
       return Buffer.from(await response.arrayBuffer());
     }
 
     lastStatusCode = response.status;
+    lastFailureWasRetryable = shouldRetryAudioFetch(response.status);
     await response.arrayBuffer().catch(() => undefined);
 
     const hasMoreAttempts = attemptIndex < delaysMs.length - 1;
@@ -1159,7 +1222,11 @@ async function fetchAudioUrlWithRetry(audioUrl: string, config: ReturnType<typeo
     }
   }
 
-  throw withStatus(`Audio fetch failed with status ${lastStatusCode ?? 'unknown'}.`, 502);
+  throw withStatus(
+    `Audio fetch failed with status ${lastStatusCode ?? 'unknown'}.`,
+    502,
+    { providerRetryable: lastFailureWasRetryable },
+  );
 }
 
 async function fetchAudioFromJsonPayload(payload: unknown, config: ReturnType<typeof getRuntimeConfig>) {
@@ -1178,7 +1245,13 @@ async function fetchAudioFromJsonPayload(payload: unknown, config: ReturnType<ty
   throw withStatus('Keypillar TTS response did not include downloadable audio.', 502);
 }
 
-async function generateWavChunk(text: string, job: TtsGenerationJobRecord) {
+function getProviderIdempotencyKey(job: TtsGenerationJobRecord, text: string, segmentIndex: number) {
+  const phase = job.status === 'preview_processing' ? 'preview' : 'full';
+  const textDigest = createHash('sha256').update(text).digest('hex').slice(0, 16);
+  return `website-tts-${job.id}-${phase}-${segmentIndex + 1}-${textDigest}`;
+}
+
+async function generateWavChunk(text: string, job: TtsGenerationJobRecord, segmentIndex: number) {
   const config = getRuntimeConfig();
 
   if (!config.apiKey) {
@@ -1187,27 +1260,43 @@ async function generateWavChunk(text: string, job: TtsGenerationJobRecord) {
 
   const providerVoiceProfileId = job.provider_voice_profile_id ?? 'fixed';
 
-  const response = await fetchWithTimeout(
-    config.apiUrl,
-    {
-      body: JSON.stringify({
-        format: config.format,
-        pronunciation_mode: config.pronunciationMode,
-        speed: 1.0,
-        text,
-        voice: job.provider_voice || config.voiceId,
-        voice_profile_id: providerVoiceProfileId,
-      }),
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        'Content-Type': 'application/json',
-        'Idempotency-Key': randomUUID(),
+  let response: Response;
+
+  try {
+    response = await fetchWithTimeout(
+      config.apiUrl,
+      {
+        body: JSON.stringify({
+          format: config.format,
+          pronunciation_mode: config.pronunciationMode,
+          speed: 1.0,
+          text,
+          voice: job.provider_voice || config.voiceId,
+          voice_profile_id: providerVoiceProfileId,
+        }),
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': getProviderIdempotencyKey(job, text, segmentIndex),
+        },
+        method: 'POST',
       },
-      method: 'POST',
-    },
-    config.requestTimeoutMs,
-    `Keypillar TTS request timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
-  );
+      config.requestTimeoutMs,
+      `Keypillar TTS request timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+    );
+  } catch (error) {
+    const statusCode = getStatusCode(error, 0);
+
+    if (statusCode === 504 || error instanceof TypeError) {
+      throw withStatus(
+        error instanceof Error ? error.message : 'Keypillar TTS request could not reach the voice service.',
+        statusCode || 502,
+        { providerRetryable: true },
+      );
+    }
+
+    throw error;
+  }
 
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
 
@@ -1216,6 +1305,12 @@ async function generateWavChunk(text: string, job: TtsGenerationJobRecord) {
     throw withStatus(
       `Keypillar TTS request failed with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
       502,
+      {
+        providerRetryable: response.status === 408 ||
+          response.status === 425 ||
+          response.status === 429 ||
+          response.status >= 500,
+      },
     );
   }
 
@@ -1692,6 +1787,8 @@ async function completeJobAndDeductUsage(
         SET
           status = 'completed',
           processing_stage = 'completed',
+          provider_next_attempt_at = NULL,
+          provider_last_error = NULL,
           wav_file = $2,
           mp3_file = $3,
           generated_audio_seconds = $4,
@@ -1794,6 +1891,8 @@ async function completePreviewJob(jobId: number, previewRelativePath: string, pr
         SET
           status = 'preview_ready',
           processing_stage = 'preview_ready',
+          provider_next_attempt_at = NULL,
+          provider_last_error = NULL,
           preview_file = $2,
           preview_audio_seconds = $3,
           preview_generated_at = NOW(),
@@ -1813,6 +1912,79 @@ async function completePreviewJob(jobId: number, previewRelativePath: string, pr
   } finally {
     client.release();
   }
+}
+
+function isRetryableProviderFailure(error: unknown) {
+  return error instanceof Error && (error as ServiceError).providerRetryable === true;
+}
+
+function getProviderRetryDelayMs(failedAttemptCount: number, config: ReturnType<typeof getRuntimeConfig>) {
+  const exponentialDelay = config.providerRetryBaseDelayMs * (2 ** Math.max(0, failedAttemptCount - 1));
+  return Math.min(config.providerRetryMaxDelayMs, exponentialDelay);
+}
+
+async function scheduleProviderRetry(job: TtsGenerationJobRecord, error: unknown) {
+  const config = getRuntimeConfig();
+  const failedAttemptCount = Number(job.provider_attempt_count ?? 0) + 1;
+  const providerError = error instanceof Error ? error.message : String(error);
+
+  if (failedAttemptCount >= config.providerRetryMaxAttempts) {
+    await pool.query(
+      `
+        UPDATE tts_generation_jobs
+        SET
+          provider_attempt_count = $2,
+          provider_next_attempt_at = NULL,
+          provider_last_error = $3,
+          updated_at = NOW()
+        WHERE id = $1
+      `,
+      [job.id, failedAttemptCount, providerError.slice(0, 1_000)],
+    );
+    return false;
+  }
+
+  const delayMs = getProviderRetryDelayMs(failedAttemptCount, config);
+  const result = await pool.query<TtsGenerationJobRecord>(
+    `
+      UPDATE tts_generation_jobs
+      SET
+        status = CASE
+          WHEN status = 'preview_processing' THEN 'preview_queued'
+          ELSE 'queued'
+        END,
+        processing_stage = 'retrying_provider',
+        provider_attempt_count = $2,
+        provider_next_attempt_at = NOW() + ($3 * INTERVAL '1 millisecond'),
+        provider_last_error = $4,
+        error_message = NULL,
+        updated_at = NOW()
+      WHERE id = $1
+        AND status IN ('processing', 'preview_processing')
+      RETURNING *
+    `,
+    [job.id, failedAttemptCount, delayMs, providerError.slice(0, 1_000)],
+  );
+
+  return Boolean(result.rows[0]);
+}
+
+async function handleJobProcessingFailure(job: TtsGenerationJobRecord, error: unknown) {
+  if (isRetryableProviderFailure(error)) {
+    const retryScheduled = await scheduleProviderRetry(job, error);
+
+    if (retryScheduled) {
+      return;
+    }
+
+    await markJobFailed(
+      job.id,
+      'The voice service stayed unavailable after several automatic retries. Please try again later.',
+    );
+    return;
+  }
+
+  await markJobFailed(job.id, safeGenerationFailureMessage());
 }
 
 async function markJobFailed(jobId: number, errorMessage: string) {
@@ -1915,6 +2087,7 @@ async function markJobFailed(jobId: number, errorMessage: string) {
         SET
           status = 'failed',
           processing_stage = 'failed',
+          provider_next_attempt_at = NULL,
           error_message = $2,
           updated_at = NOW()
         WHERE id = $1
@@ -1958,6 +2131,7 @@ async function claimNextQueuedJob() {
         SELECT id, status
         FROM tts_generation_jobs
         WHERE status IN ('queued', 'preview_queued')
+          AND (provider_next_attempt_at IS NULL OR provider_next_attempt_at <= NOW())
         ORDER BY created_at ASC, id ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
@@ -1972,6 +2146,7 @@ async function claimNextQueuedJob() {
           WHEN next_job.status = 'preview_queued' THEN 'preparing_preview'
           ELSE 'starting'
         END,
+        provider_next_attempt_at = NULL,
         error_message = NULL,
         updated_at = NOW()
       FROM next_job
@@ -1998,7 +2173,7 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
       return false;
     }
 
-    const chunkAudio = await generateWavChunk(segment.text, job);
+    const chunkAudio = await generateWavChunk(segment.text, job, index);
 
     if (await isJobCancellationRequested(job.id)) {
       await markJobCancelled(job.id);
@@ -2062,7 +2237,7 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
       userId: job.user_id,
     });
     await removeGeneratedAudioFiles([jobPaths.previewAbsolutePath]);
-    await markJobFailed(job.id, safeGenerationFailureMessage());
+    await handleJobProcessingFailure(job, error);
   } finally {
     await fs.rm(jobPaths.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
   }
@@ -2128,7 +2303,7 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
       userId: job.user_id,
     });
     await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
-    await markJobFailed(job.id, safeGenerationFailureMessage());
+    await handleJobProcessingFailure(job, error);
   } finally {
     await fs.rm(jobPaths.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
   }
@@ -2195,6 +2370,7 @@ async function resetStaleProcessingJobs() {
           WHEN status = 'cancelling' THEN 'cancelled'
           ELSE 'queued'
         END,
+        provider_next_attempt_at = NULL,
         cancelled_at = CASE
           WHEN status = 'cancelling' THEN COALESCE(cancelled_at, NOW())
           ELSE cancelled_at
@@ -2504,6 +2680,9 @@ export async function startTtsGenerationFromPreview(jobId: number, userId: numbe
         SET
           status = 'queued',
           processing_stage = 'queued',
+          provider_attempt_count = 0,
+          provider_next_attempt_at = NULL,
+          provider_last_error = NULL,
           error_message = NULL,
           wav_file = NULL,
           mp3_file = NULL,
@@ -2587,6 +2766,9 @@ export async function retryTtsGenerationJob(jobId: number, userId: number) {
         SET
           status = $3,
           processing_stage = $4,
+          provider_attempt_count = 0,
+          provider_next_attempt_at = NULL,
+          provider_last_error = NULL,
           error_message = NULL,
           wav_file = NULL,
           mp3_file = NULL,

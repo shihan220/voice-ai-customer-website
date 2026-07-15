@@ -121,6 +121,8 @@ type TtsGenerationJob = {
   previewAudioUrl: string | null;
   previewGeneratedAt: string | null;
   processingStage: string | null;
+  providerNextRetryAt: string | null;
+  providerRetryAttempts: number;
   providerVoice: string;
   qualityPreset: TtsQualityPreset;
   sourceName: string | null;
@@ -1824,6 +1826,10 @@ function getActiveJobEstimateSeconds(job: TtsGenerationJob) {
 }
 
 function getStageProgressWindow(job: TtsGenerationJob) {
+  if (job.processingStage === 'retrying_provider') {
+    return { max: 24, min: 18 };
+  }
+
   if (job.status === 'queued' || job.status === 'preview_queued') {
     return { max: 15, min: 5 };
   }
@@ -1848,6 +1854,10 @@ function getStageProgressWindow(job: TtsGenerationJob) {
 }
 
 function getFriendlyProcessingStage(job: TtsGenerationJob) {
+  if (job.processingStage === 'retrying_provider') {
+    return 'Voice service reconnecting automatically';
+  }
+
   if (job.status === 'queued') {
     return 'Waiting for processing to start';
   }
@@ -1901,7 +1911,18 @@ function getActiveJobProgress(job: TtsGenerationJob, nowMs: number) {
 function ActiveTtsJobProgress({ job, nowMs }: { job: TtsGenerationJob; nowMs: number }) {
   const progress = getActiveJobProgress(job, nowMs);
   const stageLabel = getFriendlyProcessingStage(job);
-  const phaseLabel = isPreviewTtsJob(job) ? 'Free preview' : job.status === 'cancelling' ? 'Stopping job' : 'Full audio';
+  const waitingForProvider = job.processingStage === 'retrying_provider';
+  const providerRetryAtMs = job.providerNextRetryAt ? new Date(job.providerNextRetryAt).getTime() : Number.NaN;
+  const providerRetrySeconds = Number.isFinite(providerRetryAtMs)
+    ? Math.max(0, Math.ceil((providerRetryAtMs - nowMs) / 1_000))
+    : 0;
+  const phaseLabel = waitingForProvider
+    ? 'Automatic retry'
+    : isPreviewTtsJob(job)
+      ? 'Free preview'
+      : job.status === 'cancelling'
+        ? 'Stopping job'
+        : 'Full audio';
 
   return (
     <div className="mt-4 rounded-2xl border border-[#eadfce] bg-white/75 p-4">
@@ -1915,7 +1936,9 @@ function ActiveTtsJobProgress({ job, nowMs }: { job: TtsGenerationJob; nowMs: nu
             <span className="text-sm font-semibold text-[#2f343b]">{stageLabel}</span>
           </div>
           <div className="mt-2 text-xs leading-5 text-[#746960]">
-            {progress.isOverEstimate
+            {waitingForProvider
+              ? `The voice server is temporarily unavailable. Attempt ${job.providerRetryAttempts + 1} will start automatically${providerRetrySeconds > 0 ? ` in ${formatCountdown(providerRetrySeconds)}` : ' shortly'}. You do not need to submit again.`
+              : progress.isOverEstimate
               ? 'This is past the estimate, but it is still actively processing. Large text and provider response time can extend the wait.'
               : `Estimated finish in ${formatCountdown(progress.remainingSeconds)}. The page refreshes this job automatically.`}
           </div>
@@ -1926,14 +1949,18 @@ function ActiveTtsJobProgress({ job, nowMs }: { job: TtsGenerationJob; nowMs: nu
             <div>Elapsed</div>
           </div>
           <div>
-            <div className="font-semibold text-[#2f343b]">{formatCountdown(progress.estimatedSeconds)}</div>
-            <div>Estimate</div>
+            <div className="font-semibold text-[#2f343b]">
+              {waitingForProvider ? job.providerRetryAttempts + 1 : formatCountdown(progress.estimatedSeconds)}
+            </div>
+            <div>{waitingForProvider ? 'Next attempt' : 'Estimate'}</div>
           </div>
           <div>
             <div className="font-semibold text-[#2f343b]">
-              {progress.isOverEstimate ? 'Still working' : formatCountdown(progress.remainingSeconds)}
+              {waitingForProvider
+                ? providerRetrySeconds > 0 ? formatCountdown(providerRetrySeconds) : 'Starting'
+                : progress.isOverEstimate ? 'Still working' : formatCountdown(progress.remainingSeconds)}
             </div>
-            <div>Remaining</div>
+            <div>{waitingForProvider ? 'Until retry' : 'Remaining'}</div>
           </div>
         </div>
       </div>

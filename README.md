@@ -90,10 +90,15 @@ Required environment variables are documented in `.env.example`. The main ones a
 - `KEYPILLAR_TTS_VOICE_PROFILES_ENDPOINT`
 - `KEYPILLAR_TTS_VOICE_PROFILES_API_URL` (optional override)
 - `KEYPILLAR_TTS_REQUEST_TIMEOUT_MS` (optional, defaults to `180000`)
+- `TTS_PROVIDER_RETRY_MAX_ATTEMPTS` (optional, defaults to `6` total attempts)
+- `TTS_PROVIDER_RETRY_BASE_DELAY_MS` (optional, defaults to `30000`)
+- `TTS_PROVIDER_RETRY_MAX_DELAY_MS` (optional, defaults to `300000`)
 - `FFMPEG_PATH`
 - `TTS_CHUNK_MAX_CHARS`
 - `TTS_CUSTOM_VOICE_CHUNK_MAX_CHARS`
 - `TTS_MAX_ACTIVE_VOICE_PROFILES`
+
+Temporary Keypillar connection failures are persisted and retried automatically. With the defaults, jobs wait approximately 12.5 minutes across six attempts before becoming failed; retry scheduling survives a website process restart.
 
 Optional integrations:
 

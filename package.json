@@ -17,6 +17,7 @@
     "verify:db:fresh": "tsx backend/scripts/verify-fresh-db.ts",
     "verify:local:runtime": "tsx backend/scripts/verify-local-runtime.ts",
     "verify:local:tts": "tsx backend/scripts/verify-local-tts.ts",
+    "verify:provider-retry": "tsx backend/scripts/verify-provider-retry.ts",
     "db:import:voices": "tsx backend/scripts/import-voices.ts",
     "db:seed:voices": "tsx backend/scripts/seed-voices.ts"
   },

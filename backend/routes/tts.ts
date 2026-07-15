@@ -232,6 +232,8 @@ function toTtsJobPayload(job: TtsGenerationJobRecord, options?: { includeInputTe
     previewAudioUrl: job.preview_file ? `/api/tts/jobs/${job.id}/preview` : null,
     previewGeneratedAt: job.preview_generated_at,
     processingStage: job.processing_stage,
+    providerNextRetryAt: job.provider_next_attempt_at,
+    providerRetryAttempts: Number(job.provider_attempt_count ?? 0),
     providerVoice: job.provider_voice,
     qualityPreset: job.quality_preset,
     voiceDisplayName: job.voice_display_name,
