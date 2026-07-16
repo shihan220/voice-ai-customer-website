@@ -73,6 +73,52 @@ function isProviderVoiceProfileUnavailableError(error: unknown) {
   return enrichedError.statusCode === 503 && enrichedError.publicMessage === providerUnavailablePublicMessage;
 }
 
+const referenceQualityIssueMessages: Record<string, string> = {
+  reference_audio_excessive_leading_silence: 'remove the long silence before speaking',
+  reference_audio_excessive_trailing_silence: 'remove the long silence after speaking',
+  reference_audio_likely_clipping: 'lower the microphone level because the audio is clipping',
+  reference_audio_low_loudness: 'speak closer to the microphone because the recording is too quiet',
+  reference_audio_no_usable_signal: 'record clear audible speech',
+  reference_audio_sample_rate_too_low: 'record with a higher-quality microphone or browser',
+  reference_audio_too_long: 'keep the recording at 5 minutes or shorter',
+  reference_audio_too_much_silence: 'reduce silence and keep speaking naturally throughout the sample',
+  reference_audio_too_short: 'record at least 2 minutes of speech',
+};
+
+function getProviderVoiceProfileValidationMessage(statusCode: number, responseBody: string) {
+  if (statusCode === 413) {
+    return 'The reference recording is too large for the Keypillar voice service. Keep it between 2 and 5 minutes and try again.';
+  }
+
+  try {
+    const payload = JSON.parse(responseBody) as {
+      error?: unknown;
+      reference_quality?: {
+        blocking_issues?: unknown;
+      };
+    };
+
+    if (payload.error === 'reference_audio_quality_failed') {
+      const blockingIssues = Array.isArray(payload.reference_quality?.blocking_issues)
+        ? payload.reference_quality.blocking_issues
+          .filter((issue): issue is string => typeof issue === 'string')
+          .map((issue) => referenceQualityIssueMessages[issue])
+          .filter((message): message is string => Boolean(message))
+        : [];
+
+      if (blockingIssues.length > 0) {
+        return `The reference recording did not pass quality checks: ${blockingIssues.join('; ')}. Re-record it and try again.`;
+      }
+
+      return 'The reference recording did not pass Keypillar quality checks. Re-record clear speech in a quiet room and try again.';
+    }
+  } catch {
+    // The provider can return plain text for proxy and infrastructure errors.
+  }
+
+  return 'Keypillar rejected the reference recording. Check that it is a clear 2 to 5 minute WAV matching the displayed script.';
+}
+
 function wait(milliseconds: number) {
   return new Promise((resolve) => {
     setTimeout(resolve, milliseconds);
@@ -768,13 +814,22 @@ async function createProviderVoiceProfile(input: {
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');
-    if (isCloudflareOriginUnavailable(response.status, errorBody)) {
+    if (response.status >= 500 || isCloudflareOriginUnavailable(response.status, errorBody)) {
       throw withStatus(
         `Keypillar voice profile API unavailable with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
         503,
         providerUnavailablePublicMessage,
       );
     }
+
+    if (response.status >= 400 && response.status < 500) {
+      throw withStatus(
+        `Keypillar voice profile request rejected with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 500)}` : '.'}`,
+        400,
+        getProviderVoiceProfileValidationMessage(response.status, errorBody),
+      );
+    }
+
     throw withStatus(
       `Keypillar voice profile request failed with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
       502,
@@ -1048,7 +1103,6 @@ export async function createTtsVoiceProfile(input: {
 }) {
   const displayName = normalizeProfileName(input.displayName);
   const referenceText = normalizeReferenceText(input.referenceText);
-  const normalizedReference = await normalizeReferenceAudio(input.audioBuffer);
   const config = getVoiceProfileConfig();
 
   const preflightResult = await pool.query<{ count: string }>(
@@ -1065,6 +1119,8 @@ export async function createTtsVoiceProfile(input: {
   if (currentActiveCount >= config.maxActiveProfiles) {
     throw withStatus(`You can keep up to ${config.maxActiveProfiles} active custom voices. Deactivate one before creating another.`, 409);
   }
+
+  const normalizedReference = await normalizeReferenceAudio(input.audioBuffer);
 
   let providerProfileId: string | null = null;
   let providerSyncStatus: ProviderSyncStatus = 'ready';
@@ -1324,7 +1380,7 @@ export async function generateTtsVoiceProfileTestPreview(profileId: number, user
   const previewAudio = await generateProviderTestPreview({
     providerVoiceProfileId: profile.provider_profile_id,
   });
-  const metadata = await inspectReferenceWav(previewAudio);
+  const metadata = await inspectReferenceWav(previewAudio, { enforceDurationLimits: false });
 
   await fs.mkdir(profilePaths.profileDirectory, { recursive: true });
   await fs.writeFile(profilePaths.testPreviewAbsolutePath, previewAudio);

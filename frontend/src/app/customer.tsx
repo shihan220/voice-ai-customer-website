@@ -1613,10 +1613,10 @@ type VoiceScriptMode = 'custom' | 'recommended';
 
 type VoiceRecordingSession = {
   audioContext: AudioContext;
+  capturedSamples: number;
   chunks: Float32Array[];
   processor: ScriptProcessorNode;
   source: MediaStreamAudioSourceNode;
-  startedAt: number;
   stopTimer: number | null;
   stream: MediaStream;
 };
@@ -1625,6 +1625,23 @@ type WindowWithWebkitAudioContext = Window &
   typeof globalThis & {
     webkitAudioContext?: typeof AudioContext;
   };
+
+function canRetryWithBasicMicrophoneConstraints(error: unknown) {
+  return error instanceof DOMException
+    && (error.name === 'OverconstrainedError' || error.name === 'NotSupportedError');
+}
+
+function getMicrophoneErrorMessage(error: unknown) {
+  if (error instanceof DOMException && error.name === 'NotAllowedError') {
+    return 'Microphone access was not allowed. Enable microphone permission for this site and try again.';
+  }
+
+  if (error instanceof DOMException && error.name === 'NotFoundError') {
+    return 'No microphone was found. Connect a microphone and try again.';
+  }
+
+  return error instanceof Error ? error.message : 'Unable to start microphone recording.';
+}
 
 function countWordsForDashboardPreview(value: string) {
   const trimmed = value.trim();
@@ -2232,7 +2249,11 @@ export function CustomerDashboardPage({
     setVoiceRecordingState('idle');
     setVoiceRecordingSeconds(0);
 
-    const samples = mergeAudioChunks(session.chunks);
+    const mergedSamples = mergeAudioChunks(session.chunks);
+    const maxSampleCount = Math.floor(session.audioContext.sampleRate * voiceProfileLimits.maxAudioSeconds);
+    const samples = mergedSamples.length > maxSampleCount
+      ? mergedSamples.subarray(0, maxSampleCount)
+      : mergedSamples;
     const durationSeconds = samples.length / session.audioContext.sampleRate;
 
     if (durationSeconds < voiceProfileLimits.minAudioSeconds) {
@@ -2251,7 +2272,12 @@ export function CustomerDashboardPage({
     setVoiceFileResetKey((current) => current + 1);
     setVoiceActionError('');
     setVoiceActionMessage(`Recorded ${formatDuration(durationSeconds)} reference WAV. Create the profile when the reference text matches this recording.`);
-  }, [cleanupVoiceRecordingSession, setRecordedReferenceUrl, voiceProfileLimits.minAudioSeconds]);
+  }, [
+    cleanupVoiceRecordingSession,
+    setRecordedReferenceUrl,
+    voiceProfileLimits.maxAudioSeconds,
+    voiceProfileLimits.minAudioSeconds,
+  ]);
 
   const startVoiceRecording = useCallback(async () => {
     if (!canCreateMoreVoiceProfiles || voiceSubmitting) {
@@ -2286,7 +2312,11 @@ export function CustomerDashboardPage({
             noiseSuppression: false,
           },
         });
-      } catch {
+      } catch (rawMicrophoneError) {
+        if (!canRetryWithBasicMicrophoneConstraints(rawMicrophoneError)) {
+          throw rawMicrophoneError;
+        }
+
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         setVoiceActionMessage('This browser could not provide raw microphone input. Record in a quiet room and keep headphones or speakers silent.');
       }
@@ -2295,16 +2325,18 @@ export function CustomerDashboardPage({
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
       const session: VoiceRecordingSession = {
         audioContext,
+        capturedSamples: 0,
         chunks: [],
         processor,
         source,
-        startedAt: Date.now(),
         stopTimer: null,
         stream,
       };
 
       processor.onaudioprocess = (event) => {
-        session.chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+        const chunk = new Float32Array(event.inputBuffer.getChannelData(0));
+        session.chunks.push(chunk);
+        session.capturedSamples += chunk.length;
         event.outputBuffer.getChannelData(0).fill(0);
       };
 
@@ -2319,7 +2351,7 @@ export function CustomerDashboardPage({
       setVoiceRecordingState('recording');
     } catch (nextError) {
       discardVoiceRecording();
-      setVoiceActionError(nextError instanceof Error ? nextError.message : 'Unable to start microphone recording.');
+      setVoiceActionError(getMicrophoneErrorMessage(nextError));
     }
   }, [
     canCreateMoreVoiceProfiles,
@@ -2361,7 +2393,7 @@ export function CustomerDashboardPage({
 
     const timer = window.setInterval(() => {
       const session = voiceRecordingRef.current;
-      setVoiceRecordingSeconds(session ? Math.floor((Date.now() - session.startedAt) / 1000) : 0);
+      setVoiceRecordingSeconds(session ? Math.floor(session.capturedSamples / session.audioContext.sampleRate) : 0);
     }, 250);
 
     return () => window.clearInterval(timer);
