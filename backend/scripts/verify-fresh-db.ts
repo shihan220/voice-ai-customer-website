@@ -7,6 +7,10 @@ if (!process.env.DATABASE_URL?.trim()) {
 
 const { ensureSchema, pool } = await import('../db.ts');
 const {
+  isCustomerEmailVerificationRequired,
+  isCustomerPhoneVerificationRequired,
+} = await import('../core.ts');
+const {
   deactivateTtsVoiceProfile,
 } = await import('../services/tts-voice-profiles.ts');
 const {
@@ -23,6 +27,12 @@ function assertStatusCode(error: unknown, expectedStatusCode: number, label: str
 
   if (actualStatusCode !== expectedStatusCode) {
     throw new Error(`${label} returned ${String(actualStatusCode)} instead of ${expectedStatusCode}.`);
+  }
+}
+
+function assertVerificationDefaults() {
+  if (isCustomerEmailVerificationRequired() || isCustomerPhoneVerificationRequired()) {
+    throw new Error('Customer verification must remain disabled by default until delivery providers are configured.');
   }
 }
 
@@ -363,6 +373,7 @@ async function assertStarterExtraTokenPaymentBlocked() {
 
 try {
   await ensureSchema();
+  assertVerificationDefaults();
   await assertStarterAllowance();
   await assertVoiceProfileSchema();
   await assertPendingVoiceProfileInsert();

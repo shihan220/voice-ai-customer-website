@@ -2921,10 +2921,12 @@ export function CustomerDashboardPage({
             <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
               <div className="space-y-4">
                 <div>
-                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]" htmlFor="tts-source-name">
                     {sourceType === 'text' ? 'Title' : 'Title (optional)'}
                   </label>
                   <TextInput
+                    aria-label={sourceType === 'text' ? 'Title' : 'Title (optional)'}
+                    id="tts-source-name"
                     placeholder={sourceType === 'text' ? 'Example: June campaign narration' : 'Optional title override'}
                     value={sourceName}
                     onChange={(event) => setSourceName(event.target.value)}
@@ -2933,8 +2935,10 @@ export function CustomerDashboardPage({
 
                 {sourceType === 'text' ? (
                   <div>
-                    <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Text to generate</label>
+                    <label className="mb-2 block text-sm font-semibold text-[#4f4740]" htmlFor="tts-input-text">Text to generate</label>
                     <TextArea
+                      aria-label="Text to generate"
+                      id="tts-input-text"
                       placeholder="Paste Bangla text here"
                       value={textInput}
                       onChange={(event) => setTextInput(event.target.value)}
@@ -2942,8 +2946,10 @@ export function CustomerDashboardPage({
                   </div>
                 ) : (
                   <div>
-                    <label className="mb-2 block text-sm font-semibold text-[#4f4740]">PDF file</label>
+                    <label className="mb-2 block text-sm font-semibold text-[#4f4740]" htmlFor="tts-pdf-file">PDF file</label>
                     <input
+                      aria-label="PDF file"
+                      id="tts-pdf-file"
                       key={pdfResetKey}
                       accept="application/pdf,.pdf"
                       className={textInputClassName}
@@ -2957,8 +2963,9 @@ export function CustomerDashboardPage({
                 )}
 
                 <div>
-                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Voice</label>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]" htmlFor="tts-voice-profile">Voice</label>
                   <select
+                    id="tts-voice-profile"
                     className={textInputClassName}
                     value={selectedVoiceProfileId}
                     onChange={(event) => setSelectedVoiceProfileId(event.target.value)}
@@ -2981,8 +2988,9 @@ export function CustomerDashboardPage({
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Download quality</label>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]" htmlFor="tts-quality-preset">Download quality</label>
                   <select
+                    id="tts-quality-preset"
                     className={textInputClassName}
                     value={qualityPreset}
                     onChange={(event) => setQualityPreset(event.target.value as TtsQualityPreset)}
@@ -3318,7 +3326,7 @@ export function CustomerDashboardPage({
                       <div className="text-xs leading-5 text-[#6f645c]">Choose a clear, single-speaker Bangla recording from your device or microphone.</div>
                     </div>
                   </div>
-                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Reference WAV</label>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]" htmlFor="voice-reference-wav">Reference WAV</label>
                   <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[#d8cbbe] bg-white p-1">
                     <button
                       className={cx(
@@ -3353,6 +3361,8 @@ export function CustomerDashboardPage({
                   {voiceReferenceMode === 'upload' ? (
                     <div className="mt-3">
                       <input
+                        aria-label="Reference WAV"
+                        id="voice-reference-wav"
                         key={voiceFileResetKey}
                         accept="audio/wav,audio/x-wav,.wav"
                         className={textInputClassName}
@@ -3456,8 +3466,10 @@ export function CustomerDashboardPage({
                       </div>
                     </div>
                   </div>
-                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Voice name</label>
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]" htmlFor="voice-profile-name">Voice name</label>
                   <TextInput
+                    aria-label="Voice name"
+                    id="voice-profile-name"
                     disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
                     placeholder="Example: Tanim narration"
                     value={voiceForm.name}
@@ -3482,7 +3494,12 @@ export function CustomerDashboardPage({
                     </div>
                   </div>
                   <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <label className="block text-sm font-semibold text-[#4f4740]">Reference script</label>
+                    <label
+                      className="block text-sm font-semibold text-[#4f4740]"
+                      htmlFor={voiceScriptMode === 'custom' ? 'voice-reference-script' : undefined}
+                    >
+                      Reference script
+                    </label>
                     <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[#d8cbbe] bg-white p-1 sm:min-w-[360px]">
                       <button
                         className={cx(
@@ -3533,6 +3550,8 @@ export function CustomerDashboardPage({
                   ) : (
                     <div>
                       <TextArea
+                        aria-label="Reference script"
+                        id="voice-reference-script"
                         className="min-h-[170px]"
                         disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
                         placeholder="Paste the exact text spoken in the reference WAV"
@@ -4502,7 +4521,7 @@ export function CustomerAccountPage({
                     />
                   </div>
                   <InlineMessage>
-                    Changing email or contact number will require verification again.
+                    Contact changes are saved immediately while email and phone verification are disabled.
                   </InlineMessage>
                   {profileError ? <InlineMessage tone="error">{profileError}</InlineMessage> : null}
                   <div className="flex flex-wrap gap-3">

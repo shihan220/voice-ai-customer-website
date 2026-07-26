@@ -107,11 +107,11 @@ function readBooleanEnv(name: string, fallback: boolean) {
 }
 
 export function isCustomerEmailVerificationRequired() {
-  return readBooleanEnv('CUSTOMER_EMAIL_VERIFICATION_REQUIRED', true);
+  return readBooleanEnv('CUSTOMER_EMAIL_VERIFICATION_REQUIRED', false);
 }
 
 export function isCustomerPhoneVerificationRequired() {
-  return readBooleanEnv('CUSTOMER_PHONE_VERIFICATION_REQUIRED', true);
+  return readBooleanEnv('CUSTOMER_PHONE_VERIFICATION_REQUIRED', false);
 }
 
 export function isCustomerEmailVerified(user: Pick<UserRecord, 'email_verified_at'>) {

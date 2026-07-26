@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool, type SampleRequestRecord, type VoiceCardRecord } from '../db.ts';
 import { defaultVoiceCards } from '../default-voice-cards.ts';
 import {
+  createJsonRateLimiter,
   isValidEmail,
   normalizeText,
   requireText,
@@ -11,6 +12,12 @@ import {
 
 const publicSiteUrl = 'https://banglaspeechai.com';
 const sitemapLastModified = new Date().toISOString();
+const sampleRequestLimiter = createJsonRateLimiter({
+  maxDevelopment: 40,
+  maxProduction: 8,
+  message: 'Too many sample requests. Please try again later.',
+  windowMs: 15 * 60 * 1000,
+});
 
 export function createPublicRouter() {
   const router = Router();
@@ -44,9 +51,10 @@ export function createPublicRouter() {
       await pool.query('SELECT 1');
       res.json({ database: 'connected', ok: true });
     } catch (error) {
+      console.error('Public health check failed.', { error });
       res.status(503).json({
         database: 'unavailable',
-        message: error instanceof Error ? error.message : 'Unknown database error',
+        message: 'Database unavailable.',
         ok: false,
       });
     }
@@ -68,14 +76,14 @@ export function createPublicRouter() {
         voices: voiceCards.map(toVoiceResponse),
       });
     } catch (error) {
+      console.error('Failed to load public voice cards.', { error });
       res.status(500).json({
         error: 'Failed to load voice cards',
-        message: error instanceof Error ? error.message : 'Unknown database error',
       });
     }
   });
 
-  router.post('/api/sample-requests', async (req, res) => {
+  router.post('/api/sample-requests', sampleRequestLimiter, async (req, res) => {
     try {
       const clientName = requireText(req.body.clientName ?? req.body.full_name, 'Client name is required.');
       const email = requireText(req.body.email ?? req.body.work_email, 'Email is required.');
@@ -121,9 +129,18 @@ export function createPublicRouter() {
         request: toSampleRequestResponse(result.rows[0]),
       });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to save sample request.',
-      });
+      const validationMessage = error instanceof Error
+        && (error.message === 'Client name is required.' || error.message === 'Email is required.')
+        ? error.message
+        : null;
+
+      if (validationMessage) {
+        res.status(400).json({ error: validationMessage });
+        return;
+      }
+
+      console.error('Failed to save public sample request.', { error });
+      res.status(500).json({ error: 'Failed to save sample request.' });
     }
   });
 

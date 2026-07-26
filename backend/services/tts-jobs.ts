@@ -2577,9 +2577,26 @@ async function createQueuedTtsGenerationJob(
           provider_voice,
           voice_profile_id,
           voice_display_name,
-          provider_voice_profile_id
+          provider_voice_profile_id,
+          full_generation_requested_at
         )
-        VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          0,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          CASE WHEN $8 = 'queued' THEN NOW() ELSE NULL END
+        )
         RETURNING *
       `,
       [

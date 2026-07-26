@@ -102,7 +102,7 @@ Temporary Keypillar connection failures are persisted and retried automatically.
 
 Optional integrations:
 
-- `CUSTOMER_EMAIL_VERIFICATION_REQUIRED` and `CUSTOMER_PHONE_VERIFICATION_REQUIRED` (`true` by default; set `false` to skip that verification gate temporarily)
+- `CUSTOMER_EMAIL_VERIFICATION_REQUIRED` and `CUSTOMER_PHONE_VERIFICATION_REQUIRED` (`false` by default for the current launch; set either flag to `true` only after its delivery provider is configured)
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`
 - `STRIPE_SECRET_KEY` and related Stripe price/webhook variables
