@@ -3314,104 +3314,8 @@ export function CustomerDashboardPage({
                   <div className="mb-4 flex items-center gap-3">
                     <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">1</span>
                     <div>
-                      <div className="text-sm font-semibold text-[#2f343b]">Read this script aloud</div>
-                      <div className="text-xs leading-5 text-[#6f645c]">Record the exact words shown here so the reference text matches the audio.</div>
-                    </div>
-                  </div>
-                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Voice name</label>
-                  <TextInput
-                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
-                    placeholder="Example: Tanim narration"
-                    value={voiceForm.name}
-                    onChange={(event) => setVoiceForm((current) => ({ ...current, name: event.target.value }))}
-                  />
-                  <div className="mt-4">
-                    <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <label className="block text-sm font-semibold text-[#4f4740]">Reference script</label>
-                      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[#d8cbbe] bg-white p-1 sm:min-w-[360px]">
-                        <button
-                          className={cx(
-                            'inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-xs font-semibold transition sm:text-sm',
-                            voiceScriptMode === 'recommended'
-                              ? 'bg-[#ae6c4a] text-[#f8f3ec]'
-                              : 'text-[#5a514a] hover:bg-[#f8f3ec]',
-                          )}
-                          disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
-                          onClick={() => handleVoiceScriptModeChange('recommended')}
-                          type="button"
-                        >
-                          Recommended script
-                        </button>
-                        <button
-                          className={cx(
-                            'inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-xs font-semibold transition sm:text-sm',
-                            voiceScriptMode === 'custom'
-                              ? 'bg-[#ae6c4a] text-[#f8f3ec]'
-                              : 'text-[#5a514a] hover:bg-[#f8f3ec]',
-                          )}
-                          disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
-                          onClick={() => handleVoiceScriptModeChange('custom')}
-                          type="button"
-                        >
-                          Use my own script
-                        </button>
-                      </div>
-                    </div>
-
-                    {voiceScriptMode === 'recommended' ? (
-                      <div className="rounded-2xl border border-[#ddcfbe] bg-[#fffaf4] p-4">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="text-sm font-semibold text-[#2f343b]">Read this Bangla script naturally</div>
-                          <span className="w-fit rounded-full border border-[#ddcfbe] bg-white px-3 py-1 text-xs font-semibold text-[#8d5d45]">
-                            Around 2 to 3 minutes
-                          </span>
-                        </div>
-                        <p className="mt-3 whitespace-pre-wrap text-base leading-8 text-[#3d3935]" lang="bn">
-                          {recommendedVoiceReferenceScript}
-                        </p>
-                        <div className="mt-4 grid gap-2 text-xs font-semibold text-[#6f645c] sm:grid-cols-3">
-                          <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">Read in your natural voice</span>
-                          <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">Keep the room quiet</span>
-                          <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">No music, echo, or noise</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div>
-                        <TextArea
-                          className="min-h-[170px]"
-                          disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
-                          placeholder="Paste the exact text spoken in the reference WAV"
-                          value={voiceForm.referenceText}
-                          onChange={(event) => {
-                            setCustomScriptConfirmed(false);
-                            setVoiceForm((current) => ({ ...current, referenceText: event.target.value }));
-                          }}
-                        />
-                        <div className="mt-3">
-                          <InlineMessage>
-                            Make sure the uploaded or recorded WAV says exactly this text. Mismatched text can reduce custom voice quality.
-                          </InlineMessage>
-                        </div>
-                        <label className="mt-3 flex items-start gap-3 rounded-2xl border border-[#eadfce] bg-white/80 px-4 py-3 text-sm font-semibold leading-6 text-[#4f4740]">
-                          <input
-                            checked={customScriptConfirmed}
-                            className="mt-1"
-                            disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
-                            type="checkbox"
-                            onChange={(event) => setCustomScriptConfirmed(event.target.checked)}
-                          />
-                          I confirm the WAV says exactly this custom script.
-                        </label>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">
-                  <div className="mb-4 flex items-center gap-3">
-                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">2</span>
-                    <div>
                       <div className="text-sm font-semibold text-[#2f343b]">Upload or record the WAV</div>
-                      <div className="text-xs leading-5 text-[#6f645c]">Read the selected script in a clear, single-speaker Bangla recording.</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">Choose a clear, single-speaker Bangla recording from your device or microphone.</div>
                     </div>
                   </div>
                   <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Reference WAV</label>
@@ -3544,24 +3448,121 @@ export function CustomerDashboardPage({
                 </div>
                 <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">
                   <div className="mb-4 flex items-center gap-3">
-                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">3</span>
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">2</span>
                     <div>
                       <div className="text-sm font-semibold text-[#2f343b]">Save the custom voice</div>
                       <div className="text-xs leading-5 text-[#6f645c]">
-                        The voice becomes selectable after the provider profile is active. If the provider is down, the reference WAV is saved here for retry.
+                        Give this recording a recognizable name and choose whether it should be selected by default.
                       </div>
                     </div>
                   </div>
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <label className="flex items-center gap-3 text-sm font-semibold text-[#4f4740]">
-                      <input
-                        checked={voiceForm.setDefault}
-                        disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
-                        type="checkbox"
-                        onChange={(event) => setVoiceForm((current) => ({ ...current, setDefault: event.target.checked }))}
+                  <label className="mb-2 block text-sm font-semibold text-[#4f4740]">Voice name</label>
+                  <TextInput
+                    disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                    placeholder="Example: Tanim narration"
+                    value={voiceForm.name}
+                    onChange={(event) => setVoiceForm((current) => ({ ...current, name: event.target.value }))}
+                  />
+                  <label className="mt-4 flex items-center gap-3 rounded-2xl border border-[#eadfce] bg-white/80 px-4 py-3 text-sm font-semibold text-[#4f4740]">
+                    <input
+                      checked={voiceForm.setDefault}
+                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
+                      type="checkbox"
+                      onChange={(event) => setVoiceForm((current) => ({ ...current, setDefault: event.target.checked }))}
+                    />
+                    Set as my default custom voice
+                  </label>
+                </div>
+                <div className="rounded-2xl border border-[#eadfce] bg-white/70 p-4">
+                  <div className="mb-4 flex items-center gap-3">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#ae6c4a] text-sm font-bold text-[#f8f3ec]">3</span>
+                    <div>
+                      <div className="text-sm font-semibold text-[#2f343b]">Read this script aloud</div>
+                      <div className="text-xs leading-5 text-[#6f645c]">Confirm the exact words spoken in the recording before creating the voice.</div>
+                    </div>
+                  </div>
+                  <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <label className="block text-sm font-semibold text-[#4f4740]">Reference script</label>
+                    <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[#d8cbbe] bg-white p-1 sm:min-w-[360px]">
+                      <button
+                        className={cx(
+                          'inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-xs font-semibold transition sm:text-sm',
+                          voiceScriptMode === 'recommended'
+                            ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+                            : 'text-[#5a514a] hover:bg-[#f8f3ec]',
+                        )}
+                        disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                        onClick={() => handleVoiceScriptModeChange('recommended')}
+                        type="button"
+                      >
+                        Recommended script
+                      </button>
+                      <button
+                        className={cx(
+                          'inline-flex min-h-10 items-center justify-center rounded-xl px-3 text-xs font-semibold transition sm:text-sm',
+                          voiceScriptMode === 'custom'
+                            ? 'bg-[#ae6c4a] text-[#f8f3ec]'
+                            : 'text-[#5a514a] hover:bg-[#f8f3ec]',
+                        )}
+                        disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                        onClick={() => handleVoiceScriptModeChange('custom')}
+                        type="button"
+                      >
+                        Use my own script
+                      </button>
+                    </div>
+                  </div>
+
+                  {voiceScriptMode === 'recommended' ? (
+                    <div className="rounded-2xl border border-[#ddcfbe] bg-[#fffaf4] p-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="text-sm font-semibold text-[#2f343b]">Read this Bangla script naturally</div>
+                        <span className="w-fit rounded-full border border-[#ddcfbe] bg-white px-3 py-1 text-xs font-semibold text-[#8d5d45]">
+                          Around 2 to 3 minutes
+                        </span>
+                      </div>
+                      <p className="mt-3 whitespace-pre-wrap text-base leading-8 text-[#3d3935]" lang="bn">
+                        {recommendedVoiceReferenceScript}
+                      </p>
+                      <div className="mt-4 grid gap-2 text-xs font-semibold text-[#6f645c] sm:grid-cols-3">
+                        <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">Read in your natural voice</span>
+                        <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">Keep the room quiet</span>
+                        <span className="rounded-full border border-[#eadfce] bg-white px-3 py-2">No music, echo, or noise</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <TextArea
+                        className="min-h-[170px]"
+                        disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                        placeholder="Paste the exact text spoken in the reference WAV"
+                        value={voiceForm.referenceText}
+                        onChange={(event) => {
+                          setCustomScriptConfirmed(false);
+                          setVoiceForm((current) => ({ ...current, referenceText: event.target.value }));
+                        }}
                       />
-                      Set as my default custom voice
-                    </label>
+                      <div className="mt-3">
+                        <InlineMessage>
+                          Make sure the uploaded or recorded WAV says exactly this text. Mismatched text can reduce custom voice quality.
+                        </InlineMessage>
+                      </div>
+                      <label className="mt-3 flex items-start gap-3 rounded-2xl border border-[#eadfce] bg-white/80 px-4 py-3 text-sm font-semibold leading-6 text-[#4f4740]">
+                        <input
+                          checked={customScriptConfirmed}
+                          className="mt-1"
+                          disabled={!canCreateMoreVoiceProfiles || voiceSubmitting}
+                          type="checkbox"
+                          onChange={(event) => setCustomScriptConfirmed(event.target.checked)}
+                        />
+                        I confirm the WAV says exactly this custom script.
+                      </label>
+                    </div>
+                  )}
+                  <div className="mt-5 flex flex-col gap-4 border-t border-[#eadfce] pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="max-w-2xl text-xs leading-5 text-[#6f645c]">
+                      The voice becomes selectable after the provider profile is active. If the provider is unavailable, the reference WAV is saved for retry.
+                    </p>
                     <PrimaryButton
                       className="w-full justify-center sm:w-auto"
                       disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy || (voiceScriptMode === 'custom' && !customScriptConfirmed)}
