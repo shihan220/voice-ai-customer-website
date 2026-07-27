@@ -1,11 +1,12 @@
-import { PDFParse } from 'pdf-parse';
-import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 import type { PoolClient } from 'pg';
 import {
   normalizeText,
+  isCustomerEmailVerified,
+  isCustomerPhoneVerified,
   privateMediaRoot,
   ttsJobsMediaDirectory,
 } from '../core.ts';
@@ -19,6 +20,21 @@ import {
   type TtsPronunciationRuleRecord,
   type UserRecord,
 } from '../db.ts';
+import {
+  resolveTtsVoiceSelectionForUser,
+} from './tts-voice-profiles.ts';
+import {
+  assertAndRecordTtsProviderUsage,
+  readBoundedIntegerEnv,
+} from './tts-provider-usage.ts';
+import {
+  fetchSafeProviderAudio,
+  readResponseBufferWithLimit,
+} from './provider-audio-fetch.ts';
+import {
+  runMediaCommand as runCommand,
+  runMediaCommandForStdout as runCommandForStdout,
+} from './process-runner.ts';
 
 const defaultKeypillarTtsApiUrl = 'https://api.keypillar.org/v1/voice/generate';
 const defaultKeypillarTtsBaseUrl = 'https://api.keypillar.org';
@@ -26,9 +42,21 @@ const defaultKeypillarTtsEndpoint = '/v1/voice/generate';
 const defaultKeypillarTtsFormat = 'wav';
 const defaultKeypillarTtsPronunciationMode = 'english_preserve';
 const defaultKeypillarTtsVoiceId = 'keypillar-bd-female';
+const defaultKeypillarTtsRequestTimeoutMs = 180_000;
+const defaultTtsProviderRetryMaxAttempts = 6;
+const defaultTtsProviderRetryBaseDelayMs = 30_000;
+const defaultTtsProviderRetryMaxDelayMs = 300_000;
 const defaultFfmpegPath = 'ffmpeg';
 const defaultTtsChunkMaxChars = 1_200;
-const maxInputCharacters = 120_000;
+const defaultCustomVoiceChunkMaxChars = defaultTtsChunkMaxChars;
+const defaultCustomVoiceProviderRequestMaxChars = defaultTtsChunkMaxChars;
+const defaultMaxInputCharacters = 30_000;
+const defaultPreviewDailyLimitPerUser = 10;
+const defaultStarterDailyFullGenerationMinutes = 30;
+const defaultPaidDailyFullGenerationMinutes = 600;
+const defaultPdfExtractionTimeoutMs = 20_000;
+const defaultPdfMaxExtractedCharacters = 60_000;
+const defaultPdfMaxConcurrentExtractions = 2;
 const maxActivePreviewJobsPerUser = 2;
 const maxActiveGenerationJobsPerUser = 1;
 const maxActiveTtsJobsPerUser = 3;
@@ -37,7 +65,35 @@ const headingPauseMs = 900;
 const listItemPauseMs = 450;
 const paragraphPauseMs = 800;
 const sentencePauseMs = 340;
+const customVoiceChunkPauseMs = chunkPauseMs;
+const customVoiceHeadingPauseMs = headingPauseMs;
+const customVoiceListItemPauseMs = listItemPauseMs;
+const customVoiceParagraphPauseMs = paragraphPauseMs;
+const customVoiceSentencePauseMs = sentencePauseMs;
+const customVoiceProviderBoundaryPauseMs = chunkPauseMs;
 const previewWordLimit = 85;
+const maxPronunciationMatchLength = 200;
+const maxPronunciationReplacementLength = 500;
+const maxPronunciationNotesLength = 1_000;
+const pdfExtractionTimeoutMs = readBoundedIntegerEnv(
+  'TTS_PDF_EXTRACTION_TIMEOUT_MS',
+  defaultPdfExtractionTimeoutMs,
+  5_000,
+  60_000,
+);
+const pdfMaxExtractedCharacters = readBoundedIntegerEnv(
+  'TTS_PDF_MAX_EXTRACTED_CHARS',
+  defaultPdfMaxExtractedCharacters,
+  30_000,
+  250_000,
+);
+const pdfMaxConcurrentExtractions = readBoundedIntegerEnv(
+  'TTS_PDF_MAX_CONCURRENT_EXTRACTIONS',
+  defaultPdfMaxConcurrentExtractions,
+  1,
+  4,
+);
+let activePdfExtractions = 0;
 
 type SpeechSegment = {
   pauseAfterMs: number;
@@ -52,6 +108,16 @@ type AudioMergePart = {
 type AudioStreamFormat = {
   channels: number;
   sampleRate: number;
+};
+
+type SpeechProfile = {
+  allowClauseFallback: boolean;
+  chunkMaxChars: number;
+  chunkPauseMs: number;
+  headingPauseMs: number;
+  listItemPauseMs: number;
+  paragraphPauseMs: number;
+  sentencePauseMs: number;
 };
 
 const ttsQualityPresets: Record<TtsGenerationQualityPreset, { label: string; mp3BitrateKbps: number | null }> = {
@@ -73,13 +139,24 @@ const ttsQualityPresets: Record<TtsGenerationQualityPreset, { label: string; mp3
   },
 };
 
+const workerLeaderLockKey: [number, number] = [1_264_572_754, 1_414_809_943];
 let workerStarted = false;
+let workerStopping = false;
 let workerRunning = false;
 let workerTimer: NodeJS.Timeout | null = null;
+let workerCyclePromise: Promise<void> | null = null;
+let workerLeaderClient: PoolClient | null = null;
+let workerLeaderErrorHandler: ((error: Error) => void) | null = null;
 
-function withStatus(message: string, statusCode: number) {
+type ServiceError = Error & {
+  providerRetryable?: boolean;
+  statusCode?: number;
+};
+
+function withStatus(message: string, statusCode: number, options?: { providerRetryable?: boolean }) {
   const error = new Error(message);
-  (error as Error & { statusCode?: number }).statusCode = statusCode;
+  (error as ServiceError).statusCode = statusCode;
+  (error as ServiceError).providerRetryable = options?.providerRetryable;
   return error;
 }
 
@@ -101,6 +178,31 @@ function wait(milliseconds: number) {
   });
 }
 
+function normalizeTimeoutMs(value: string | undefined, fallback: number) {
+  const parsed = Number(value ?? fallback);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(5_000, Math.floor(parsed));
+}
+
+function normalizeInteger(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const parsed = Number(value ?? fallback);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(minimum, Math.min(maximum, Math.floor(parsed)));
+}
+
 function getRuntimeConfig() {
   const apiKey = normalizeText(process.env.KEYPILLAR_TTS_API_KEY);
   const configuredApiUrl = normalizeText(process.env.KEYPILLAR_TTS_API_URL);
@@ -113,6 +215,58 @@ function getRuntimeConfig() {
   const voiceId = normalizeText(process.env.KEYPILLAR_TTS_VOICE_ID) ?? defaultKeypillarTtsVoiceId;
   const ffmpegPath = normalizeText(process.env.FFMPEG_PATH) ?? defaultFfmpegPath;
   const configuredChunkMaxChars = Number(process.env.TTS_CHUNK_MAX_CHARS ?? defaultTtsChunkMaxChars);
+  const configuredCustomVoiceChunkMaxChars = Number(
+    process.env.TTS_CUSTOM_VOICE_CHUNK_MAX_CHARS ?? defaultCustomVoiceChunkMaxChars,
+  );
+  const configuredCustomVoiceProviderRequestMaxChars = Number(
+    process.env.TTS_CUSTOM_VOICE_PROVIDER_REQUEST_MAX_CHARS ?? defaultCustomVoiceProviderRequestMaxChars,
+  );
+  const requestTimeoutMs = normalizeTimeoutMs(
+    process.env.KEYPILLAR_TTS_REQUEST_TIMEOUT_MS,
+    defaultKeypillarTtsRequestTimeoutMs,
+  );
+  const providerRetryMaxAttempts = normalizeInteger(
+    process.env.TTS_PROVIDER_RETRY_MAX_ATTEMPTS,
+    defaultTtsProviderRetryMaxAttempts,
+    1,
+    20,
+  );
+  const providerRetryBaseDelayMs = normalizeInteger(
+    process.env.TTS_PROVIDER_RETRY_BASE_DELAY_MS,
+    defaultTtsProviderRetryBaseDelayMs,
+    1_000,
+    600_000,
+  );
+  const providerRetryMaxDelayMs = normalizeInteger(
+    process.env.TTS_PROVIDER_RETRY_MAX_DELAY_MS,
+    defaultTtsProviderRetryMaxDelayMs,
+    providerRetryBaseDelayMs,
+    1_800_000,
+  );
+  const maxInputCharacters = readBoundedIntegerEnv(
+    'TTS_MAX_INPUT_CHARACTERS',
+    defaultMaxInputCharacters,
+    1_000,
+    120_000,
+  );
+  const previewDailyLimitPerUser = readBoundedIntegerEnv(
+    'TTS_PREVIEW_DAILY_LIMIT_PER_USER',
+    defaultPreviewDailyLimitPerUser,
+    1,
+    100,
+  );
+  const starterDailyFullGenerationMinutes = readBoundedIntegerEnv(
+    'TTS_STARTER_DAILY_FULL_GENERATION_MINUTES',
+    defaultStarterDailyFullGenerationMinutes,
+    1,
+    10_000,
+  );
+  const paidDailyFullGenerationMinutes = readBoundedIntegerEnv(
+    'TTS_PAID_DAILY_FULL_GENERATION_MINUTES',
+    defaultPaidDailyFullGenerationMinutes,
+    1,
+    100_000,
+  );
 
   return {
     apiKey,
@@ -120,27 +274,76 @@ function getRuntimeConfig() {
     chunkMaxChars: Number.isFinite(configuredChunkMaxChars) && configuredChunkMaxChars >= 300
       ? Math.floor(configuredChunkMaxChars)
       : defaultTtsChunkMaxChars,
+    customVoiceChunkMaxChars: Number.isFinite(configuredCustomVoiceChunkMaxChars) &&
+      configuredCustomVoiceChunkMaxChars >= 300 &&
+      configuredCustomVoiceChunkMaxChars <= 12_000
+      ? Math.floor(configuredCustomVoiceChunkMaxChars)
+      : defaultCustomVoiceChunkMaxChars,
+    customVoiceProviderRequestMaxChars: Number.isFinite(configuredCustomVoiceProviderRequestMaxChars) &&
+      configuredCustomVoiceProviderRequestMaxChars >= 300 &&
+      configuredCustomVoiceProviderRequestMaxChars <= 12_000
+      ? Math.floor(configuredCustomVoiceProviderRequestMaxChars)
+      : defaultCustomVoiceProviderRequestMaxChars,
     ffmpegPath,
     format,
+    maxInputCharacters,
+    paidDailyFullGenerationMinutes,
     pronunciationMode,
+    previewDailyLimitPerUser,
+    providerRetryBaseDelayMs,
+    providerRetryMaxAttempts,
+    providerRetryMaxDelayMs,
+    requestTimeoutMs,
+    starterDailyFullGenerationMinutes,
     voiceId,
   };
+}
+
+async function fetchWithTimeout(
+  input: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  timeoutMessage: string,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw withStatus(timeoutMessage, 504);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function resolveTtsQualityPreset(value?: string | null) {
   const preset = normalizeText(value) as TtsGenerationQualityPreset | undefined;
 
-  if (preset && preset in ttsQualityPresets) {
+  if (!preset) {
+    return {
+      preset: 'premium_mp3_wav' as const,
+      ...ttsQualityPresets.premium_mp3_wav,
+    };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(ttsQualityPresets, preset)) {
     return {
       preset,
       ...ttsQualityPresets[preset],
     };
   }
 
-  return {
-    preset: 'premium_mp3_wav' as const,
-    ...ttsQualityPresets.premium_mp3_wav,
-  };
+  throw withStatus('Choose a valid download quality.', 400);
 }
 
 function normalizeGenerationText(value: string) {
@@ -154,6 +357,8 @@ function normalizeGenerationText(value: string) {
   if (!normalized) {
     throw withStatus('Text input is required.', 400);
   }
+
+  const maxInputCharacters = getRuntimeConfig().maxInputCharacters;
 
   if (normalized.length > maxInputCharacters) {
     throw withStatus(`Text input must stay under ${maxInputCharacters.toLocaleString()} characters.`, 400);
@@ -215,6 +420,14 @@ function getJobPaths(job: Pick<TtsGenerationJobRecord, 'id' | 'source_name' | 's
   };
 }
 
+function isActiveJobStatus(status: TtsGenerationJobRecord['status']) {
+  return status === 'queued' ||
+    status === 'processing' ||
+    status === 'preview_queued' ||
+    status === 'preview_processing' ||
+    status === 'cancelling';
+}
+
 function splitSegmentByWords(segment: string, maxChars: number) {
   const words = segment.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
@@ -250,31 +463,22 @@ function splitSegmentByWords(segment: string, maxChars: number) {
   return chunks;
 }
 
-function splitSegmentBySentences(segment: string, maxChars: number) {
-  const sentences = segment
-    .split(/(?<=[.!?।])\s+/u)
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  if (sentences.length <= 1) {
-    return splitSegmentByWords(segment, maxChars);
-  }
-
+function combineUnitsIntoChunks(units: string[], maxChars: number) {
   const chunks: string[] = [];
   let current = '';
 
-  for (const sentence of sentences) {
-    if (sentence.length > maxChars) {
+  for (const unit of units) {
+    if (unit.length > maxChars) {
       if (current) {
         chunks.push(current);
         current = '';
       }
 
-      chunks.push(...splitSegmentByWords(sentence, maxChars));
+      chunks.push(...splitSegmentByWords(unit, maxChars));
       continue;
     }
 
-    const next = current ? `${current} ${sentence}` : sentence;
+    const next = current ? `${current} ${unit}` : unit;
 
     if (next.length <= maxChars) {
       current = next;
@@ -284,7 +488,7 @@ function splitSegmentBySentences(segment: string, maxChars: number) {
     if (current) {
       chunks.push(current);
     }
-    current = sentence;
+    current = unit;
   }
 
   if (current) {
@@ -292,6 +496,30 @@ function splitSegmentBySentences(segment: string, maxChars: number) {
   }
 
   return chunks;
+}
+
+function splitSegmentBySentences(segment: string, maxChars: number, allowClauseFallback = false) {
+  const sentenceUnits = segment
+    .split(/(?<=[.!?।])\s+/u)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (sentenceUnits.length > 1) {
+    return combineUnitsIntoChunks(sentenceUnits, maxChars);
+  }
+
+  if (allowClauseFallback) {
+    const clauseUnits = segment
+      .split(/(?<=[,;:،؛，、])\s+/u)
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    if (clauseUnits.length > 1) {
+      return combineUnitsIntoChunks(clauseUnits, maxChars);
+    }
+  }
+
+  return splitSegmentByWords(segment, maxChars);
 }
 
 function splitTextIntoSentences(segment: string) {
@@ -475,12 +703,53 @@ function buildPronunciationPattern(matchText: string, matchType: TtsPronunciatio
   return new RegExp(escaped, 'giu');
 }
 
+function normalizeRequiredPronunciationText(
+  value: string | null,
+  fieldName: string,
+  maxLength: number,
+) {
+  const normalized = normalizeText(value);
+
+  if (!normalized) {
+    throw withStatus(`${fieldName} is required.`, 400);
+  }
+
+  if (normalized.length > maxLength) {
+    throw withStatus(`${fieldName} must stay under ${maxLength.toLocaleString()} characters.`, 400);
+  }
+
+  return normalized;
+}
+
+function normalizePronunciationNotes(value: string | null | undefined) {
+  const normalized = normalizeText(value);
+
+  if (normalized && normalized.length > maxPronunciationNotesLength) {
+    throw withStatus(`Notes must stay under ${maxPronunciationNotesLength.toLocaleString()} characters.`, 400);
+  }
+
+  return normalized;
+}
+
+function resolvePronunciationMatchType(value: string | null | undefined) {
+  if (!value || value === 'phrase') {
+    return 'phrase' as const;
+  }
+
+  if (value === 'whole_word') {
+    return 'whole_word' as const;
+  }
+
+  throw withStatus('Choose phrase or whole_word matching.', 400);
+}
+
 export async function listTtsPronunciationRules() {
   const result = await pool.query<TtsPronunciationRuleRecord>(
     `
       SELECT *
       FROM tts_pronunciation_rules
       ORDER BY is_active DESC, match_text ASC, id ASC
+      LIMIT 500
     `,
   );
 
@@ -494,17 +763,17 @@ export async function createTtsPronunciationRule(input: {
   notes?: string | null;
   replacementText: string;
 }) {
-  const matchText = normalizeText(input.matchText);
-  const replacementText = normalizeText(input.replacementText);
-  const matchType = input.matchType === 'whole_word' ? 'whole_word' : 'phrase';
-
-  if (!matchText) {
-    throw withStatus('Match text is required.', 400);
-  }
-
-  if (!replacementText) {
-    throw withStatus('Replacement text is required.', 400);
-  }
+  const matchText = normalizeRequiredPronunciationText(
+    input.matchText,
+    'Match text',
+    maxPronunciationMatchLength,
+  );
+  const replacementText = normalizeRequiredPronunciationText(
+    input.replacementText,
+    'Replacement text',
+    maxPronunciationReplacementLength,
+  );
+  const matchType = resolvePronunciationMatchType(input.matchType);
 
   const result = await pool.query<TtsPronunciationRuleRecord>(
     `
@@ -518,7 +787,7 @@ export async function createTtsPronunciationRule(input: {
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
     `,
-    [matchText, replacementText, matchType, input.isActive ?? true, normalizeText(input.notes ?? null)],
+    [matchText, replacementText, matchType, input.isActive ?? true, normalizePronunciationNotes(input.notes)],
   );
 
   return result.rows[0];
@@ -549,21 +818,19 @@ export async function updateTtsPronunciationRule(
     throw withStatus('Pronunciation rule not found.', 404);
   }
 
-  const matchText = input.matchText === undefined ? existing.match_text : normalizeText(input.matchText);
-  const replacementText = input.replacementText === undefined ? existing.replacement_text : normalizeText(input.replacementText);
+  const matchText = input.matchText === undefined
+    ? existing.match_text
+    : normalizeRequiredPronunciationText(input.matchText, 'Match text', maxPronunciationMatchLength);
+  const replacementText = input.replacementText === undefined
+    ? existing.replacement_text
+    : normalizeRequiredPronunciationText(
+        input.replacementText,
+        'Replacement text',
+        maxPronunciationReplacementLength,
+      );
   const matchType = input.matchType === undefined
     ? existing.match_type
-    : input.matchType === 'whole_word'
-      ? 'whole_word'
-      : 'phrase';
-
-  if (!matchText) {
-    throw withStatus('Match text is required.', 400);
-  }
-
-  if (!replacementText) {
-    throw withStatus('Replacement text is required.', 400);
-  }
+    : resolvePronunciationMatchType(input.matchType);
 
   const result = await pool.query<TtsPronunciationRuleRecord>(
     `
@@ -584,7 +851,7 @@ export async function updateTtsPronunciationRule(
       replacementText,
       matchType,
       input.isActive === undefined ? existing.is_active : input.isActive,
-      input.notes === undefined ? existing.notes : normalizeText(input.notes),
+      input.notes === undefined ? existing.notes : normalizePronunciationNotes(input.notes),
     ],
   );
 
@@ -615,6 +882,7 @@ export async function applyActivePronunciationRules(inputText: string) {
       FROM tts_pronunciation_rules
       WHERE is_active = TRUE
       ORDER BY LENGTH(match_text) DESC, id ASC
+      LIMIT 500
     `,
   );
   let outputText = inputText;
@@ -627,34 +895,121 @@ export async function applyActivePronunciationRules(inputText: string) {
     }
 
     outputText = outputText.replace(pattern, rule.replacement_text);
+
+    if (outputText.length > getRuntimeConfig().maxInputCharacters) {
+      throw withStatus('Pronunciation rules expanded the text beyond the generation limit.', 500);
+    }
   }
 
   return outputText;
 }
 
-function addSpeechTextSegment(segments: SpeechSegment[], text: string, pauseAfterMs: number, maxChars: number) {
+function getFixedSpeechProfile(config = getRuntimeConfig()): SpeechProfile {
+  return {
+    allowClauseFallback: false,
+    chunkMaxChars: config.chunkMaxChars,
+    chunkPauseMs,
+    headingPauseMs,
+    listItemPauseMs,
+    paragraphPauseMs,
+    sentencePauseMs,
+  };
+}
+
+function getCustomVoiceSpeechProfile(config = getRuntimeConfig()): SpeechProfile {
+  return {
+    allowClauseFallback: false,
+    chunkMaxChars: config.customVoiceChunkMaxChars,
+    chunkPauseMs: customVoiceChunkPauseMs,
+    headingPauseMs: customVoiceHeadingPauseMs,
+    listItemPauseMs: customVoiceListItemPauseMs,
+    paragraphPauseMs: customVoiceParagraphPauseMs,
+    sentencePauseMs: customVoiceSentencePauseMs,
+  };
+}
+
+function getSpeechProfileForJob(job: Pick<TtsGenerationJobRecord, 'provider_voice_profile_id'>) {
+  return job.provider_voice_profile_id ? getCustomVoiceSpeechProfile() : getFixedSpeechProfile();
+}
+
+function addSpeechTextSegment(segments: SpeechSegment[], text: string, pauseAfterMs: number, speechProfile: SpeechProfile) {
   const normalized = text.replace(/\s+/g, ' ').trim();
 
   if (!normalized) {
     return;
   }
 
-  if (normalized.length <= maxChars) {
+  if (normalized.length <= speechProfile.chunkMaxChars) {
     segments.push({ pauseAfterMs, text: normalized });
     return;
   }
 
-  const parts = splitSegmentBySentences(normalized, maxChars);
+  const parts = splitSegmentBySentences(
+    normalized,
+    speechProfile.chunkMaxChars,
+    speechProfile.allowClauseFallback,
+  );
 
   for (const [index, part] of parts.entries()) {
     segments.push({
-      pauseAfterMs: index === parts.length - 1 ? pauseAfterMs : chunkPauseMs,
+      pauseAfterMs: index === parts.length - 1 ? pauseAfterMs : speechProfile.chunkPauseMs,
       text: part,
     });
   }
 }
 
-function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string, maxChars: number) {
+function addSentenceSpeechSegments(
+  segments: SpeechSegment[],
+  sentences: string[],
+  pauseAfterMs: number,
+  speechProfile: SpeechProfile,
+) {
+  let current = '';
+
+  const flushCurrent = (nextPauseAfterMs: number) => {
+    if (!current.trim()) {
+      return;
+    }
+
+    segments.push({
+      pauseAfterMs: nextPauseAfterMs,
+      text: current.replace(/\s+/g, ' ').trim(),
+    });
+    current = '';
+  };
+
+  for (const sentence of sentences) {
+    const normalizedSentence = sentence.replace(/\s+/g, ' ').trim();
+
+    if (!normalizedSentence) {
+      continue;
+    }
+
+    if (normalizedSentence.length > speechProfile.chunkMaxChars) {
+      flushCurrent(speechProfile.sentencePauseMs);
+      addSpeechTextSegment(segments, normalizedSentence, speechProfile.sentencePauseMs, speechProfile);
+      continue;
+    }
+
+    const candidate = current ? `${current} ${normalizedSentence}` : normalizedSentence;
+
+    if (candidate.length <= speechProfile.chunkMaxChars) {
+      current = candidate;
+      continue;
+    }
+
+    flushCurrent(speechProfile.sentencePauseMs);
+    current = normalizedSentence;
+  }
+
+  if (current.trim()) {
+    flushCurrent(pauseAfterMs);
+  } else if (segments.length > 0) {
+    segments[segments.length - 1].pauseAfterMs = pauseAfterMs;
+  }
+}
+
+function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string, speechProfile: SpeechProfile) {
   const lines = paragraph
     .split('\n')
     .map((value) => value.trim())
@@ -669,8 +1024,8 @@ function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string
       addSpeechTextSegment(
         segments,
         stripListMarker(line),
-        index === lines.length - 1 ? paragraphPauseMs : listItemPauseMs,
-        maxChars,
+        index === lines.length - 1 ? speechProfile.paragraphPauseMs : speechProfile.listItemPauseMs,
+        speechProfile,
       );
     }
     return;
@@ -679,28 +1034,21 @@ function addParagraphSpeechSegments(segments: SpeechSegment[], paragraph: string
   const paragraphText = lines.join(' ').trim();
 
   if (isLikelyHeading(paragraphText)) {
-    addSpeechTextSegment(segments, paragraphText, headingPauseMs, maxChars);
+    addSpeechTextSegment(segments, paragraphText, speechProfile.headingPauseMs, speechProfile);
     return;
   }
 
   const sentences = splitTextIntoSentences(paragraphText);
 
   if (sentences.length === 0) {
-    addSpeechTextSegment(segments, paragraphText, paragraphPauseMs, maxChars);
+    addSpeechTextSegment(segments, paragraphText, speechProfile.paragraphPauseMs, speechProfile);
     return;
   }
 
-  for (const [index, sentence] of sentences.entries()) {
-    addSpeechTextSegment(
-      segments,
-      sentence,
-      index === sentences.length - 1 ? paragraphPauseMs : sentencePauseMs,
-      maxChars,
-    );
-  }
+  addSentenceSpeechSegments(segments, sentences, speechProfile.paragraphPauseMs, speechProfile);
 }
 
-function prepareSpeechSegmentsForTts(inputText: string, maxChars: number) {
+function prepareSpeechSegmentsForTts(inputText: string, speechProfile: SpeechProfile) {
   const normalized = normalizeGenerationText(inputText);
   const paragraphs = normalized
     .split(/\n\s*\n+/)
@@ -710,7 +1058,7 @@ function prepareSpeechSegmentsForTts(inputText: string, maxChars: number) {
   const segments: SpeechSegment[] = [];
 
   for (const paragraph of paragraphs) {
-    addParagraphSpeechSegments(segments, paragraph, maxChars);
+    addParagraphSpeechSegments(segments, paragraph, speechProfile);
   }
 
   const finalSegments = segments.filter((segment) => segment.text);
@@ -722,6 +1070,80 @@ function prepareSpeechSegmentsForTts(inputText: string, maxChars: number) {
   return finalSegments;
 }
 
+function normalizeProviderParagraph(value: string) {
+  return value
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+function splitOversizedProviderParagraph(paragraph: string, maxChars: number) {
+  const normalized = normalizeProviderParagraph(paragraph);
+
+  if (!normalized) {
+    return [];
+  }
+
+  if (normalized.length <= maxChars) {
+    return [normalized];
+  }
+
+  return splitSegmentBySentences(normalized, maxChars, true);
+}
+
+function prepareCustomVoiceProviderSegments(inputText: string, maxChars: number) {
+  const normalized = normalizeGenerationText(inputText);
+  const paragraphs = normalized
+    .split(/\n\s*\n+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const providerMaxChars = Math.max(1_000, Math.min(12_000, Math.floor(maxChars)));
+  const segments: SpeechSegment[] = [];
+  let current = '';
+
+  const flushCurrent = (pauseAfterMs = customVoiceProviderBoundaryPauseMs) => {
+    if (!current.trim()) {
+      return;
+    }
+
+    segments.push({
+      pauseAfterMs,
+      text: current.trim(),
+    });
+    current = '';
+  };
+
+  for (const paragraph of paragraphs) {
+    const paragraphParts = splitOversizedProviderParagraph(paragraph, providerMaxChars);
+
+    for (const part of paragraphParts) {
+      const candidate = current ? `${current}\n\n${part}` : part;
+
+      if (candidate.length <= providerMaxChars) {
+        current = candidate;
+        continue;
+      }
+
+      flushCurrent();
+      current = part;
+    }
+  }
+
+  flushCurrent(0);
+
+  if (segments.length > 0) {
+    segments[segments.length - 1].pauseAfterMs = 0;
+  }
+
+  return segments;
+}
+
+function prepareFullSpeechSegmentsForJob(inputText: string, job: Pick<TtsGenerationJobRecord, 'provider_voice_profile_id'>) {
+  return prepareSpeechSegmentsForTts(inputText, getSpeechProfileForJob(job));
+}
+
 function countWordsInSegment(value: string) {
   return value.split(/\s+/).filter(Boolean).length;
 }
@@ -730,8 +1152,8 @@ function takeFirstWords(value: string, wordLimit: number) {
   return value.split(/\s+/).filter(Boolean).slice(0, wordLimit).join(' ');
 }
 
-function preparePreviewSpeechSegments(inputText: string, maxChars: number) {
-  const fullSegments = prepareSpeechSegmentsForTts(inputText, maxChars);
+function preparePreviewSpeechSegments(inputText: string, speechProfile: SpeechProfile) {
+  const fullSegments = prepareSpeechSegmentsForTts(inputText, speechProfile);
   const previewSegments: SpeechSegment[] = [];
   let remainingWords = previewWordLimit;
 
@@ -830,12 +1252,15 @@ function extractAudioUrlFromPayload(payload: unknown) {
     ['url'],
     ['audioUrl'],
     ['audio_url'],
+    ['audio'],
     ['data', 'url'],
     ['data', 'audioUrl'],
     ['data', 'audio_url'],
+    ['data', 'audio'],
     ['result', 'url'],
     ['result', 'audioUrl'],
     ['result', 'audio_url'],
+    ['result', 'audio'],
   ];
 
   for (const candidatePath of candidatePaths) {
@@ -849,46 +1274,53 @@ function extractAudioUrlFromPayload(payload: unknown) {
   return null;
 }
 
-function resolveProviderAudioUrl(audioUrl: string, apiUrl: string) {
-  try {
-    return new URL(audioUrl, apiUrl).toString();
-  } catch {
-    throw withStatus('Keypillar TTS response included an invalid audio URL.', 502);
-  }
-}
-
 function shouldRetryAudioFetch(statusCode: number) {
   return statusCode === 404 || statusCode === 408 || statusCode === 409 || statusCode === 425 || statusCode === 429 || statusCode >= 500;
 }
 
 async function fetchAudioUrlWithRetry(audioUrl: string, config: ReturnType<typeof getRuntimeConfig>) {
-  const resolvedUrl = resolveProviderAudioUrl(audioUrl, config.apiUrl);
-  const providerOrigin = new URL(config.apiUrl).origin;
-  const audioOrigin = new URL(resolvedUrl).origin;
   const delaysMs = [0, 500, 1_000, 1_500, 2_500, 4_000];
   let lastStatusCode: number | null = null;
+  let lastFailureWasRetryable = false;
 
   for (const [attemptIndex, delayMs] of delaysMs.entries()) {
     if (delayMs > 0) {
       await wait(delayMs);
     }
 
-    const headers: Record<string, string> = {
-      Accept: 'audio/wav,audio/*,application/octet-stream,*/*',
-    };
+    let response: Response;
 
-    if (audioOrigin === providerOrigin) {
-      headers.Authorization = `Bearer ${config.apiKey}`;
+    try {
+      response = await fetchSafeProviderAudio({
+        apiKey: config.apiKey,
+        audioUrl,
+        baseHeaders: {
+          Accept: 'audio/wav,audio/*,application/octet-stream,*/*',
+        },
+        providerApiUrl: config.apiUrl,
+        timeoutMs: config.requestTimeoutMs,
+      });
+    } catch (error) {
+      const statusCode = getStatusCode(error, 0);
+
+      if (statusCode === 504 || error instanceof TypeError) {
+        throw withStatus(
+          error instanceof Error ? error.message : 'Generated audio could not be downloaded from the voice service.',
+          statusCode || 502,
+          { providerRetryable: true },
+        );
+      }
+
+      throw error;
     }
 
-    const response = await fetch(resolvedUrl, { headers });
-
     if (response.ok) {
-      return Buffer.from(await response.arrayBuffer());
+      return readResponseBufferWithLimit(response);
     }
 
     lastStatusCode = response.status;
-    await response.arrayBuffer().catch(() => undefined);
+    lastFailureWasRetryable = shouldRetryAudioFetch(response.status);
+    await response.body?.cancel().catch(() => undefined);
 
     const hasMoreAttempts = attemptIndex < delaysMs.length - 1;
     if (!hasMoreAttempts || !shouldRetryAudioFetch(response.status)) {
@@ -896,7 +1328,11 @@ async function fetchAudioUrlWithRetry(audioUrl: string, config: ReturnType<typeo
     }
   }
 
-  throw withStatus(`Audio fetch failed with status ${lastStatusCode ?? 'unknown'}.`, 502);
+  throw withStatus(
+    `Audio fetch failed with status ${lastStatusCode ?? 'unknown'}.`,
+    502,
+    { providerRetryable: lastFailureWasRetryable },
+  );
 }
 
 async function fetchAudioFromJsonPayload(payload: unknown, config: ReturnType<typeof getRuntimeConfig>) {
@@ -915,28 +1351,58 @@ async function fetchAudioFromJsonPayload(payload: unknown, config: ReturnType<ty
   throw withStatus('Keypillar TTS response did not include downloadable audio.', 502);
 }
 
-async function generateWavChunk(text: string) {
+function getProviderIdempotencyKey(job: TtsGenerationJobRecord, text: string, segmentIndex: number) {
+  const phase = job.status === 'preview_processing' ? 'preview' : 'full';
+  const textDigest = createHash('sha256').update(text).digest('hex').slice(0, 16);
+  return `website-tts-${job.id}-${phase}-${segmentIndex + 1}-${textDigest}`;
+}
+
+async function generateWavChunk(text: string, job: TtsGenerationJobRecord, segmentIndex: number) {
   const config = getRuntimeConfig();
 
   if (!config.apiKey) {
     throw withStatus('KEYPILLAR_TTS_API_KEY is missing.', 503);
   }
 
-  const response = await fetch(config.apiUrl, {
-    body: JSON.stringify({
-      format: config.format,
-      pronunciation_mode: config.pronunciationMode,
-      speed: 1.0,
-      text,
-      voice: config.voiceId,
-    }),
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-      'Idempotency-Key': randomUUID(),
-    },
-    method: 'POST',
-  });
+  const providerVoiceProfileId = job.provider_voice_profile_id ?? 'fixed';
+
+  let response: Response;
+
+  try {
+    response = await fetchWithTimeout(
+      config.apiUrl,
+      {
+        body: JSON.stringify({
+          format: config.format,
+          pronunciation_mode: config.pronunciationMode,
+          speed: 1.0,
+          text,
+          voice: job.provider_voice || config.voiceId,
+          voice_profile_id: providerVoiceProfileId,
+        }),
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          'Content-Type': 'application/json',
+          'Idempotency-Key': getProviderIdempotencyKey(job, text, segmentIndex),
+        },
+        method: 'POST',
+      },
+      config.requestTimeoutMs,
+      `Keypillar TTS request timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
+    );
+  } catch (error) {
+    const statusCode = getStatusCode(error, 0);
+
+    if (statusCode === 504 || error instanceof TypeError) {
+      throw withStatus(
+        error instanceof Error ? error.message : 'Keypillar TTS request could not reach the voice service.',
+        statusCode || 502,
+        { providerRetryable: true },
+      );
+    }
+
+    throw error;
+  }
 
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
 
@@ -945,11 +1411,17 @@ async function generateWavChunk(text: string) {
     throw withStatus(
       `Keypillar TTS request failed with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
       502,
+      {
+        providerRetryable: response.status === 408 ||
+          response.status === 425 ||
+          response.status === 429 ||
+          response.status >= 500,
+      },
     );
   }
 
   if (contentType.includes('audio') || contentType.includes('octet-stream')) {
-    return Buffer.from(await response.arrayBuffer());
+    return readResponseBufferWithLimit(response);
   }
 
   if (contentType.includes('json')) {
@@ -966,65 +1438,6 @@ async function generateWavChunk(text: string) {
   }
 
   return fetchAudioFromJsonPayload(parsedPayload, config);
-}
-
-async function runCommand(command: string, args: string[]) {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-
-    let stderr = '';
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on('error', (error) => {
-      reject(error);
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      reject(new Error(stderr.trim() || `${command} exited with code ${code ?? 'unknown'}.`));
-    });
-  });
-}
-
-async function runCommandForStdout(command: string, args: string[]) {
-  return new Promise<string>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on('error', (error) => {
-      reject(error);
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve(stdout);
-        return;
-      }
-
-      reject(new Error(stderr.trim() || `${command} exited with code ${code ?? 'unknown'}.`));
-    });
-  });
 }
 
 function resolveFfprobePath(ffmpegPath: string) {
@@ -1090,6 +1503,10 @@ async function getAudioStreamFormat(inputPath: string): Promise<AudioStreamForma
 
 function calculateBillableMinutes(audioSeconds: number) {
   return Math.max(1, Math.ceil(audioSeconds / 60));
+}
+
+function calculateEstimatedMinutesFromWords(wordCount: number) {
+  return wordCount > 0 ? Math.max(1, Math.ceil(wordCount / 150)) : 0;
 }
 
 function getFfmpegChannelLayout(channels: number) {
@@ -1219,6 +1636,10 @@ function getOwnedPreviewPath(job: Pick<TtsGenerationJobRecord, 'preview_file'>) 
   return resolvePrivateTtsPath(job.preview_file);
 }
 
+async function removeGeneratedAudioFiles(filePaths: string[]) {
+  await Promise.all(filePaths.map((filePath) => fs.rm(filePath, { force: true }).catch(() => undefined)));
+}
+
 async function assertFileExists(filePath: string, message: string) {
   try {
     await fs.access(filePath);
@@ -1235,6 +1656,7 @@ async function updateJobStage(jobId: number, stage: string) {
         processing_stage = $2,
         updated_at = NOW()
       WHERE id = $1
+        AND status IN ('processing', 'preview_processing')
     `,
     [jobId, stage],
   );
@@ -1308,6 +1730,11 @@ async function completeJobAndDeductUsage(
       return null;
     }
 
+    if (job.status !== 'processing') {
+      await client.query('COMMIT');
+      return null;
+    }
+
     const userResult = await client.query<UserRecord>(
       `
         SELECT *
@@ -1321,6 +1748,23 @@ async function completeJobAndDeductUsage(
 
     if (!user) {
       throw new Error('User not found while billing completed TTS job.');
+    }
+
+    if (user.account_status !== 'active') {
+      await client.query(
+        `
+          UPDATE tts_generation_jobs
+          SET
+            status = 'failed',
+            processing_stage = 'failed',
+            error_message = $2,
+            updated_at = NOW()
+          WHERE id = $1
+        `,
+        [job.id, 'This account is disabled.'],
+      );
+      await client.query('COMMIT');
+      return null;
     }
 
     const currentBalance = Number(user.token_balance);
@@ -1396,6 +1840,8 @@ async function completeJobAndDeductUsage(
         SET
           status = 'completed',
           processing_stage = 'completed',
+          provider_next_attempt_at = NULL,
+          provider_last_error = NULL,
           wav_file = $2,
           mp3_file = $3,
           generated_audio_seconds = $4,
@@ -1460,12 +1906,56 @@ async function completePreviewJob(jobId: number, previewRelativePath: string, pr
       return null;
     }
 
+    if (job.status === 'preview_ready') {
+      await client.query('COMMIT');
+      return job;
+    }
+
+    if (job.status !== 'preview_processing') {
+      await client.query('COMMIT');
+      return null;
+    }
+
+    const userResult = await client.query<UserRecord>(
+      `
+        SELECT *
+        FROM users
+        WHERE id = $1
+        FOR UPDATE
+      `,
+      [job.user_id],
+    );
+    const user = userResult.rows[0];
+
+    if (!user) {
+      throw new Error('User not found while completing preview.');
+    }
+
+    if (user.account_status !== 'active') {
+      await client.query(
+        `
+          UPDATE tts_generation_jobs
+          SET
+            status = 'failed',
+            processing_stage = 'failed',
+            error_message = $2,
+            updated_at = NOW()
+          WHERE id = $1
+        `,
+        [job.id, 'This account is disabled.'],
+      );
+      await client.query('COMMIT');
+      return null;
+    }
+
     const updatedJobResult = await client.query<TtsGenerationJobRecord>(
       `
         UPDATE tts_generation_jobs
         SET
           status = 'preview_ready',
           processing_stage = 'preview_ready',
+          provider_next_attempt_at = NULL,
+          provider_last_error = NULL,
           preview_file = $2,
           preview_audio_seconds = $3,
           preview_generated_at = NOW(),
@@ -1485,6 +1975,79 @@ async function completePreviewJob(jobId: number, previewRelativePath: string, pr
   } finally {
     client.release();
   }
+}
+
+function isRetryableProviderFailure(error: unknown) {
+  return error instanceof Error && (error as ServiceError).providerRetryable === true;
+}
+
+function getProviderRetryDelayMs(failedAttemptCount: number, config: ReturnType<typeof getRuntimeConfig>) {
+  const exponentialDelay = config.providerRetryBaseDelayMs * (2 ** Math.max(0, failedAttemptCount - 1));
+  return Math.min(config.providerRetryMaxDelayMs, exponentialDelay);
+}
+
+async function scheduleProviderRetry(job: TtsGenerationJobRecord, error: unknown) {
+  const config = getRuntimeConfig();
+  const failedAttemptCount = Number(job.provider_attempt_count ?? 0) + 1;
+  const providerError = error instanceof Error ? error.message : String(error);
+
+  if (failedAttemptCount >= config.providerRetryMaxAttempts) {
+    await pool.query(
+      `
+        UPDATE tts_generation_jobs
+        SET
+          provider_attempt_count = $2,
+          provider_next_attempt_at = NULL,
+          provider_last_error = $3,
+          updated_at = NOW()
+        WHERE id = $1
+      `,
+      [job.id, failedAttemptCount, providerError.slice(0, 1_000)],
+    );
+    return false;
+  }
+
+  const delayMs = getProviderRetryDelayMs(failedAttemptCount, config);
+  const result = await pool.query<TtsGenerationJobRecord>(
+    `
+      UPDATE tts_generation_jobs
+      SET
+        status = CASE
+          WHEN status = 'preview_processing' THEN 'preview_queued'
+          ELSE 'queued'
+        END,
+        processing_stage = 'retrying_provider',
+        provider_attempt_count = $2,
+        provider_next_attempt_at = NOW() + ($3 * INTERVAL '1 millisecond'),
+        provider_last_error = $4,
+        error_message = NULL,
+        updated_at = NOW()
+      WHERE id = $1
+        AND status IN ('processing', 'preview_processing')
+      RETURNING *
+    `,
+    [job.id, failedAttemptCount, delayMs, providerError.slice(0, 1_000)],
+  );
+
+  return Boolean(result.rows[0]);
+}
+
+async function handleJobProcessingFailure(job: TtsGenerationJobRecord, error: unknown) {
+  if (isRetryableProviderFailure(error)) {
+    const retryScheduled = await scheduleProviderRetry(job, error);
+
+    if (retryScheduled) {
+      return;
+    }
+
+    await markJobFailed(
+      job.id,
+      'The voice service stayed unavailable after several automatic retries. Please try again later.',
+    );
+    return;
+  }
+
+  await markJobFailed(job.id, safeGenerationFailureMessage());
 }
 
 async function markJobFailed(jobId: number, errorMessage: string) {
@@ -1509,7 +2072,7 @@ async function markJobFailed(jobId: number, errorMessage: string) {
       return;
     }
 
-    if (job.status === 'failed' || job.status === 'cancelled') {
+    if (!['processing', 'preview_processing', 'cancelling'].includes(job.status)) {
       await client.query('COMMIT');
       return;
     }
@@ -1587,6 +2150,7 @@ async function markJobFailed(jobId: number, errorMessage: string) {
         SET
           status = 'failed',
           processing_stage = 'failed',
+          provider_next_attempt_at = NULL,
           error_message = $2,
           updated_at = NOW()
         WHERE id = $1
@@ -1603,6 +2167,26 @@ async function markJobFailed(jobId: number, errorMessage: string) {
   }
 }
 
+async function failJobIfOwnerInactive(job: Pick<TtsGenerationJobRecord, 'id' | 'user_id'>) {
+  const result = await pool.query<Pick<UserRecord, 'account_status'>>(
+    `
+      SELECT account_status
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [job.user_id],
+  );
+  const user = result.rows[0];
+
+  if (user?.account_status === 'active') {
+    return false;
+  }
+
+  await markJobFailed(job.id, user ? 'This account is disabled.' : 'User account not found.');
+  return true;
+}
+
 async function claimNextQueuedJob() {
   const result = await pool.query<TtsGenerationJobRecord>(
     `
@@ -1610,6 +2194,7 @@ async function claimNextQueuedJob() {
         SELECT id, status
         FROM tts_generation_jobs
         WHERE status IN ('queued', 'preview_queued')
+          AND (provider_next_attempt_at IS NULL OR provider_next_attempt_at <= NOW())
         ORDER BY created_at ASC, id ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
@@ -1624,6 +2209,7 @@ async function claimNextQueuedJob() {
           WHEN next_job.status = 'preview_queued' THEN 'preparing_preview'
           ELSE 'starting'
         END,
+        provider_next_attempt_at = NULL,
         error_message = NULL,
         updated_at = NOW()
       FROM next_job
@@ -1646,10 +2232,18 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
       return false;
     }
 
-    const chunkAudio = await generateWavChunk(segment.text);
+    if (await failJobIfOwnerInactive(job)) {
+      return false;
+    }
+
+    const chunkAudio = await generateWavChunk(segment.text, job, index);
 
     if (await isJobCancellationRequested(job.id)) {
       await markJobCancelled(job.id);
+      return false;
+    }
+
+    if (await failJobIfOwnerInactive(job)) {
       return false;
     }
 
@@ -1666,6 +2260,10 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
     return false;
   }
 
+  if (await failJobIfOwnerInactive(job)) {
+    return false;
+  }
+
   await updateJobStage(job.id, 'merging_wav');
   await mergeWavChunks(mergeParts, outputPath, tempDirectory);
 
@@ -1675,7 +2273,7 @@ async function generateSegmentsToWav(job: TtsGenerationJobRecord, segments: Spee
 async function processPreviewJob(job: TtsGenerationJobRecord) {
   const jobPaths = getJobPaths(job);
   const generationText = await applyActivePronunciationRules(job.input_text);
-  const segments = preparePreviewSpeechSegments(generationText, getRuntimeConfig().chunkMaxChars);
+  const segments = preparePreviewSpeechSegments(generationText, getSpeechProfileForJob(job));
 
   await fs.mkdir(jobPaths.tempDirectory, { recursive: true });
 
@@ -1689,7 +2287,11 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
     await assertFileExists(jobPaths.previewAbsolutePath, 'Preview WAV output is missing after generation.');
 
     const previewAudioSeconds = await getAudioDurationSeconds(jobPaths.previewAbsolutePath);
-    await completePreviewJob(job.id, jobPaths.previewRelativePath, previewAudioSeconds);
+    const completedPreviewJob = await completePreviewJob(job.id, jobPaths.previewRelativePath, previewAudioSeconds);
+
+    if (!completedPreviewJob) {
+      await removeGeneratedAudioFiles([jobPaths.previewAbsolutePath]);
+    }
   } catch (error) {
     console.error('TTS preview generation failed.', {
       error,
@@ -1697,7 +2299,8 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
       statusCode: getStatusCode(error, 500),
       userId: job.user_id,
     });
-    await markJobFailed(job.id, safeGenerationFailureMessage());
+    await removeGeneratedAudioFiles([jobPaths.previewAbsolutePath]);
+    await handleJobProcessingFailure(job, error);
   } finally {
     await fs.rm(jobPaths.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
   }
@@ -1706,7 +2309,7 @@ async function processPreviewJob(job: TtsGenerationJobRecord) {
 async function processFullGenerationJob(job: TtsGenerationJobRecord) {
   const jobPaths = getJobPaths(job);
   const generationText = await applyActivePronunciationRules(job.input_text);
-  const segments = prepareSpeechSegmentsForTts(generationText, getRuntimeConfig().chunkMaxChars);
+  const segments = prepareFullSpeechSegmentsForJob(generationText, job);
   const quality = resolveTtsQualityPreset(job.quality_preset);
 
   await fs.mkdir(jobPaths.tempDirectory, { recursive: true });
@@ -1727,6 +2330,7 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
       : null;
 
     if (await isJobCancellationRequested(job.id)) {
+      await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
       await markJobCancelled(job.id);
       return;
     }
@@ -1738,11 +2342,22 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
     }
 
     if (await isJobCancellationRequested(job.id)) {
+      await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
       await markJobCancelled(job.id);
       return;
     }
 
-    await completeJobAndDeductUsage(job.id, jobPaths.wavRelativePath, mp3RelativePath, generatedAudioSeconds, billableMinutes);
+    const completedJob = await completeJobAndDeductUsage(
+      job.id,
+      jobPaths.wavRelativePath,
+      mp3RelativePath,
+      generatedAudioSeconds,
+      billableMinutes,
+    );
+
+    if (!completedJob) {
+      await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
+    }
   } catch (error) {
     console.error('TTS generation failed.', {
       error,
@@ -1750,7 +2365,8 @@ async function processFullGenerationJob(job: TtsGenerationJobRecord) {
       statusCode: getStatusCode(error, 500),
       userId: job.user_id,
     });
-    await markJobFailed(job.id, safeGenerationFailureMessage());
+    await removeGeneratedAudioFiles([jobPaths.wavAbsolutePath, jobPaths.mp3AbsolutePath]);
+    await handleJobProcessingFailure(job, error);
   } finally {
     await fs.rm(jobPaths.tempDirectory, { force: true, recursive: true }).catch(() => undefined);
   }
@@ -1785,14 +2401,14 @@ async function processNextQueuedJob() {
 }
 
 async function drainQueue() {
-  if (workerRunning) {
+  if (workerRunning || !workerStarted || workerStopping || !workerLeaderClient) {
     return;
   }
 
   workerRunning = true;
 
   try {
-    while (await processNextQueuedJob()) {
+    while (workerStarted && !workerStopping && workerLeaderClient && await processNextQueuedJob()) {
       // Keep draining until the queue is empty.
     }
   } catch (error) {
@@ -1813,10 +2429,11 @@ async function resetStaleProcessingJobs() {
           ELSE 'queued'
         END,
         processing_stage = CASE
-          WHEN status = 'preview_processing' THEN 'queued'
+          WHEN status = 'preview_processing' THEN 'preview_queued'
           WHEN status = 'cancelling' THEN 'cancelled'
           ELSE 'queued'
         END,
+        provider_next_attempt_at = NULL,
         cancelled_at = CASE
           WHEN status = 'cancelling' THEN COALESCE(cancelled_at, NOW())
           ELSE cancelled_at
@@ -1831,26 +2448,135 @@ async function resetStaleProcessingJobs() {
   );
 }
 
+async function acquireWorkerLeadership() {
+  if (workerLeaderClient) {
+    return true;
+  }
+
+  const candidate = await pool.connect();
+  let candidateReleased = false;
+
+  try {
+    const result = await candidate.query<{ acquired: boolean }>(
+      'SELECT pg_try_advisory_lock($1, $2) AS acquired',
+      workerLeaderLockKey,
+    );
+
+    if (!result.rows[0]?.acquired) {
+      candidate.release();
+      candidateReleased = true;
+      return false;
+    }
+
+    workerLeaderErrorHandler = (error: Error) => {
+      if (workerLeaderClient !== candidate) {
+        return;
+      }
+
+      console.error('TTS worker leader database connection failed; terminating to prevent split-brain processing.', {
+        error,
+      });
+      workerLeaderClient = null;
+      workerStarted = false;
+      process.exitCode = 1;
+      setImmediate(() => process.exit(1));
+    };
+    candidate.on('error', workerLeaderErrorHandler);
+    workerLeaderClient = candidate;
+
+    try {
+      await resetStaleProcessingJobs();
+    } catch (error) {
+      workerLeaderClient = null;
+      candidate.removeListener('error', workerLeaderErrorHandler);
+      workerLeaderErrorHandler = null;
+      await candidate
+        .query('SELECT pg_advisory_unlock($1, $2)', workerLeaderLockKey)
+        .catch(() => undefined);
+      candidate.release();
+      candidateReleased = true;
+      throw error;
+    }
+
+    console.log('TTS job worker leadership acquired.');
+    return true;
+  } catch (error) {
+    if (!candidateReleased && workerLeaderClient !== candidate) {
+      candidate.release(true);
+    }
+    throw error;
+  }
+}
+
+async function releaseWorkerLeadership() {
+  const client = workerLeaderClient;
+
+  if (!client) {
+    return;
+  }
+
+  workerLeaderClient = null;
+  if (workerLeaderErrorHandler) {
+    client.removeListener('error', workerLeaderErrorHandler);
+    workerLeaderErrorHandler = null;
+  }
+
+  try {
+    await client.query('SELECT pg_advisory_unlock($1, $2)', workerLeaderLockKey);
+  } finally {
+    client.release();
+  }
+}
+
+function runWorkerCycle() {
+  if (workerCyclePromise || !workerStarted || workerStopping) {
+    return workerCyclePromise ?? Promise.resolve();
+  }
+
+  workerCyclePromise = (async () => {
+    const isLeader = await acquireWorkerLeadership();
+
+    if (isLeader) {
+      await drainQueue();
+    }
+  })()
+    .catch((error) => {
+      console.error('TTS worker coordination failed.', error);
+    })
+    .finally(() => {
+      workerCyclePromise = null;
+    });
+
+  return workerCyclePromise;
+}
+
 export async function startTtsJobWorker() {
   if (workerStarted) {
     return;
   }
 
   workerStarted = true;
-  await resetStaleProcessingJobs();
-  void drainQueue();
+  workerStopping = false;
+  await acquireWorkerLeadership();
+  void runWorkerCycle();
   workerTimer = setInterval(() => {
-    void drainQueue();
+    void runWorkerCycle();
   }, 2_000);
+  workerTimer.unref();
 }
 
 export async function stopTtsJobWorker() {
+  workerStopping = true;
+
   if (workerTimer) {
     clearInterval(workerTimer);
     workerTimer = null;
   }
 
   workerStarted = false;
+  await workerCyclePromise;
+  await releaseWorkerLeadership();
+  workerStopping = false;
 }
 
 async function getLockedUser(client: PoolClient, userId: number) {
@@ -1886,9 +2612,9 @@ async function assertUserCanQueueMoreTtsJobs(
   userId: number,
   targetStatus: 'preview_queued' | 'queued',
 ) {
-  const activePreviewStatuses = ['preview_queued', 'preview_processing'];
-  const activeGenerationStatuses = ['queued', 'processing'];
-  const activeStatuses = [...activePreviewStatuses, ...activeGenerationStatuses];
+  const activePreviewStatuses = ['preview_queued', 'preview_processing', 'cancelling'];
+  const activeGenerationStatuses = ['queued', 'processing', 'cancelling'];
+  const activeStatuses = Array.from(new Set([...activePreviewStatuses, ...activeGenerationStatuses]));
   const activePreviewCount = await countActiveTtsJobs(client, userId, activePreviewStatuses);
   const activeGenerationCount = await countActiveTtsJobs(client, userId, activeGenerationStatuses);
   const activeTotalCount = await countActiveTtsJobs(client, userId, activeStatuses);
@@ -1906,26 +2632,93 @@ async function assertUserCanQueueMoreTtsJobs(
   }
 }
 
-function assertUserCanQueueTtsJob(user: UserRecord) {
+async function assertJobVoiceProfileStillUsable(
+  client: PoolClient,
+  job: Pick<TtsGenerationJobRecord, 'provider_voice_profile_id' | 'user_id' | 'voice_profile_id'>,
+) {
+  if (!job.voice_profile_id && !job.provider_voice_profile_id) {
+    return;
+  }
+
+  if (!job.voice_profile_id) {
+    throw withStatus('This custom voice is no longer available. Create a new job with an active voice.', 409);
+  }
+
+  const profileResult = await client.query<{
+    is_active: boolean;
+    provider_profile_id: string | null;
+    provider_sync_status: string;
+  }>(
+    `
+      SELECT is_active, provider_profile_id, provider_sync_status
+      FROM tts_voice_profiles
+      WHERE id = $1
+        AND user_id = $2
+      LIMIT 1
+    `,
+    [job.voice_profile_id, job.user_id],
+  );
+  const profile = profileResult.rows[0];
+
+  if (!profile?.is_active) {
+    throw withStatus('This custom voice was deleted. Create a new job with an active voice.', 409);
+  }
+
+  if (profile.provider_sync_status !== 'ready' || !profile.provider_profile_id) {
+    throw withStatus('This custom voice is not active yet. Activate the voice before generating audio.', 409);
+  }
+}
+
+function assertUserCanUseTtsWorkspace(user: UserRecord) {
   if (user.account_status !== 'active') {
     throw withStatus('This account is disabled.', 403);
   }
 
-  if (!user.email_verified_at) {
+  if (!isCustomerEmailVerified(user)) {
     throw withStatus('Verify your email before creating audio jobs.', 403);
   }
 
-  if (!user.phone_verified_at) {
+  if (!isCustomerPhoneVerified(user)) {
     throw withStatus('Verify your phone before creating audio jobs.', 403);
   }
 
-  const currentBalance = Number(user.token_balance);
+  return Number(user.token_balance);
+}
 
-  if (currentBalance <= 0) {
-    throw withStatus('No generation minutes remain. Upgrade or add allowance before creating audio.', 402);
+function assertUserHasGenerationMinutes(user: UserRecord, estimatedMinutes = 1) {
+  const currentBalance = Number(user.token_balance);
+  const requiredMinutes = Math.max(1, estimatedMinutes);
+
+  if (currentBalance < requiredMinutes) {
+    const message = currentBalance <= 0
+      ? 'No generation minutes remain. Upgrade or add allowance before generating full audio.'
+      : `This job is estimated at ${requiredMinutes} minute${requiredMinutes === 1 ? '' : 's'}, but your current balance is ${currentBalance.toLocaleString()}. Add minutes before generating full audio.`;
+    throw withStatus(message, 402);
   }
 
   return currentBalance;
+}
+
+async function assertAndRecordFullGenerationUsage(
+  client: PoolClient,
+  user: UserRecord,
+  estimatedMinutes: number,
+  resourceId?: number | null,
+) {
+  const config = getRuntimeConfig();
+  const dailyLimit = user.package_code === 'starter'
+    ? config.starterDailyFullGenerationMinutes
+    : config.paidDailyFullGenerationMinutes;
+
+  await assertAndRecordTtsProviderUsage(client, {
+    deduplicateResource: Boolean(resourceId),
+    eventType: 'job_full',
+    limit: dailyLimit,
+    limitMessage: `Your plan allows up to ${dailyLimit.toLocaleString()} estimated full-generation minutes in a rolling 24-hour period. Try again after earlier usage expires.`,
+    resourceId,
+    units: Math.max(1, estimatedMinutes),
+    userId: user.id,
+  });
 }
 
 async function createQueuedTtsGenerationJob(
@@ -1935,6 +2728,7 @@ async function createQueuedTtsGenerationJob(
     sourceName?: string | null;
     sourceType: TtsGenerationJobSourceType;
     userId: number;
+    voiceProfileId?: number | string | null;
   },
   initialStatus: 'preview_queued' | 'queued',
 ) {
@@ -1953,8 +2747,14 @@ async function createQueuedTtsGenerationJob(
       throw withStatus('User not found.', 404);
     }
 
-    const currentBalance = assertUserCanQueueTtsJob(user);
+    const currentBalance = assertUserCanUseTtsWorkspace(user);
+    let estimatedMinutes: number | null = null;
+    if (initialStatus === 'queued') {
+      estimatedMinutes = calculateEstimatedMinutesFromWords(wordCount);
+      assertUserHasGenerationMinutes(user, estimatedMinutes);
+    }
     await assertUserCanQueueMoreTtsJobs(client, user.id, initialStatus);
+    const voiceSelection = await resolveTtsVoiceSelectionForUser(client, user.id, input.voiceProfileId);
     const stage = initialStatus === 'preview_queued' ? 'preview_queued' : 'queued';
 
     const jobResult = await client.query<TtsGenerationJobRecord>(
@@ -1970,9 +2770,29 @@ async function createQueuedTtsGenerationJob(
           mp3_bitrate_kbps,
           status,
           processing_stage,
-          provider_voice
+          provider_voice,
+          voice_profile_id,
+          voice_display_name,
+          provider_voice_profile_id,
+          full_generation_requested_at
         )
-        VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9, $10)
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          0,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          CASE WHEN $8 = 'queued' THEN NOW() ELSE NULL END
+        )
         RETURNING *
       `,
       [
@@ -1986,12 +2806,33 @@ async function createQueuedTtsGenerationJob(
         initialStatus,
         stage,
         config.voiceId,
+        voiceSelection.voiceProfileId,
+        voiceSelection.voiceDisplayName,
+        voiceSelection.providerVoiceProfileId,
       ],
     );
     const createdJob = jobResult.rows[0];
 
+    if (initialStatus === 'queued' && estimatedMinutes !== null) {
+      await assertAndRecordFullGenerationUsage(
+        client,
+        user,
+        estimatedMinutes,
+        createdJob.id,
+      );
+    } else {
+      await assertAndRecordTtsProviderUsage(client, {
+        deduplicateResource: true,
+        eventType: 'job_preview',
+        limit: config.previewDailyLimitPerUser,
+        limitMessage: `You can create up to ${config.previewDailyLimitPerUser} free previews in 24 hours. Generate full audio from an existing preview or try again later.`,
+        resourceId: createdJob.id,
+        userId: user.id,
+      });
+    }
+
     await client.query('COMMIT');
-    void drainQueue();
+    void runWorkerCycle();
 
     return {
       job: createdJob,
@@ -2011,6 +2852,7 @@ export async function queueTtsGenerationJob(input: {
   sourceName?: string | null;
   sourceType: TtsGenerationJobSourceType;
   userId: number;
+  voiceProfileId?: number | string | null;
 }) {
   return createQueuedTtsGenerationJob(input, 'queued');
 }
@@ -2021,6 +2863,7 @@ export async function queueTtsPreviewJob(input: {
   sourceName?: string | null;
   sourceType: TtsGenerationJobSourceType;
   userId: number;
+  voiceProfileId?: number | string | null;
 }) {
   return createQueuedTtsGenerationJob(input, 'preview_queued');
 }
@@ -2057,8 +2900,12 @@ export async function startTtsGenerationFromPreview(jobId: number, userId: numbe
       throw withStatus('User not found.', 404);
     }
 
-    const currentBalance = assertUserCanQueueTtsJob(user);
+    assertUserCanUseTtsWorkspace(user);
+    await assertJobVoiceProfileStillUsable(client, job);
+    const estimatedMinutes = calculateEstimatedMinutesFromWords(Number(job.word_count));
+    const currentBalance = assertUserHasGenerationMinutes(user, estimatedMinutes);
     await assertUserCanQueueMoreTtsJobs(client, userId, 'queued');
+    await assertAndRecordFullGenerationUsage(client, user, estimatedMinutes, job.id);
 
     const startResult = await client.query<TtsGenerationJobRecord>(
       `
@@ -2066,6 +2913,9 @@ export async function startTtsGenerationFromPreview(jobId: number, userId: numbe
         SET
           status = 'queued',
           processing_stage = 'queued',
+          provider_attempt_count = 0,
+          provider_next_attempt_at = NULL,
+          provider_last_error = NULL,
           error_message = NULL,
           wav_file = NULL,
           mp3_file = NULL,
@@ -2088,7 +2938,7 @@ export async function startTtsGenerationFromPreview(jobId: number, userId: numbe
     );
 
     await client.query('COMMIT');
-    void drainQueue();
+    void runWorkerCycle();
 
     return {
       job: startResult.rows[0],
@@ -2134,9 +2984,25 @@ export async function retryTtsGenerationJob(jobId: number, userId: number) {
       throw withStatus('User not found.', 404);
     }
 
-    const currentBalance = assertUserCanQueueTtsJob(user);
     const retryStatus = job.full_generation_requested_at ? 'queued' : 'preview_queued';
     const retryStage = retryStatus === 'queued' ? 'queued' : 'preview_queued';
+    const currentBalance = assertUserCanUseTtsWorkspace(user);
+    await assertJobVoiceProfileStillUsable(client, job);
+    if (retryStatus === 'queued') {
+      const estimatedMinutes = calculateEstimatedMinutesFromWords(Number(job.word_count));
+      assertUserHasGenerationMinutes(user, estimatedMinutes);
+      await assertAndRecordFullGenerationUsage(client, user, estimatedMinutes, job.id);
+    } else {
+      const config = getRuntimeConfig();
+      await assertAndRecordTtsProviderUsage(client, {
+        deduplicateResource: true,
+        eventType: 'job_preview',
+        limit: config.previewDailyLimitPerUser,
+        limitMessage: `You can create up to ${config.previewDailyLimitPerUser} free previews in 24 hours. Generate full audio from an existing preview or try again later.`,
+        resourceId: job.id,
+        userId: user.id,
+      });
+    }
     await assertUserCanQueueMoreTtsJobs(client, userId, retryStatus);
 
     const retryResult = await client.query<TtsGenerationJobRecord>(
@@ -2145,6 +3011,9 @@ export async function retryTtsGenerationJob(jobId: number, userId: number) {
         SET
           status = $3,
           processing_stage = $4,
+          provider_attempt_count = 0,
+          provider_next_attempt_at = NULL,
+          provider_last_error = NULL,
           error_message = NULL,
           wav_file = NULL,
           mp3_file = NULL,
@@ -2169,7 +3038,7 @@ export async function retryTtsGenerationJob(jobId: number, userId: number) {
     );
 
     await client.query('COMMIT');
-    void drainQueue();
+    void runWorkerCycle();
 
     return {
       job: retryResult.rows[0],
@@ -2301,6 +3170,67 @@ export async function markTtsGenerationJobDownloaded(jobId: number, userId: numb
   );
 }
 
+export async function deleteOwnedTtsGenerationJob(jobId: number, userId: number) {
+  const client = await pool.connect();
+  let transactionOpen = false;
+
+  try {
+    await client.query('BEGIN');
+    transactionOpen = true;
+
+    const jobResult = await client.query<TtsGenerationJobRecord>(
+      `
+        SELECT *
+        FROM tts_generation_jobs
+        WHERE id = $1
+          AND user_id = $2
+        FOR UPDATE
+      `,
+      [jobId, userId],
+    );
+    const job = jobResult.rows[0];
+
+    if (!job) {
+      throw withStatus('Audio generation job not found.', 404);
+    }
+
+    if (isActiveJobStatus(job.status)) {
+      throw withStatus('Cancel this active audio job before deleting it.', 409);
+    }
+
+    const jobPaths = getJobPaths(job);
+
+    // Remove private output first. If disk cleanup fails, keep the database row
+    // so the owner can retry and the files never become an untracked orphan.
+    await fs.rm(jobPaths.jobDirectory, {
+      force: true,
+      recursive: true,
+    });
+
+    await client.query(
+      `
+        DELETE FROM tts_generation_jobs
+        WHERE id = $1
+          AND user_id = $2
+      `,
+      [jobId, userId],
+    );
+
+    await client.query('COMMIT');
+    transactionOpen = false;
+    await fs.rmdir(jobPaths.userDirectory).catch(() => undefined);
+
+    return job;
+  } catch (error) {
+    if (transactionOpen) {
+      await client.query('ROLLBACK').catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function getTtsGenerationAttachmentPath(
   job: Pick<TtsGenerationJobRecord, 'id' | 'mp3_file' | 'status' | 'wav_file'>,
   format: 'mp3' | 'wav',
@@ -2322,12 +3252,23 @@ export async function getTtsGenerationPreviewPath(
   return absolutePath;
 }
 
-export async function extractPdfText(buffer: Buffer) {
-  const parser = new PDFParse({ data: buffer });
+function assertValidPdfHeader(buffer: Buffer) {
+  const pdfHeader = Buffer.from('%PDF-', 'ascii');
+  const headerSearchWindow = buffer.subarray(0, Math.min(buffer.byteLength, 1_024));
 
+  if (buffer.byteLength < pdfHeader.byteLength || !headerSearchWindow.includes(pdfHeader)) {
+    throw withStatus('Upload a valid PDF file.', 400);
+  }
+}
+
+async function extractValidatedPdfText(workerData: { data?: Buffer; filePath?: string }) {
+  if (activePdfExtractions >= pdfMaxConcurrentExtractions) {
+    throw withStatus('PDF processing is busy. Try again shortly.', 503);
+  }
+
+  activePdfExtractions += 1;
   try {
-    const parsed = await parser.getText();
-    const rawText = parsed.text ?? '';
+    const rawText = await extractPdfTextInWorker(workerData);
 
     try {
       return normalizeGenerationText(cleanExtractedPdfText(rawText));
@@ -2339,8 +3280,118 @@ export async function extractPdfText(buffer: Buffer) {
       throw error;
     }
   } finally {
-    await parser.destroy().catch(() => undefined);
+    activePdfExtractions = Math.max(0, activePdfExtractions - 1);
   }
+}
+
+export async function extractPdfText(buffer: Buffer) {
+  assertValidPdfHeader(buffer);
+  return extractValidatedPdfText({ data: buffer });
+}
+
+export async function extractPdfTextFromFile(filePath: string) {
+  const fileHandle = await fs.open(filePath, 'r');
+  const headerBuffer = Buffer.alloc(1_024);
+
+  try {
+    const { bytesRead } = await fileHandle.read(headerBuffer, 0, headerBuffer.byteLength, 0);
+    assertValidPdfHeader(headerBuffer.subarray(0, bytesRead));
+  } finally {
+    await fileHandle.close();
+  }
+
+  return extractValidatedPdfText({ filePath });
+}
+
+function extractPdfTextInWorker(workerData: { data?: Buffer; filePath?: string }) {
+  return new Promise<string>((resolve, reject) => {
+    const worker = new Worker(
+      new URL('../workers/pdf-text-worker.mjs', import.meta.url),
+      {
+        resourceLimits: {
+          maxOldGenerationSizeMb: 128,
+          maxYoungGenerationSizeMb: 32,
+          stackSizeMb: 4,
+        },
+        workerData: {
+          ...workerData,
+          maxTextCharacters: pdfMaxExtractedCharacters,
+        },
+      },
+    );
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeout);
+      void worker.terminate();
+      callback();
+    };
+    const timeout = setTimeout(() => {
+      finish(() => {
+        reject(withStatus(
+          'The PDF took too long to process. Try a smaller text-based PDF.',
+          408,
+        ));
+      });
+    }, pdfExtractionTimeoutMs);
+
+    worker.once('message', (message: unknown) => {
+      const payload = message as {
+        code?: unknown;
+        message?: unknown;
+        ok?: unknown;
+        text?: unknown;
+      };
+
+      if (payload?.ok === true && typeof payload.text === 'string') {
+        finish(() => resolve(payload.text as string));
+        return;
+      }
+
+      if (payload?.code === 'TEXT_TOO_LARGE') {
+        finish(() => {
+          reject(withStatus(
+            `PDF extracted text must stay under ${pdfMaxExtractedCharacters.toLocaleString()} characters.`,
+            400,
+          ));
+        });
+        return;
+      }
+
+      finish(() => {
+        reject(withStatus(
+          'The PDF could not be read. Upload a text-based PDF instead of a scanned or damaged file.',
+          400,
+        ));
+      });
+    });
+
+    worker.once('error', () => {
+      finish(() => {
+        reject(withStatus(
+          'The PDF could not be read. Upload a text-based PDF instead of a scanned or damaged file.',
+          400,
+        ));
+      });
+    });
+
+    worker.once('exit', (_exitCode) => {
+      if (settled) {
+        return;
+      }
+
+      finish(() => {
+        reject(withStatus(
+          'The PDF could not be read. Upload a text-based PDF instead of a scanned or damaged file.',
+          400,
+        ));
+      });
+    });
+  });
 }
 
 export function getTtsRuntimeStatus() {
@@ -2349,6 +3400,7 @@ export function getTtsRuntimeStatus() {
   return {
     apiUrl: config.apiUrl,
     chunkMaxChars: config.chunkMaxChars,
+    customVoiceProviderRequestMaxChars: config.customVoiceProviderRequestMaxChars,
     configured: Boolean(config.apiKey),
     ffmpegPath: config.ffmpegPath,
     providerVoice: config.voiceId,

@@ -1,19 +1,6 @@
-import 'dotenv/config';
-import { ensureSchema, pool } from '../db.ts';
+import type { VoiceCardRecord } from './db.ts';
 
-type SeedVoice = {
-  audio_file: string;
-  duration: number;
-  english_meaning: string;
-  id: number;
-  is_active: boolean;
-  name: string;
-  order: number;
-  script_text: string;
-  wave_seed: number;
-};
-
-const seedVoices: SeedVoice[] = [
+export const defaultVoiceCards: VoiceCardRecord[] = [
   {
     id: 1,
     name: 'AI Self Service Agent',
@@ -22,7 +9,7 @@ const seedVoices: SeedVoice[] = [
     audio_file: 'voices/public/ai-self-service-agent.wav',
     duration: 9.72,
     wave_seed: 42,
-    order: 0,
+    display_order: 0,
     is_active: true,
   },
   {
@@ -33,7 +20,7 @@ const seedVoices: SeedVoice[] = [
     audio_file: 'voices/public/business-consultant.wav',
     duration: 10.07,
     wave_seed: 43,
-    order: 1,
+    display_order: 1,
     is_active: true,
   },
   {
@@ -44,7 +31,7 @@ const seedVoices: SeedVoice[] = [
     audio_file: 'voices/public/office-receptionist.wav',
     duration: 8.16,
     wave_seed: 44,
-    order: 2,
+    display_order: 2,
     is_active: true,
   },
   {
@@ -55,7 +42,7 @@ const seedVoices: SeedVoice[] = [
     audio_file: 'voices/public/appointment-taker.wav',
     duration: 9.56,
     wave_seed: 45,
-    order: 3,
+    display_order: 3,
     is_active: true,
   },
   {
@@ -66,7 +53,7 @@ const seedVoices: SeedVoice[] = [
     audio_file: 'voices/public/healthcare-assistant.wav',
     duration: 9.12,
     wave_seed: 46,
-    order: 4,
+    display_order: 4,
     is_active: true,
   },
   {
@@ -77,7 +64,7 @@ const seedVoices: SeedVoice[] = [
     audio_file: 'voices/public/ecommerce-support.wav',
     duration: 8.67,
     wave_seed: 47,
-    order: 5,
+    display_order: 5,
     is_active: true,
   },
   {
@@ -88,7 +75,7 @@ const seedVoices: SeedVoice[] = [
     audio_file: 'voices/public/banking-fintech-support.wav',
     duration: 8.88,
     wave_seed: 48,
-    order: 6,
+    display_order: 6,
     is_active: true,
   },
   {
@@ -99,7 +86,7 @@ const seedVoices: SeedVoice[] = [
     audio_file: 'voices/public/real-estate-lead-qualifier.wav',
     duration: 8.22,
     wave_seed: 49,
-    order: 7,
+    display_order: 7,
     is_active: true,
   },
   {
@@ -110,7 +97,7 @@ const seedVoices: SeedVoice[] = [
     audio_file: 'voices/public/education-admission-counsellor.wav',
     duration: 9.32,
     wave_seed: 50,
-    order: 8,
+    display_order: 8,
     is_active: true,
   },
   {
@@ -121,78 +108,7 @@ const seedVoices: SeedVoice[] = [
     audio_file: 'voices/public/restaurant-hospitality-reservation.wav',
     duration: 8.79,
     wave_seed: 51,
-    order: 9,
+    display_order: 9,
     is_active: true,
   },
 ];
-
-async function seedVoiceCards() {
-  await ensureSchema();
-  const client = await pool.connect();
-
-  await client.query('BEGIN');
-
-  try {
-    await client.query('UPDATE voice_cards SET is_active = FALSE, updated_at = NOW()');
-
-    for (const voice of seedVoices) {
-      await client.query(
-        `
-          INSERT INTO voice_cards (
-            id,
-            name,
-            script_text,
-            english_meaning,
-            audio_file,
-            duration,
-            wave_seed,
-            display_order,
-            is_active,
-            updated_at
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-          ON CONFLICT (id) DO UPDATE SET
-            name = EXCLUDED.name,
-            script_text = EXCLUDED.script_text,
-            english_meaning = EXCLUDED.english_meaning,
-            audio_file = EXCLUDED.audio_file,
-            duration = EXCLUDED.duration,
-            wave_seed = EXCLUDED.wave_seed,
-            display_order = EXCLUDED.display_order,
-            is_active = EXCLUDED.is_active,
-            updated_at = NOW();
-        `,
-        [
-          voice.id,
-          voice.name,
-          voice.script_text,
-          voice.english_meaning,
-          voice.audio_file,
-          voice.duration,
-          voice.wave_seed,
-          voice.order,
-          voice.is_active,
-        ],
-      );
-    }
-
-    await client.query('COMMIT');
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
-
-  const result = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM voice_cards WHERE is_active = TRUE');
-  console.log(`Seeded ${seedVoices.length} default voice cards. voice_cards now has ${result.rows[0]?.count ?? '0'} active rows.`);
-}
-
-seedVoiceCards()
-  .catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await pool.end();
-  });

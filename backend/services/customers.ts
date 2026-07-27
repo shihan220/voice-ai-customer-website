@@ -1,14 +1,52 @@
 import argon2 from 'argon2';
-import { createHash, randomBytes, randomInt } from 'node:crypto';
-import { pool, type AdminActionRecord, type EmailVerificationRecord, type PackageRecord, type PackageUpgradeRecord, type PasswordResetRecord, type PaymentProvider, type PaymentRecord, type PaymentStatus, type PaymentType, type PhoneVerificationRecord, type TokenTransactionRecord, type TokenTransactionType, type UserActivityRecord, type UserPackageType, type UserRecord } from '../db.ts';
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomInt,
+  timingSafeEqual,
+} from 'node:crypto';
+import { customerSessionSecret, isCustomerFullyVerified } from '../core.ts';
+import { pool, type AdminActionRecord, type BkashPaymentRecord, type EmailVerificationRecord, type PackageRecord, type PackageUpgradeRecord, type PasswordResetRecord, type PaymentProvider, type PaymentRecord, type PaymentStatus, type PaymentType, type PhoneVerificationRecord, type StripePaymentRecord, type TokenTransactionRecord, type TokenTransactionType, type UserActivityRecord, type UserPackageType, type UserRecord } from '../db.ts';
 
 export type CustomerSessionUser = {
+  authVersion: number;
   email: string;
   id: number;
 };
 
+const packageRank: Record<UserPackageType, number> = {
+  gold: 1,
+  platinum: 2,
+  starter: 0,
+};
+
+export function isStrictPackageUpgrade(
+  currentPackage: UserPackageType,
+  targetPackage: UserPackageType,
+) {
+  return packageRank[targetPackage] > packageRank[currentPackage];
+}
+
 export function hashOpaqueToken(value: string) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+export function hashOtpCode(value: string) {
+  return createHmac('sha256', customerSessionSecret).update(value).digest('hex');
+}
+
+export function verifyOtpCode(storedHash: string, value: string) {
+  const secureCandidate = Buffer.from(hashOtpCode(value), 'hex');
+  const stored = Buffer.from(storedHash, 'hex');
+
+  if (stored.length === secureCandidate.length && timingSafeEqual(stored, secureCandidate)) {
+    return true;
+  }
+
+  // Pending codes created before this hardening expire within 15 minutes.
+  const legacyCandidate = Buffer.from(hashOpaqueToken(value), 'hex');
+  return stored.length === legacyCandidate.length && timingSafeEqual(stored, legacyCandidate);
 }
 
 export async function hashPassword(password: string) {
@@ -40,12 +78,19 @@ export function normalizePhone(countryCode: string | null, mobileNumber: string 
   const normalizedCode = countryCode.trim().replace(/\s+/g, '');
   const normalizedNumber = mobileNumber.replace(/[^\d]/g, '');
 
-  if (!normalizedCode || !normalizedNumber) {
+  if (
+    !/^\+?[1-9]\d{0,3}$/.test(normalizedCode)
+    || !/^\d{4,14}$/.test(normalizedNumber)
+  ) {
     return null;
   }
 
   const codeWithPlus = normalizedCode.startsWith('+') ? normalizedCode : `+${normalizedCode}`;
-  return `${codeWithPlus}${normalizedNumber}`;
+  const normalizedPhone = `${codeWithPlus}${normalizedNumber}`;
+
+  return /^\+[1-9]\d{7,14}$/.test(normalizedPhone)
+    ? normalizedPhone
+    : null;
 }
 
 export async function getPackageByCode(packageCode: UserPackageType) {
@@ -152,11 +197,36 @@ export async function createUser(input: {
   return result.rows[0];
 }
 
+export async function consumeDailySignupAttempt(ipKeyHash: string, maxAttempts: number) {
+  const result = await pool.query<{ attempt_count: number }>(
+    `
+      INSERT INTO signup_rate_limits (
+        ip_key_hash,
+        bucket_date,
+        attempt_count
+      )
+      VALUES ($1, (NOW() AT TIME ZONE 'UTC')::date, 1)
+      ON CONFLICT (ip_key_hash, bucket_date) DO UPDATE
+      SET
+        attempt_count = signup_rate_limits.attempt_count + 1,
+        updated_at = NOW()
+      WHERE signup_rate_limits.attempt_count < $2
+      RETURNING attempt_count
+    `,
+    [ipKeyHash, maxAttempts],
+  );
+
+  return Boolean(result.rows[0]);
+}
+
 export async function updateUserPassword(userId: number, passwordHash: string) {
   const result = await pool.query<UserRecord>(
     `
       UPDATE users
-      SET password_hash = $2, updated_at = NOW()
+      SET
+        password_hash = $2,
+        auth_version = auth_version + 1,
+        updated_at = NOW()
       WHERE id = $1
       RETURNING *
     `,
@@ -200,7 +270,7 @@ export async function createEmailVerification(
   otpCode: string,
   purpose: 'email_change' | 'signup' = 'signup',
 ) {
-  const otpHash = hashOpaqueToken(otpCode);
+  const otpHash = hashOtpCode(otpCode);
   const result = await pool.query<EmailVerificationRecord>(
     `
       INSERT INTO email_verifications (
@@ -238,15 +308,21 @@ export async function getLatestPendingEmailVerification(userId: number) {
   return result.rows[0] ?? null;
 }
 
-export async function incrementEmailVerificationAttempts(id: number) {
-  await pool.query(
+export async function incrementEmailVerificationAttempts(id: number, maxAttempts: number) {
+  const result = await pool.query(
     `
       UPDATE email_verifications
       SET attempts = attempts + 1, updated_at = NOW()
       WHERE id = $1
+        AND verified_at IS NULL
+        AND otp_expires_at > NOW()
+        AND attempts < $2
+      RETURNING attempts
     `,
-    [id],
+    [id, maxAttempts],
   );
+
+  return Boolean(result.rows[0]);
 }
 
 export async function completeEmailVerification(id: number) {
@@ -266,7 +342,7 @@ export async function createPhoneVerification(
   otpCode: string,
   purpose: 'phone_change' | 'signup' = 'signup',
 ) {
-  const otpHash = hashOpaqueToken(otpCode);
+  const otpHash = hashOtpCode(otpCode);
   const result = await pool.query<PhoneVerificationRecord>(
     `
       INSERT INTO phone_verifications (
@@ -304,15 +380,21 @@ export async function getLatestPendingPhoneVerification(userId: number) {
   return result.rows[0] ?? null;
 }
 
-export async function incrementPhoneVerificationAttempts(id: number) {
-  await pool.query(
+export async function incrementPhoneVerificationAttempts(id: number, maxAttempts: number) {
+  const result = await pool.query(
     `
       UPDATE phone_verifications
       SET attempts = attempts + 1, updated_at = NOW()
       WHERE id = $1
+        AND verified_at IS NULL
+        AND otp_expires_at > NOW()
+        AND attempts < $2
+      RETURNING attempts
     `,
-    [id],
+    [id, maxAttempts],
   );
+
+  return Boolean(result.rows[0]);
 }
 
 export async function completePhoneVerification(id: number) {
@@ -329,23 +411,44 @@ export async function completePhoneVerification(id: number) {
 export async function createPasswordReset(userId: number) {
   const token = generateResetToken();
   const tokenHash = hashOpaqueToken(token);
-  const result = await pool.query<PasswordResetRecord>(
-    `
-      INSERT INTO password_resets (
-        user_id,
-        token_hash,
-        expires_at
-      )
-      VALUES ($1, $2, NOW() + INTERVAL '30 minutes')
-      RETURNING *
-    `,
-    [userId, tokenHash],
-  );
+  const client = await pool.connect();
 
-  return {
-    record: result.rows[0],
-    token,
-  };
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [userId]);
+    await client.query(
+      `
+        UPDATE password_resets
+        SET used_at = COALESCE(used_at, NOW())
+        WHERE user_id = $1
+          AND used_at IS NULL
+      `,
+      [userId],
+    );
+    const result = await client.query<PasswordResetRecord>(
+      `
+        INSERT INTO password_resets (
+          user_id,
+          token_hash,
+          expires_at
+        )
+        VALUES ($1, $2, NOW() + INTERVAL '30 minutes')
+        RETURNING *
+      `,
+      [userId, tokenHash],
+    );
+    await client.query('COMMIT');
+
+    return {
+      record: result.rows[0],
+      token,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getValidPasswordResetByToken(token: string) {
@@ -375,6 +478,114 @@ export async function markPasswordResetUsed(resetId: number) {
     `,
     [resetId],
   );
+}
+
+export async function consumePasswordReset(input: {
+  password: string;
+  token: string;
+}): Promise<
+  | { status: 'disabled'; user: UserRecord }
+  | { status: 'invalid'; user: null }
+  | { status: 'updated'; user: UserRecord }
+> {
+  const client = await pool.connect();
+  const tokenHash = hashOpaqueToken(input.token);
+
+  try {
+    await client.query('BEGIN');
+    const resetResult = await client.query<PasswordResetRecord>(
+      `
+        SELECT *
+        FROM password_resets
+        WHERE token_hash = $1
+          AND used_at IS NULL
+          AND expires_at > NOW()
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [tokenHash],
+    );
+    const reset = resetResult.rows[0];
+
+    if (!reset) {
+      await client.query('COMMIT');
+      return { status: 'invalid', user: null };
+    }
+
+    const userResult = await client.query<UserRecord>(
+      `
+        SELECT *
+        FROM users
+        WHERE id = $1
+        FOR UPDATE
+      `,
+      [reset.user_id],
+    );
+    const user = userResult.rows[0];
+
+    if (!user) {
+      await client.query(
+        `
+          UPDATE password_resets
+          SET used_at = NOW()
+          WHERE id = $1
+        `,
+        [reset.id],
+      );
+      await client.query('COMMIT');
+      return { status: 'invalid', user: null };
+    }
+
+    if (user.account_status !== 'active') {
+      await client.query(
+        `
+          UPDATE password_resets
+          SET used_at = NOW()
+          WHERE id = $1
+        `,
+        [reset.id],
+      );
+      await client.query('COMMIT');
+      return { status: 'disabled', user };
+    }
+
+    const passwordHash = await hashPassword(input.password);
+    const updatedUserResult = await client.query<UserRecord>(
+      `
+        UPDATE users
+        SET
+          password_hash = $2,
+          auth_version = auth_version + 1,
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [user.id, passwordHash],
+    );
+    const updatedUser = updatedUserResult.rows[0];
+
+    await client.query(
+      `
+        UPDATE password_resets
+        SET used_at = NOW()
+        WHERE id = $1
+      `,
+      [reset.id],
+    );
+    await client.query('COMMIT');
+
+    if (!updatedUser) {
+      return { status: 'invalid', user: null };
+    }
+
+    return { status: 'updated', user: updatedUser };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createPayment(input: {
@@ -461,11 +672,14 @@ export async function updatePaymentRecord(input: {
     `
       UPDATE payments
       SET
-        status = $2,
+        status = CASE
+          WHEN status = 'completed' AND $2 <> 'completed' THEN status
+          ELSE $2
+        END,
         provider_payment_id = COALESCE($3, provider_payment_id),
         provider_transaction_id = COALESCE($4, provider_transaction_id),
         metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb,
-        completed_at = CASE WHEN $2 = 'completed' THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+        completed_at = CASE WHEN status = 'completed' OR $2 = 'completed' THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
         updated_at = NOW()
       WHERE id = $1
       RETURNING *
@@ -555,6 +769,63 @@ export async function upsertStripePayment(input: {
   );
 }
 
+export type StripePaymentAssociation = PaymentRecord & {
+  stripe_checkout_session_id: StripePaymentRecord['checkout_session_id'];
+  stripe_payment_intent_id: StripePaymentRecord['payment_intent_id'];
+  stripe_price_id: StripePaymentRecord['price_id'];
+};
+
+export async function getStripePaymentAssociationBySessionId(checkoutSessionId: string) {
+  const result = await pool.query<StripePaymentAssociation>(
+    `
+      SELECT
+        p.*,
+        s.checkout_session_id AS stripe_checkout_session_id,
+        s.payment_intent_id AS stripe_payment_intent_id,
+        s.price_id AS stripe_price_id
+      FROM payments p
+      INNER JOIN stripe_payments s ON s.payment_id = p.id
+      WHERE p.provider = 'stripe'
+        AND s.checkout_session_id = $1
+      LIMIT 1
+    `,
+    [checkoutSessionId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function recordStripeWebhook(input: {
+  checkoutSessionId: string;
+  paymentId: number;
+  paymentIntentId?: string | null;
+  rawPayload: Record<string, unknown>;
+  webhookEventId: string;
+}) {
+  const result = await pool.query<StripePaymentRecord>(
+    `
+      UPDATE stripe_payments
+      SET
+        payment_intent_id = COALESCE($3, payment_intent_id),
+        webhook_event_id = $4,
+        raw_payload = $5::jsonb,
+        updated_at = NOW()
+      WHERE payment_id = $1
+        AND checkout_session_id = $2
+      RETURNING *
+    `,
+    [
+      input.paymentId,
+      input.checkoutSessionId,
+      input.paymentIntentId ?? null,
+      input.webhookEventId,
+      JSON.stringify(input.rawPayload),
+    ],
+  );
+
+  return result.rows[0] ?? null;
+}
+
 export async function upsertBkashPayment(input: {
   bkashPaymentId?: string | null;
   callbackPayload?: Record<string, unknown>;
@@ -606,13 +877,24 @@ export async function upsertBkashPayment(input: {
   );
 }
 
+export type BkashPaymentAssociation = PaymentRecord & {
+  bkash_intent: BkashPaymentRecord['intent'];
+  bkash_merchant_invoice_number: BkashPaymentRecord['merchant_invoice_number'];
+  bkash_payment_id: BkashPaymentRecord['bkash_payment_id'];
+};
+
 export async function getPaymentByBkashPaymentId(bkashPaymentId: string) {
-  const result = await pool.query<PaymentRecord>(
+  const result = await pool.query<BkashPaymentAssociation>(
     `
-      SELECT p.*
+      SELECT
+        p.*,
+        b.bkash_payment_id AS bkash_payment_id,
+        b.merchant_invoice_number AS bkash_merchant_invoice_number,
+        b.intent AS bkash_intent
       FROM payments p
       INNER JOIN bkash_payments b ON b.payment_id = p.id
-      WHERE b.bkash_payment_id = $1
+      WHERE p.provider = 'bkash'
+        AND b.bkash_payment_id = $1
       LIMIT 1
     `,
     [bkashPaymentId],
@@ -662,6 +944,82 @@ export async function finalizeCompletedPayment(paymentId: number) {
       throw new Error('User not found for payment.');
     }
 
+    if (user.account_status !== 'active') {
+      const blockedPaymentResult = await client.query<PaymentRecord>(
+        `
+          UPDATE payments
+          SET
+            status = 'completed',
+            completed_at = COALESCE(completed_at, NOW()),
+            metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [
+          payment.id,
+          JSON.stringify({
+            finalizationBlockedReason: 'account_disabled',
+            requiresManualRefundReview: true,
+          }),
+        ],
+      );
+      await client.query('COMMIT');
+      return blockedPaymentResult.rows[0] ?? payment;
+    }
+
+    if (payment.payment_type === 'extra_tokens' && user.package_code === 'starter') {
+      const blockedPaymentResult = await client.query<PaymentRecord>(
+        `
+          UPDATE payments
+          SET
+            status = 'completed',
+            completed_at = COALESCE(completed_at, NOW()),
+            metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [
+          payment.id,
+          JSON.stringify({
+            finalizationBlockedReason: 'extra_tokens_require_paid_plan',
+            requiresManualRefundReview: true,
+          }),
+        ],
+      );
+      await client.query('COMMIT');
+      return blockedPaymentResult.rows[0] ?? payment;
+    }
+
+    if (
+      payment.payment_type === 'package_upgrade'
+      && payment.package_code
+      && !isStrictPackageUpgrade(user.package_code, payment.package_code)
+    ) {
+      const blockedPaymentResult = await client.query<PaymentRecord>(
+        `
+          UPDATE payments
+          SET
+            status = 'completed',
+            completed_at = COALESCE(completed_at, NOW()),
+            metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+            updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [
+          payment.id,
+          JSON.stringify({
+            finalizationBlockedReason: 'target_plan_is_not_an_upgrade',
+            preservedPackageCode: user.package_code,
+          }),
+        ],
+      );
+      await client.query('COMMIT');
+      return blockedPaymentResult.rows[0] ?? payment;
+    }
+
     const updatedPaymentResult = await client.query<PaymentRecord>(
       `
         UPDATE payments
@@ -697,7 +1055,7 @@ export async function finalizeCompletedPayment(paymentId: number) {
       }
 
       const grantedBalance = Number(packageRecord.signup_token_grant);
-      const nextBalance = grantedBalance;
+      const nextBalance = Math.max(Number(user.token_balance), grantedBalance);
       const tokenDelta = nextBalance - Number(user.token_balance);
 
       await client.query(
@@ -853,6 +1211,7 @@ export async function listUsers() {
       SELECT *
       FROM users
       ORDER BY created_at DESC, id DESC
+      LIMIT 500
     `,
   );
 
@@ -865,6 +1224,7 @@ export async function listAllPayments() {
       SELECT *
       FROM payments
       ORDER BY created_at DESC, id DESC
+      LIMIT 500
     `,
   );
 
@@ -877,6 +1237,7 @@ export async function listPackageUpgrades() {
       SELECT *
       FROM package_upgrades
       ORDER BY created_at DESC, id DESC
+      LIMIT 500
     `,
   );
 
@@ -889,6 +1250,7 @@ export async function listAdminActions() {
       SELECT *
       FROM admin_actions
       ORDER BY created_at DESC, id DESC
+      LIMIT 500
     `,
   );
 
@@ -901,6 +1263,7 @@ export async function listTokenTransactions() {
       SELECT *
       FROM token_transactions
       ORDER BY created_at DESC, id DESC
+      LIMIT 500
     `,
   );
 
@@ -1048,7 +1411,10 @@ export async function adminUpgradeUserPackage(input: {
       throw new Error(`Package ${input.packageCode} is not configured.`);
     }
 
-    const nextBalance = Number(packageRecord.signup_token_grant);
+    const nextBalance = Math.max(
+      Number(user.token_balance),
+      Number(packageRecord.signup_token_grant),
+    );
     const tokenDelta = nextBalance - Number(user.token_balance);
 
     const updatedUserResult = await client.query<UserRecord>(
@@ -1169,6 +1535,7 @@ export async function updateUserPackageAndBalance(input: {
 }
 
 export async function updateUserProfile(input: {
+  contactChanged: boolean;
   countryCode: string;
   email: string;
   emailChanged: boolean;
@@ -1189,11 +1556,22 @@ export async function updateUserProfile(input: {
         mobile_e164 = $6,
         email_verified_at = CASE WHEN $7 THEN NULL ELSE email_verified_at END,
         phone_verified_at = CASE WHEN $8 THEN NULL ELSE phone_verified_at END,
+        auth_version = auth_version + CASE WHEN $9 THEN 1 ELSE 0 END,
         updated_at = NOW()
       WHERE id = $1
       RETURNING *
     `,
-    [input.userId, input.fullName, input.email, input.countryCode, input.mobileNumber, input.mobileE164, input.emailChanged, input.phoneChanged],
+    [
+      input.userId,
+      input.fullName,
+      input.email,
+      input.countryCode,
+      input.mobileNumber,
+      input.mobileE164,
+      input.emailChanged,
+      input.phoneChanged,
+      input.contactChanged,
+    ],
   );
 
   return result.rows[0] ?? null;
@@ -1266,6 +1644,7 @@ export async function getTokenTransactionsForUser(userId: number) {
       FROM token_transactions
       WHERE user_id = $1
       ORDER BY created_at DESC, id DESC
+      LIMIT 200
     `,
     [userId],
   );
@@ -1280,6 +1659,7 @@ export async function getPaymentsForUser(userId: number) {
       FROM payments
       WHERE user_id = $1
       ORDER BY created_at DESC, id DESC
+      LIMIT 200
     `,
     [userId],
   );
@@ -1288,91 +1668,174 @@ export async function getPaymentsForUser(userId: number) {
 }
 
 export async function ensureStarterGrantIfEligible(user: UserRecord) {
-  if (!user.email_verified_at || !user.phone_verified_at) {
-    return user;
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const userResult = await client.query<UserRecord>(
+      `
+        SELECT *
+        FROM users
+        WHERE id = $1
+        FOR UPDATE
+      `,
+      [user.id],
+    );
+    const lockedUser = userResult.rows[0];
+
+    if (
+      !lockedUser
+      || !isCustomerFullyVerified(lockedUser)
+      || lockedUser.package_code !== 'starter'
+      || lockedUser.starter_granted_at
+    ) {
+      await client.query('COMMIT');
+      return lockedUser ?? user;
+    }
+
+    const packageResult = await client.query<PackageRecord>(
+      `
+        SELECT *
+        FROM packages
+        WHERE package_code = 'starter'
+        LIMIT 1
+      `,
+    );
+    const starterPackage = packageResult.rows[0];
+
+    if (!starterPackage) {
+      await client.query('COMMIT');
+      return lockedUser;
+    }
+
+    const nextBalance = Math.max(Number(lockedUser.token_balance), Number(starterPackage.signup_token_grant));
+    const tokenDelta = nextBalance - Number(lockedUser.token_balance);
+    const updatedUserResult = await client.query<UserRecord>(
+      `
+        UPDATE users
+        SET
+          token_balance = $2,
+          starter_granted_at = NOW(),
+          starter_last_refill_at = NOW(),
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [lockedUser.id, nextBalance],
+    );
+    const updatedUser = updatedUserResult.rows[0] ?? lockedUser;
+
+    if (tokenDelta !== 0) {
+      await client.query(
+        `
+          INSERT INTO token_transactions (
+            user_id,
+            transaction_type,
+            token_delta,
+            balance_after,
+            notes
+          )
+          VALUES ($1, 'signup_grant', $2, $3, 'Starter signup token grant')
+        `,
+        [lockedUser.id, tokenDelta, nextBalance],
+      );
+    }
+
+    await client.query('COMMIT');
+    return updatedUser;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
-
-  if (user.package_code !== 'starter') {
-    return user;
-  }
-
-  if (user.starter_granted_at) {
-    return user;
-  }
-
-  const starterPackage = await getPackageByCode('starter');
-
-  if (!starterPackage) {
-    return user;
-  }
-
-  const nextBalance = starterPackage.signup_token_grant;
-  const updatedUser = await updateUserBalance({
-    nextBalance,
-    starterGrantedAt: new Date(),
-    starterLastRefillAt: new Date(),
-    userId: user.id,
-  });
-
-  if (!updatedUser) {
-    return user;
-  }
-
-  await createTokenTransaction({
-    balanceAfter: nextBalance,
-    notes: 'Starter signup token grant',
-    tokenDelta: starterPackage.signup_token_grant,
-    transactionType: 'signup_grant',
-    userId: user.id,
-  });
-
-  return updatedUser;
 }
 
 export async function applyStarterMonthlyRefillIfDue(user: UserRecord) {
-  if (user.package_code !== 'starter') {
-    return user;
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const userResult = await client.query<UserRecord>(
+      `
+        SELECT *
+        FROM users
+        WHERE id = $1
+        FOR UPDATE
+      `,
+      [user.id],
+    );
+    const lockedUser = userResult.rows[0];
+
+    if (!lockedUser || lockedUser.package_code !== 'starter') {
+      await client.query('COMMIT');
+      return lockedUser ?? user;
+    }
+
+    const packageResult = await client.query<PackageRecord>(
+      `
+        SELECT *
+        FROM packages
+        WHERE package_code = 'starter'
+        LIMIT 1
+      `,
+    );
+    const starterPackage = packageResult.rows[0];
+    const lastRefill = lockedUser.starter_last_refill_at ?? lockedUser.starter_granted_at;
+
+    if (!starterPackage || Number(starterPackage.monthly_refill_tokens) <= 0 || !lastRefill) {
+      await client.query('COMMIT');
+      return lockedUser;
+    }
+
+    const nextEligibleAt = new Date(lastRefill);
+    nextEligibleAt.setMonth(nextEligibleAt.getMonth() + 1);
+
+    if (nextEligibleAt > new Date()) {
+      await client.query('COMMIT');
+      return lockedUser;
+    }
+
+    const nextBalance = Number(starterPackage.monthly_refill_tokens);
+    const tokenDelta = nextBalance - Number(lockedUser.token_balance);
+    const updatedUserResult = await client.query<UserRecord>(
+      `
+        UPDATE users
+        SET
+          token_balance = $2,
+          starter_last_refill_at = NOW(),
+          updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [lockedUser.id, nextBalance],
+    );
+    const updatedUser = updatedUserResult.rows[0] ?? lockedUser;
+
+    if (tokenDelta !== 0) {
+      await client.query(
+        `
+          INSERT INTO token_transactions (
+            user_id,
+            transaction_type,
+            token_delta,
+            balance_after,
+            notes
+          )
+          VALUES ($1, 'monthly_refill', $2, $3, 'Starter monthly refill reset')
+        `,
+        [lockedUser.id, tokenDelta, nextBalance],
+      );
+    }
+
+    await client.query('COMMIT');
+    return updatedUser;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
-
-  const starterPackage = await getPackageByCode('starter');
-
-  if (!starterPackage || starterPackage.monthly_refill_tokens <= 0) {
-    return user;
-  }
-
-  const lastRefill = user.starter_last_refill_at ?? user.starter_granted_at;
-  if (!lastRefill) {
-    return user;
-  }
-
-  const nextEligibleAt = new Date(lastRefill);
-  nextEligibleAt.setMonth(nextEligibleAt.getMonth() + 1);
-
-  if (nextEligibleAt > new Date()) {
-    return user;
-  }
-
-  const nextBalance = starterPackage.monthly_refill_tokens;
-  const tokenDelta = nextBalance - Number(user.token_balance);
-  const updatedUser = await updateUserBalance({
-    nextBalance,
-    starterLastRefillAt: new Date(),
-    userId: user.id,
-  });
-
-  if (!updatedUser) {
-    return user;
-  }
-
-  await createTokenTransaction({
-    balanceAfter: nextBalance,
-    notes: 'Starter monthly refill reset',
-    tokenDelta,
-    transactionType: 'monthly_refill',
-    userId: user.id,
-  });
-
-  return updatedUser;
 }
 
 export async function downgradeUserToStarter(userId: number) {
