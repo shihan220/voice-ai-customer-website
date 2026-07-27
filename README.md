@@ -66,8 +66,10 @@ npm run db:seed:voices
 Verify schema bootstrap against a disposable fresh database:
 
 ```bash
-DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5434/bangla_voice_ai" npm run verify:db:fresh
+DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5434/bangla_voice_fresh_test" npm run verify:db:fresh
 ```
+
+The verifier refuses to run unless the database name contains `fresh_test`. Never point it at a development or production database.
 
 Required environment variables are documented in `.env.example`. The main ones are:
 
@@ -96,7 +98,27 @@ Required environment variables are documented in `.env.example`. The main ones a
 - `FFMPEG_PATH`
 - `TTS_CHUNK_MAX_CHARS`
 - `TTS_CUSTOM_VOICE_CHUNK_MAX_CHARS`
+- `TTS_CUSTOM_VOICE_PROVIDER_REQUEST_MAX_CHARS`
+- `TTS_MAX_INPUT_CHARACTERS`
+- `TTS_PREVIEW_DAILY_LIMIT_PER_USER`
+- `TTS_STARTER_DAILY_FULL_GENERATION_MINUTES`
+- `TTS_PAID_DAILY_FULL_GENERATION_MINUTES`
+- `TTS_PDF_EXTRACTION_TIMEOUT_MS`
+- `TTS_PDF_MAX_EXTRACTED_CHARS`
+- `TTS_PDF_MAX_CONCURRENT_EXTRACTIONS`
 - `TTS_MAX_ACTIVE_VOICE_PROFILES`
+- `TTS_VOICE_PROFILE_DAILY_CREATE_LIMIT_PER_USER`
+- `TTS_VOICE_PROFILE_DAILY_SYNC_LIMIT_PER_USER`
+- `TTS_VOICE_TEST_PREVIEW_DAILY_LIMIT_PER_USER`
+- `TTS_VOICE_TEST_PREVIEW_COOLDOWN_MINUTES`
+- `TTS_VOICE_PROFILE_MAX_UPLOAD_MB`
+- `TTS_VOICE_PROFILE_MAX_CONCURRENT_PROCESSING`
+- `SAMPLE_PREVIEW_DAILY_LIMIT_PER_USER`
+- `CUSTOMER_SIGNUP_DAILY_IP_LIMIT`
+- `PUBLIC_SAMPLE_REQUEST_DAILY_IP_LIMIT`
+- `KEYPILLAR_TTS_AUDIO_ALLOWED_HOSTS` (optional trusted CDN host allowlist)
+- `MEDIA_PROCESS_TIMEOUT_MS`
+- `HTTP_REQUEST_TIMEOUT_MS`, `HTTP_HEADERS_TIMEOUT_MS`, and `HTTP_KEEP_ALIVE_TIMEOUT_MS`
 
 Temporary Keypillar connection failures are persisted and retried automatically. With the defaults, jobs wait approximately 12.5 minutes across six attempts before becoming failed; retry scheduling survives a website process restart.
 
@@ -142,7 +164,7 @@ curl -I http://127.0.0.1:5181/media/voices/public/ai-self-service-agent.wav
 Fresh schema bootstrap against a disposable database:
 
 ```bash
-DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5434/bangla_voice_ai" npm run verify:db:fresh
+DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5434/bangla_voice_fresh_test" npm run verify:db:fresh
 ```
 
 ## Deploying `banglaspeechai.com`
@@ -157,7 +179,15 @@ Deploy one Node service for this repository, plus a managed PostgreSQL database 
 - `BACKEND_URL=https://banglaspeechai.com`
 - `BKASH_CALLBACK_URL=https://banglaspeechai.com/api/payments/bkash/callback`
 
-Point Cloudflare DNS for `banglaspeechai.com` and `www.banglaspeechai.com` to the deployed service target supplied by the hosting provider. Keep `KEYPILLAR_TTS_API_KEY`, session secrets, database URL, SMTP/Twilio, and payment secrets only in the deployment environment, never in the browser or repository.
+On Namecheap BasicDNS, use the exact domain records Railway provides:
+
+- apex `@`: Railway's verified apex target (typically an ALIAS record)
+- `www`: Railway's verified CNAME target
+- Railway verification TXT records: preserve them until Railway reports both domains as verified
+
+Do not keep old parking A records or duplicate apex/`www` records. Railway terminates HTTPS for the custom domains. Mount persistent storage at the directory configured by `PRIVATE_MEDIA_ROOT`; generated audio and private reference WAVs must not live only on the service's ephemeral filesystem.
+
+Keep `KEYPILLAR_TTS_API_KEY`, session secrets, database URL, SMTP/Twilio, and payment secrets only in Railway environment variables, never in the browser or repository. Rotate any key that has ever been pasted into a chat, log, ticket, or public location.
 
 ## External integration verification
 
@@ -216,6 +246,12 @@ Required variables:
 - `BKASH_APP_KEY`
 - `BKASH_APP_SECRET`
 - `BKASH_CALLBACK_URL`
+- `BKASH_GOLD_AMOUNT_BDT`
+- `BKASH_PLATINUM_AMOUNT_BDT`
+- `BKASH_EXTRA_TOKEN_AMOUNT_BDT`
+
+The three bKash amount variables are required per supported purchase. The backend does not reuse USD
+numbers as BDT prices; a missing amount disables that bKash purchase.
 
 Verification target:
 

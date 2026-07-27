@@ -128,14 +128,15 @@ const seedVoices: SeedVoice[] = [
 
 async function seedVoiceCards() {
   await ensureSchema();
+  const client = await pool.connect();
 
-  await pool.query('BEGIN');
+  await client.query('BEGIN');
 
   try {
-    await pool.query('UPDATE voice_cards SET is_active = FALSE, updated_at = NOW()');
+    await client.query('UPDATE voice_cards SET is_active = FALSE, updated_at = NOW()');
 
     for (const voice of seedVoices) {
-      await pool.query(
+      await client.query(
         `
           INSERT INTO voice_cards (
             id,
@@ -175,10 +176,12 @@ async function seedVoiceCards() {
       );
     }
 
-    await pool.query('COMMIT');
+    await client.query('COMMIT');
   } catch (error) {
-    await pool.query('ROLLBACK');
+    await client.query('ROLLBACK');
     throw error;
+  } finally {
+    client.release();
   }
 
   const result = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM voice_cards WHERE is_active = TRUE');

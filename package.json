@@ -15,6 +15,8 @@
     "dev:backend": "tsx watch backend/index.ts",
     "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev -- --host 127.0.0.1 --port 5175 --strictPort\"",
     "verify:db:fresh": "tsx backend/scripts/verify-fresh-db.ts",
+    "verify:security:boundaries": "tsx backend/scripts/verify-security-boundaries.ts",
+    "verify:security:http": "tsx backend/scripts/verify-security-http.ts",
     "verify:local:runtime": "tsx backend/scripts/verify-local-runtime.ts",
     "verify:local:tts": "tsx backend/scripts/verify-local-tts.ts",
     "verify:provider-retry": "tsx backend/scripts/verify-provider-retry.ts",

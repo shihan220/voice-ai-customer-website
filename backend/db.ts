@@ -94,6 +94,7 @@ export type UserRecord = {
   full_name: string | null;
   email: string;
   password_hash: string;
+  auth_version: number;
   country_code: string | null;
   mobile_number: string | null;
   mobile_e164: string | null;
@@ -157,6 +158,31 @@ export type PaymentRecord = {
   provider_transaction_id: string | null;
   metadata: Record<string, unknown>;
   completed_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type StripePaymentRecord = {
+  payment_id: number;
+  checkout_session_id: string;
+  payment_intent_id: string | null;
+  webhook_event_id: string | null;
+  price_id: string | null;
+  raw_payload: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type BkashPaymentRecord = {
+  payment_id: number;
+  bkash_payment_id: string | null;
+  trx_id: string | null;
+  merchant_invoice_number: string | null;
+  intent: string | null;
+  callback_payload: Record<string, unknown>;
+  execute_payload: Record<string, unknown>;
+  query_payload: Record<string, unknown>;
+  raw_metadata: Record<string, unknown>;
   created_at: Date;
   updated_at: Date;
 };
@@ -254,9 +280,11 @@ export type TtsVoiceProfileRecord = {
   id: number;
   user_id: number;
   provider_profile_id: string | null;
-  provider_sync_status: 'pending' | 'ready';
+  provider_sync_status: 'pending' | 'ready' | 'syncing';
   provider_sync_error: string | null;
+  provider_sync_started_at: Date | null;
   provider_synced_at: Date | null;
+  provider_deactivated_at: Date | null;
   display_name: string;
   reference_text: string;
   reference_audio_seconds: number | null;
@@ -265,6 +293,8 @@ export type TtsVoiceProfileRecord = {
   reference_audio_file_size_bytes: number | null;
   reference_normalized_at: Date | null;
   reference_quality_warnings: string[];
+  consent_confirmed_at: Date | null;
+  consent_version: string | null;
   test_preview_audio_seconds: number | null;
   test_preview_file: string | null;
   test_preview_generated_at: Date | null;
@@ -336,8 +366,8 @@ export type SampleEmailLogRecord = {
   created_at: Date;
 };
 
-async function applySqlMigrations() {
-  await pool.query(`
+async function applySqlMigrations(client: pg.PoolClient) {
+  await client.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id BIGSERIAL PRIMARY KEY,
       filename TEXT NOT NULL UNIQUE,
@@ -360,7 +390,7 @@ async function applySqlMigrations() {
   }
 
   for (const filename of migrationFiles) {
-    const existingResult = await pool.query<{ filename: string }>(
+    const existingResult = await client.query<{ filename: string }>(
       `
         SELECT filename
         FROM schema_migrations
@@ -377,26 +407,34 @@ async function applySqlMigrations() {
     const migrationPath = path.join(migrationsDirectory, filename);
     const sql = await fs.readFile(migrationPath, 'utf8');
 
-    await pool.query('BEGIN');
+    await client.query('BEGIN');
 
     try {
-      await pool.query(sql);
-      await pool.query(
+      await client.query(sql);
+      await client.query(
         `
           INSERT INTO schema_migrations (filename)
           VALUES ($1)
         `,
         [filename],
       );
-      await pool.query('COMMIT');
+      await client.query('COMMIT');
     } catch (error) {
-      await pool.query('ROLLBACK');
+      await client.query('ROLLBACK');
       throw error;
     }
   }
 }
 
 export async function ensureSchema() {
+  const schemaLockClient = await pool.connect();
+  let schemaLockAcquired = false;
+
+  try {
+  await schemaLockClient.query(
+    `SELECT pg_advisory_lock(hashtext('bangla_voice_schema_ensure_v1'))`,
+  );
+  schemaLockAcquired = true;
   await pool.query(`
     CREATE TABLE IF NOT EXISTS voice_cards (
       id INTEGER PRIMARY KEY,
@@ -511,7 +549,24 @@ export async function ensureSchema() {
       DROP COLUMN IF EXISTS include_transcript;
   `);
 
-  await applySqlMigrations();
+  await applySqlMigrations(schemaLockClient);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public_action_rate_limits (
+      action_type TEXT NOT NULL,
+      ip_key_hash TEXT NOT NULL,
+      bucket_date DATE NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0
+        CHECK (attempt_count >= 0),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (action_type, ip_key_hash, bucket_date)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_public_action_rate_limits_updated_at
+      ON public_action_rate_limits (updated_at);
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sample_generations (
@@ -554,9 +609,11 @@ export async function ensureSchema() {
       user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
       provider_profile_id TEXT,
       provider_sync_status TEXT NOT NULL DEFAULT 'ready'
-        CHECK (provider_sync_status IN ('pending', 'ready')),
+        CHECK (provider_sync_status IN ('pending', 'syncing', 'ready')),
       provider_sync_error TEXT,
+      provider_sync_started_at TIMESTAMPTZ,
       provider_synced_at TIMESTAMPTZ,
+      provider_deactivated_at TIMESTAMPTZ,
       display_name TEXT NOT NULL,
       reference_text TEXT NOT NULL,
       reference_audio_seconds NUMERIC(12, 3),
@@ -565,6 +622,8 @@ export async function ensureSchema() {
       reference_audio_file_size_bytes BIGINT,
       reference_normalized_at TIMESTAMPTZ,
       reference_quality_warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      consent_confirmed_at TIMESTAMPTZ,
+      consent_version TEXT,
       test_preview_file TEXT,
       test_preview_audio_seconds NUMERIC(12, 3),
       test_preview_generated_at TIMESTAMPTZ,
@@ -581,9 +640,13 @@ export async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS reference_audio_file_size_bytes BIGINT,
       ADD COLUMN IF NOT EXISTS provider_sync_status TEXT NOT NULL DEFAULT 'ready',
       ADD COLUMN IF NOT EXISTS provider_sync_error TEXT,
+      ADD COLUMN IF NOT EXISTS provider_sync_started_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS provider_synced_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS provider_deactivated_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS reference_normalized_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS reference_quality_warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS consent_confirmed_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS consent_version TEXT,
       ADD COLUMN IF NOT EXISTS test_preview_file TEXT,
       ADD COLUMN IF NOT EXISTS test_preview_audio_seconds NUMERIC(12, 3),
       ADD COLUMN IF NOT EXISTS test_preview_generated_at TIMESTAMPTZ;
@@ -608,7 +671,7 @@ export async function ensureSchema() {
   await pool.query(`
     ALTER TABLE tts_voice_profiles
       ADD CONSTRAINT tts_voice_profiles_provider_sync_status_check
-      CHECK (provider_sync_status IN ('pending', 'ready'));
+      CHECK (provider_sync_status IN ('pending', 'syncing', 'ready'));
   `);
 
   await pool.query(`
@@ -620,6 +683,51 @@ export async function ensureSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_default_unique
       ON tts_voice_profiles (user_id)
       WHERE is_default = TRUE AND is_active = TRUE;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tts_provider_usage_events (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL
+        CHECK (event_type IN ('job_full', 'job_preview', 'sample_preview', 'voice_profile_create', 'voice_profile_sync', 'voice_test_preview')),
+      resource_id BIGINT,
+      usage_units INTEGER NOT NULL DEFAULT 1
+        CHECK (usage_units > 0),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_provider_usage_events
+      ADD COLUMN IF NOT EXISTS usage_units INTEGER NOT NULL DEFAULT 1;
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_provider_usage_events
+      DROP CONSTRAINT IF EXISTS tts_provider_usage_events_event_type_check;
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_provider_usage_events
+      ADD CONSTRAINT tts_provider_usage_events_event_type_check
+      CHECK (event_type IN ('job_full', 'job_preview', 'sample_preview', 'voice_profile_create', 'voice_profile_sync', 'voice_test_preview'));
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_provider_usage_events
+      DROP CONSTRAINT IF EXISTS tts_provider_usage_events_usage_units_check;
+  `);
+
+  await pool.query(`
+    ALTER TABLE tts_provider_usage_events
+      ADD CONSTRAINT tts_provider_usage_events_usage_units_check
+      CHECK (usage_units > 0);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tts_provider_usage_events_user_type_created_at
+      ON tts_provider_usage_events (user_id, event_type, created_at DESC);
   `);
 
   await pool.query(`
@@ -763,4 +871,91 @@ export async function ensureSchema() {
         'tts_generation_refund'
       ));
   `);
+
+  await pool.query(`
+    ALTER TABLE payments
+      DROP CONSTRAINT IF EXISTS payments_amount_positive,
+      DROP CONSTRAINT IF EXISTS payments_currency_format,
+      DROP CONSTRAINT IF EXISTS payments_purchase_shape;
+
+    ALTER TABLE payments
+      ADD CONSTRAINT payments_amount_positive
+        CHECK (amount > 0) NOT VALID,
+      ADD CONSTRAINT payments_currency_format
+        CHECK (currency ~ '^[A-Z]{3}$') NOT VALID,
+      ADD CONSTRAINT payments_purchase_shape
+        CHECK (
+          (payment_type = 'package_upgrade' AND package_code IS NOT NULL AND token_amount IS NULL)
+          OR
+          (payment_type = 'extra_tokens' AND package_code IS NULL AND token_amount > 0)
+        ) NOT VALID;
+
+    ALTER TABLE package_upgrades
+      DROP CONSTRAINT IF EXISTS package_upgrades_granted_tokens_nonnegative;
+
+    ALTER TABLE package_upgrades
+      ADD CONSTRAINT package_upgrades_granted_tokens_nonnegative
+        CHECK (granted_token_amount IS NULL OR granted_token_amount >= 0) NOT VALID;
+
+    ALTER TABLE token_transactions
+      DROP CONSTRAINT IF EXISTS token_transactions_balance_after_nonnegative;
+
+    ALTER TABLE token_transactions
+      ADD CONSTRAINT token_transactions_balance_after_nonnegative
+        CHECK (balance_after >= 0) NOT VALID;
+
+    ALTER TABLE sample_generations
+      DROP CONSTRAINT IF EXISTS sample_generations_numeric_invariants;
+
+    ALTER TABLE sample_generations
+      ADD CONSTRAINT sample_generations_numeric_invariants
+        CHECK (
+          word_count > 0
+          AND token_cost >= 0
+          AND regeneration_attempts_used >= 0
+          AND max_regeneration_attempts >= 0
+          AND regeneration_attempts_used <= max_regeneration_attempts
+        ) NOT VALID;
+
+    ALTER TABLE tts_voice_profiles
+      DROP CONSTRAINT IF EXISTS tts_voice_profiles_audio_metadata_positive;
+
+    ALTER TABLE tts_voice_profiles
+      ADD CONSTRAINT tts_voice_profiles_audio_metadata_positive
+        CHECK (
+          (reference_audio_seconds IS NULL OR reference_audio_seconds > 0)
+          AND (reference_sample_rate IS NULL OR reference_sample_rate > 0)
+          AND (reference_audio_file_size_bytes IS NULL OR reference_audio_file_size_bytes > 0)
+          AND (test_preview_audio_seconds IS NULL OR test_preview_audio_seconds > 0)
+        ) NOT VALID;
+
+    ALTER TABLE tts_generation_jobs
+      DROP CONSTRAINT IF EXISTS tts_generation_jobs_numeric_invariants;
+
+    ALTER TABLE tts_generation_jobs
+      ADD CONSTRAINT tts_generation_jobs_numeric_invariants
+        CHECK (
+          word_count > 0
+          AND token_cost >= 0
+          AND provider_attempt_count >= 0
+          AND (generated_audio_seconds IS NULL OR generated_audio_seconds > 0)
+          AND (billable_minutes IS NULL OR billable_minutes > 0)
+          AND (preview_audio_seconds IS NULL OR preview_audio_seconds > 0)
+        ) NOT VALID;
+
+    ALTER TABLE tts_usage_ledger
+      DROP CONSTRAINT IF EXISTS tts_usage_ledger_billable_minutes_positive;
+
+    ALTER TABLE tts_usage_ledger
+      ADD CONSTRAINT tts_usage_ledger_billable_minutes_positive
+        CHECK (billable_minutes > 0) NOT VALID;
+  `);
+  } finally {
+    if (schemaLockAcquired) {
+      await schemaLockClient.query(
+        `SELECT pg_advisory_unlock(hashtext('bangla_voice_schema_ensure_v1'))`,
+      ).catch(() => undefined);
+    }
+    schemaLockClient.release();
+  }
 }

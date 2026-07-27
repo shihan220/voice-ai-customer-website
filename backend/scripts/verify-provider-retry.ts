@@ -22,6 +22,7 @@ process.env.TTS_PROVIDER_RETRY_MAX_DELAY_MS = '1000';
 
 const { ensureSchema, pool } = await import('../db.ts');
 const { startTtsJobWorker, stopTtsJobWorker } = await import('../services/tts-jobs.ts');
+const workerLeaderLockKey = [1_264_572_754, 1_414_809_943];
 
 type RetryState = {
   error_message: string | null;
@@ -140,9 +141,43 @@ try {
     throw new Error(`Retry exhaustion did not return the expected customer message: ${failedState.error_message}`);
   }
 
+  const contender = await pool.connect();
+  try {
+    const lockResult = await contender.query<{ acquired: boolean }>(
+      'SELECT pg_try_advisory_lock($1, $2) AS acquired',
+      workerLeaderLockKey,
+    );
+
+    if (lockResult.rows[0]?.acquired) {
+      await contender.query('SELECT pg_advisory_unlock($1, $2)', workerLeaderLockKey);
+      throw new Error('A second worker session acquired leadership while the worker was active.');
+    }
+  } finally {
+    contender.release();
+  }
+
+  await stopTtsJobWorker();
+
+  const postStopContender = await pool.connect();
+  try {
+    const lockResult = await postStopContender.query<{ acquired: boolean }>(
+      'SELECT pg_try_advisory_lock($1, $2) AS acquired',
+      workerLeaderLockKey,
+    );
+
+    if (!lockResult.rows[0]?.acquired) {
+      throw new Error('The worker leadership lock was not released after shutdown.');
+    }
+
+    await postStopContender.query('SELECT pg_advisory_unlock($1, $2)', workerLeaderLockKey);
+  } finally {
+    postStopContender.release();
+  }
+
   console.log(JSON.stringify({
     finalStatus: failedState.status,
     firstRetryAttemptCount: Number(retryState.provider_attempt_count),
+    leadershipLockReleasedOnStop: true,
     retryExhaustedAttemptCount: Number(failedState.provider_attempt_count),
     retryStage: retryState.processing_stage,
   }, null, 2));

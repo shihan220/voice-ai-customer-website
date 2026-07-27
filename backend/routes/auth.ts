@@ -1,7 +1,10 @@
 import { Router, type Request, type Response } from 'express';
+import { createHmac } from 'node:crypto';
+import { ipKeyGenerator } from 'express-rate-limit';
 import twilio from 'twilio';
 import {
   createJsonRateLimiter,
+  customerSessionSecret,
   customerSessionCookieName,
   getBackendUrl,
   getFrontendUrl,
@@ -14,8 +17,11 @@ import {
   nodemailer,
   normalizeText,
   requireText,
+  toPublicApiError,
 } from '../core.ts';
 import {
+  consumeDailySignupAttempt,
+  consumePasswordReset,
   createEmailVerification,
   createPasswordReset,
   createPhoneVerification,
@@ -24,21 +30,18 @@ import {
   completePhoneVerification,
   ensureStarterGrantIfEligible,
   generateOtpCode,
-  getValidPasswordResetByToken,
   getLatestPendingEmailVerification,
   getLatestPendingPhoneVerification,
   getUserByEmail,
   getUserById,
   getUserByMobileE164,
-  hashOpaqueToken,
   hashPassword,
   incrementEmailVerificationAttempts,
   incrementPhoneVerificationAttempts,
   markEmailVerified,
-  markPasswordResetUsed,
   markPhoneVerified,
   normalizePhone,
-  updateUserPassword,
+  verifyOtpCode,
   verifyPassword,
 } from '../services/customers.ts';
 import { type UserRecord } from '../db.ts';
@@ -50,12 +53,27 @@ const authLimiter = createJsonRateLimiter({
   maxProduction: 10,
   windowMs: 15 * 60 * 1000,
 });
+const signupLimiter = createJsonRateLimiter({
+  maxDevelopment: 100,
+  maxProduction: 5,
+  message: 'Too many account creation attempts. Please try again tomorrow.',
+  windowMs: 24 * 60 * 60 * 1000,
+});
 const otpLimiter = createJsonRateLimiter({
   maxDevelopment: 30,
   maxProduction: 6,
   windowMs: 10 * 60 * 1000,
 });
 const maxOtpVerificationAttempts = 5;
+const maxEmailLength = 254;
+const maxFullNameLength = 100;
+const maxPasswordLength = 128;
+const dummyLoginPasswordHash = '$argon2id$v=19$m=19456,t=2,p=1$vAINaESlnzNt4yuLElsnfA$1tGL8dU7v+tWUoxg9ImCsEhZsfN74MEaBvWlUFDPyCY';
+
+function getDailySignupLimit() {
+  const configured = Number(process.env.CUSTOMER_SIGNUP_DAILY_IP_LIMIT ?? 3);
+  return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 3;
+}
 
 function isProductionLike() {
   return process.env.NODE_ENV === 'production';
@@ -99,11 +117,72 @@ function assertProductionVerificationDelivery() {
   }
 }
 
-function buildCustomerSession(user: { email: string; id: number }) {
+function buildCustomerSession(user: { auth_version: number; email: string; id: number }) {
   return {
+    authVersion: Number(user.auth_version),
     email: user.email,
     id: Number(user.id),
   };
+}
+
+async function regenerateSession(req: Request) {
+  await new Promise<void>((resolve, reject) => {
+    req.session.regenerate((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+async function saveSession(req: Request) {
+  await new Promise<void>((resolve, reject) => {
+    req.session.save((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+async function establishCustomerSession(req: Request, user: UserRecord) {
+  await regenerateSession(req);
+  req.session.customerUser = buildCustomerSession(user);
+  await saveSession(req);
+}
+
+function assertCredentialLengths(input: { email?: string; password?: string }) {
+  if (input.email && input.email.length > maxEmailLength) {
+    const error = new Error('Enter a valid email address.');
+    (error as Error & { statusCode?: number }).statusCode = 400;
+    throw error;
+  }
+
+  if (input.password && input.password.length > maxPasswordLength) {
+    const error = new Error(`Password must be ${maxPasswordLength} characters or fewer.`);
+    (error as Error & { statusCode?: number }).statusCode = 400;
+    throw error;
+  }
+}
+
+async function consumeSignupAttempt(req: Request) {
+  const normalizedIp = ipKeyGenerator(req.ip || 'unknown');
+  const ipKeyHash = createHmac('sha256', customerSessionSecret)
+    .update(normalizedIp)
+    .digest('hex');
+  const allowed = await consumeDailySignupAttempt(ipKeyHash, getDailySignupLimit());
+
+  if (!allowed) {
+    const error = new Error('Too many accounts were created from this network today. Please try again tomorrow.');
+    (error as Error & { statusCode?: number }).statusCode = 429;
+    throw error;
+  }
 }
 
 function toCustomerUserResponse(user: UserRecord) {
@@ -128,6 +207,13 @@ async function getActiveSessionCustomer(req: Request, res: Response) {
   if (!user) {
     req.session.customerUser = undefined;
     res.status(401).json({ error: 'Log in first.' });
+    return null;
+  }
+
+  if (Number(req.session.customerUser?.authVersion) !== Number(user.auth_version)) {
+    req.session.customerUser = undefined;
+    res.clearCookie(customerSessionCookieName);
+    res.status(401).json({ error: 'Your session has expired. Log in again.' });
     return null;
   }
 
@@ -216,10 +302,34 @@ async function sendPhoneOtp(phone: string, otpCode: string) {
   };
 }
 
+async function sendPasswordResetEmail(
+  smtpConfig: NonNullable<ReturnType<typeof getSmtpConfig>>,
+  email: string,
+  resetUrl: string,
+) {
+  const transporter = nodemailer.createTransport({
+    auth: { pass: smtpConfig.pass, user: smtpConfig.user },
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    host: smtpConfig.host,
+    port: smtpConfig.port,
+    requireTLS: smtpConfig.requireTls,
+    secure: smtpConfig.secure,
+    socketTimeout: 20_000,
+  });
+
+  await transporter.sendMail({
+    from: smtpConfig.from,
+    subject: 'Reset your BANGLA SPEECH AI password',
+    text: `Reset your password using this link: ${resetUrl}`,
+    to: email,
+  });
+}
+
 export function createAuthRouter() {
   const router = Router();
 
-  router.post('/api/auth/signup', authLimiter, async (req, res) => {
+  router.post('/api/auth/signup', signupLimiter, async (req, res) => {
     try {
       const email = requireText(req.body.email, 'Email is required.').toLowerCase();
       const password = requireText(req.body.password, 'Password is required.');
@@ -228,6 +338,8 @@ export function createAuthRouter() {
       const countryCode = normalizeText(req.body.countryCode);
       const mobileNumber = normalizeText(req.body.mobileNumber);
 
+      assertCredentialLengths({ email, password });
+
       if (!isValidEmail(email)) {
         res.status(400).json({ error: 'Enter a valid email address.' });
         return;
@@ -235,6 +347,16 @@ export function createAuthRouter() {
 
       if (password.length < 8) {
         res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+        return;
+      }
+
+      if (fullName.length > maxFullNameLength) {
+        res.status(400).json({ error: `Full name must stay at ${maxFullNameLength} characters or fewer.` });
+        return;
+      }
+
+      if ((countryCode?.length ?? 0) > 8 || (mobileNumber?.length ?? 0) > 32) {
+        res.status(400).json({ error: 'Enter a valid country code and mobile number.' });
         return;
       }
 
@@ -255,19 +377,20 @@ export function createAuthRouter() {
         return;
       }
 
+      await consumeSignupAttempt(req);
+      assertProductionVerificationDelivery();
+
       const existingUser = await getUserByEmail(email);
       if (existingUser) {
-        res.status(409).json({ error: 'An account with this email already exists.' });
+        res.status(409).json({ error: 'Unable to create an account with these details.' });
         return;
       }
 
       const existingPhoneUser = await getUserByMobileE164(normalizedPhone);
       if (existingPhoneUser) {
-        res.status(409).json({ error: 'An account with this mobile number already exists.' });
+        res.status(409).json({ error: 'Unable to create an account with these details.' });
         return;
       }
-
-      assertProductionVerificationDelivery();
 
       const passwordHash = await hashPassword(password);
       const user = await createUser({
@@ -278,8 +401,6 @@ export function createAuthRouter() {
         packageCode: 'starter',
         passwordHash,
       });
-
-      req.session.customerUser = buildCustomerSession(user);
 
       const emailOtp = generateOtpCode();
       const phoneOtp = generateOtpCode();
@@ -297,6 +418,7 @@ export function createAuthRouter() {
       ]);
       const verifiedUser = (await getUserById(user.id)) ?? user;
       const eligibleUser = await ensureStarterGrantIfEligible(verifiedUser);
+      await establishCustomerSession(req, eligibleUser);
 
       res.status(201).json({
         user: toCustomerUserResponse(eligibleUser),
@@ -306,13 +428,20 @@ export function createAuthRouter() {
         },
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes('idx_users_mobile_e164_unique')) {
-        res.status(409).json({ error: 'An account with this mobile number already exists.' });
+      if (
+        error instanceof Error
+        && (
+          error.message.includes('idx_users_mobile_e164_unique')
+          || error.message.includes('users_email')
+        )
+      ) {
+        res.status(409).json({ error: 'Unable to create an account with these details.' });
         return;
       }
 
-      res.status(error instanceof VerificationDeliveryError ? error.statusCode : 400).json({
-        error: error instanceof Error ? error.message : 'Failed to create account.',
+      const publicError = toPublicApiError(error, 'Failed to create account.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -321,9 +450,14 @@ export function createAuthRouter() {
     try {
       const email = requireText(req.body.email, 'Email is required.').toLowerCase();
       const password = requireText(req.body.password, 'Password is required.');
+      assertCredentialLengths({ email, password });
       const user = await getUserByEmail(email);
+      const passwordMatches = await verifyPassword(
+        user?.password_hash ?? dummyLoginPasswordHash,
+        password,
+      );
 
-      if (!user || !(await verifyPassword(user.password_hash, password))) {
+      if (!user || !passwordMatches) {
         res.status(401).json({ error: 'Invalid email or password.' });
         return;
       }
@@ -333,22 +467,22 @@ export function createAuthRouter() {
         return;
       }
 
-      req.session.customerUser = buildCustomerSession(user);
       const eligibleUser = await ensureStarterGrantIfEligible(user);
+      await establishCustomerSession(req, eligibleUser);
 
       res.json({
         user: toCustomerUserResponse(eligibleUser),
       });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Login failed.',
+      const publicError = toPublicApiError(error, 'Login failed.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
 
   router.post('/api/auth/logout', async (req, res) => {
-    req.session.customerUser = undefined;
-    req.session.save(() => {
+    req.session.destroy(() => {
       res.clearCookie(customerSessionCookieName);
       res.json({ authenticated: false });
     });
@@ -387,8 +521,9 @@ export function createAuthRouter() {
         verification: delivery,
       });
     } catch (error) {
-      res.status(error instanceof VerificationDeliveryError ? error.statusCode : 400).json({
-        error: error instanceof Error ? error.message : 'Failed to send email verification code.',
+      const publicError = toPublicApiError(error, 'Failed to send email verification code.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -430,9 +565,17 @@ export function createAuthRouter() {
         return;
       }
 
-      await incrementEmailVerificationAttempts(verification.id);
+      const attemptRecorded = await incrementEmailVerificationAttempts(
+        verification.id,
+        maxOtpVerificationAttempts,
+      );
 
-      if (verification.otp_hash !== hashOpaqueToken(otp)) {
+      if (!attemptRecorded) {
+        res.status(429).json({ error: 'Too many verification attempts. Request a new code.' });
+        return;
+      }
+
+      if (!verifyOtpCode(verification.otp_hash, otp)) {
         res.status(400).json({ error: 'Invalid email verification code.' });
         return;
       }
@@ -446,8 +589,9 @@ export function createAuthRouter() {
         user: toCustomerUserResponse(eligibleUser),
       });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to verify email code.',
+      const publicError = toPublicApiError(error, 'Failed to verify email code.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -491,8 +635,9 @@ export function createAuthRouter() {
         verification: delivery,
       });
     } catch (error) {
-      res.status(error instanceof VerificationDeliveryError ? error.statusCode : 400).json({
-        error: error instanceof Error ? error.message : 'Failed to send phone verification code.',
+      const publicError = toPublicApiError(error, 'Failed to send phone verification code.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -534,9 +679,17 @@ export function createAuthRouter() {
         return;
       }
 
-      await incrementPhoneVerificationAttempts(verification.id);
+      const attemptRecorded = await incrementPhoneVerificationAttempts(
+        verification.id,
+        maxOtpVerificationAttempts,
+      );
 
-      if (verification.otp_hash !== hashOpaqueToken(otp)) {
+      if (!attemptRecorded) {
+        res.status(429).json({ error: 'Too many verification attempts. Request a new code.' });
+        return;
+      }
+
+      if (!verifyOtpCode(verification.otp_hash, otp)) {
         res.status(400).json({ error: 'Invalid phone verification code.' });
         return;
       }
@@ -550,8 +703,9 @@ export function createAuthRouter() {
         user: toCustomerUserResponse(eligibleUser),
       });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to verify phone code.',
+      const publicError = toPublicApiError(error, 'Failed to verify phone code.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -559,6 +713,7 @@ export function createAuthRouter() {
   router.post('/api/auth/forgot-password', authLimiter, async (req, res) => {
     try {
       const email = requireText(req.body.email, 'Email is required.').toLowerCase();
+      assertCredentialLengths({ email });
 
       if (!isValidEmail(email)) {
         res.status(400).json({ error: 'Enter a valid email address.' });
@@ -584,20 +739,13 @@ export function createAuthRouter() {
       resetUrl.searchParams.set('token', token);
 
       if (smtpConfig) {
-        const transporter = nodemailer.createTransport({
-          auth: { pass: smtpConfig.pass, user: smtpConfig.user },
-          host: smtpConfig.host,
-          port: smtpConfig.port,
-          requireTLS: smtpConfig.requireTls,
-          secure: smtpConfig.secure,
-        });
-
-        await transporter.sendMail({
-          from: smtpConfig.from,
-          subject: 'Reset your BANGLA SPEECH AI password',
-          text: `Reset your password using this link: ${resetUrl.toString()}`,
-          to: user.email,
-        });
+        void sendPasswordResetEmail(smtpConfig, user.email, resetUrl.toString())
+          .catch((error) => {
+            console.error('Password reset email delivery failed.', {
+              error,
+              userId: user.id,
+            });
+          });
       }
 
       res.json({
@@ -606,8 +754,9 @@ export function createAuthRouter() {
         resetUrl: !smtpConfig && !isProductionLike() ? resetUrl.toString() : null,
       });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to start the password reset flow.',
+      const publicError = toPublicApiError(error, 'Failed to start the password reset flow.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -617,6 +766,8 @@ export function createAuthRouter() {
       const token = requireText(req.body.token, 'Reset token is required.');
       const password = requireText(req.body.password, 'Password is required.');
       const confirmPassword = requireText(req.body.confirmPassword, 'Confirm password is required.');
+      assertCredentialLengths({ password });
+      assertCredentialLengths({ password: confirmPassword });
 
       if (password.length < 8) {
         res.status(400).json({ error: 'Password must be at least 8 characters long.' });
@@ -628,47 +779,36 @@ export function createAuthRouter() {
         return;
       }
 
-      const passwordReset = await getValidPasswordResetByToken(token);
-
-      if (!passwordReset) {
+      if (!/^[a-f0-9]{48}$/i.test(token)) {
         res.status(400).json({ error: 'Invalid or expired password reset token.' });
         return;
       }
 
-      const resetUser = await getUserById(passwordReset.user_id);
+      const result = await consumePasswordReset({ password, token });
 
-      if (!resetUser) {
-        await markPasswordResetUsed(passwordReset.id);
-        res.status(404).json({ error: 'Account not found.' });
+      if (result.status === 'invalid') {
+        res.status(400).json({ error: 'Invalid or expired password reset token.' });
         return;
       }
 
-      if (resetUser.account_status !== 'active') {
-        await markPasswordResetUsed(passwordReset.id);
+      if (result.status === 'disabled') {
         req.session.customerUser = undefined;
         res.clearCookie(customerSessionCookieName);
         res.status(403).json({ error: 'This account is disabled.' });
         return;
       }
 
-      const passwordHash = await hashPassword(password);
-      const updatedUser = await updateUserPassword(passwordReset.user_id, passwordHash);
-      await markPasswordResetUsed(passwordReset.id);
-
-      if (!updatedUser) {
-        res.status(404).json({ error: 'Account not found.' });
-        return;
-      }
-
-      req.session.customerUser = buildCustomerSession(updatedUser);
+      const updatedUser = result.user;
+      await establishCustomerSession(req, updatedUser);
 
       res.json({
         message: 'Password reset successful.',
         user: toCustomerUserResponse(updatedUser),
       });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to reset password.',
+      const publicError = toPublicApiError(error, 'Failed to reset password.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });

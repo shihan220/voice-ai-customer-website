@@ -1,5 +1,4 @@
 type HealthPayload = {
-  database?: string;
   ok?: boolean;
 };
 
@@ -69,7 +68,7 @@ async function main() {
   const healthResponse = await expectOk(`${backendUrl}/api/health`, 'Backend health');
   const health = (await healthResponse.json()) as HealthPayload;
 
-  if (health.ok !== true || health.database !== 'connected') {
+  if (health.ok !== true || Object.keys(health).some((key) => key !== 'ok')) {
     throw new Error(`Backend health returned unexpected payload: ${JSON.stringify(health)}.`);
   }
 

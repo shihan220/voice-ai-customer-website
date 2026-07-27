@@ -56,8 +56,21 @@ TTS_PROVIDER_RETRY_MAX_ATTEMPTS=6
 TTS_PROVIDER_RETRY_BASE_DELAY_MS=30000
 TTS_PROVIDER_RETRY_MAX_DELAY_MS=300000
 TTS_CUSTOM_VOICE_CHUNK_MAX_CHARS=1200
+TTS_CUSTOM_VOICE_PROVIDER_REQUEST_MAX_CHARS=1200
+TTS_MAX_INPUT_CHARACTERS=30000
+TTS_PREVIEW_DAILY_LIMIT_PER_USER=10
+TTS_STARTER_DAILY_FULL_GENERATION_MINUTES=30
+TTS_PAID_DAILY_FULL_GENERATION_MINUTES=600
 TTS_MAX_ACTIVE_VOICE_PROFILES=3
+TTS_VOICE_PROFILE_DAILY_CREATE_LIMIT_PER_USER=3
+TTS_VOICE_PROFILE_DAILY_SYNC_LIMIT_PER_USER=6
+TTS_VOICE_TEST_PREVIEW_DAILY_LIMIT_PER_USER=6
+TTS_VOICE_TEST_PREVIEW_COOLDOWN_MINUTES=30
+TTS_VOICE_PROFILE_MAX_UPLOAD_MB=40
+TTS_VOICE_PROFILE_MAX_CONCURRENT_PROCESSING=1
 FFMPEG_PATH=ffmpeg
+FFPROBE_PATH=ffprobe
+MEDIA_PROCESS_TIMEOUT_MS=180000
 ```
 
 Run backend and frontend together:
@@ -115,5 +128,5 @@ It also verifies the default Premium MP3 320 kbps + WAV preset, WAV-only mode wi
 - The Keypillar API key must stay server-side only. Never expose it in frontend code.
 - Custom reference voices are website-owned per user in `tts_voice_profiles`. The browser only receives local profile IDs and display names; provider profile IDs stay server-side.
 - The built-in voice is still available as `fixed`. Custom generation jobs store the selected local profile and provider profile at job creation time, so retry/start uses the original voice choice.
-- Reference WAV uploads are accepted through `/api/tts/voice-profiles`, validated with `ffprobe`, sent to Keypillar privately, and discarded by the website after provider profile creation.
+- Reference WAV uploads are accepted through `/api/tts/voice-profiles`, normalized and validated with ffmpeg/ffprobe, sent to Keypillar privately, and stored under the account's private voice-profile directory for download, provider resynchronization, and deletion.
 - Do not call provider-level default voice APIs for customers. Customer defaults are local database flags only.

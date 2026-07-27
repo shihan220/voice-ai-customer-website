@@ -1,6 +1,7 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import {
   createJsonRateLimiter,
+  customerSessionCookieName,
   isCustomerEmailVerificationRequired,
   isCustomerEmailVerified,
   isCustomerPhoneVerificationRequired,
@@ -8,6 +9,7 @@ import {
   isValidEmail,
   normalizeText,
   requireText,
+  toPublicApiError,
 } from '../core.ts';
 import { requireCustomer } from './customer-auth.ts';
 import { listPackages } from '../services/customers.ts';
@@ -15,7 +17,6 @@ import {
   applyStarterMonthlyRefillIfDue,
   createEmailVerification,
   createPhoneVerification,
-  createTokenTransaction,
   createUserActivityLog,
   downgradeUserToStarter,
   ensureStarterGrantIfEligible,
@@ -29,7 +30,6 @@ import {
   normalizePhone,
   updateUserPassword,
   updateUserProfile,
-  updateUserBalance,
   verifyPassword,
 } from '../services/customers.ts';
 
@@ -48,6 +48,42 @@ const planChangeLimiter = createJsonRateLimiter({
   maxProduction: 5,
   windowMs: 15 * 60 * 1000,
 });
+const maxEmailLength = 254;
+const maxFullNameLength = 100;
+const maxPasswordLength = 128;
+
+async function replaceCustomerSession(
+  req: Request,
+  user: { auth_version: number; email: string; id: number },
+) {
+  await new Promise<void>((resolve, reject) => {
+    req.session.regenerate((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+
+  req.session.customerUser = {
+    authVersion: Number(user.auth_version),
+    email: user.email,
+    id: Number(user.id),
+  };
+
+  await new Promise<void>((resolve, reject) => {
+    req.session.save((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
 
 async function getHydratedCustomer(userId: number) {
   const user = await getUserById(userId);
@@ -83,28 +119,39 @@ export function createUserRouter() {
 
   router.get('/api/user/me', async (req, res) => {
     try {
-      if (!req.session.customerUser) {
+      const sessionUser = req.session.customerUser;
+
+      if (!sessionUser) {
         res.json({ authenticated: false, user: null });
         return;
       }
 
-      const user = await getHydratedCustomer(req.session.customerUser.id);
+      const sessionCustomer = await getUserById(sessionUser.id);
+
+      if (
+        !sessionCustomer ||
+        sessionCustomer.account_status !== 'active' ||
+        Number(sessionUser.authVersion) !== Number(sessionCustomer.auth_version)
+      ) {
+        req.session.customerUser = undefined;
+        res.clearCookie(customerSessionCookieName);
+        res.json({ authenticated: false, user: null });
+        return;
+      }
+
+      const user = await getHydratedCustomer(sessionCustomer.id);
 
       if (!user) {
         req.session.customerUser = undefined;
-        res.json({ authenticated: false, user: null });
-        return;
-      }
-
-      if (user.account_status !== 'active') {
-        req.session.customerUser = undefined;
+        res.clearCookie(customerSessionCookieName);
         res.json({ authenticated: false, user: null });
         return;
       }
 
       req.session.customerUser = {
+        authVersion: Number(user.auth_version),
         email: user.email,
-        id: user.id,
+        id: Number(user.id),
       };
 
       res.json({
@@ -112,8 +159,9 @@ export function createUserRouter() {
         user: toCustomerUserResponse(user),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load current user.',
+      const publicError = toPublicApiError(error, 'Failed to load current user.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -132,8 +180,9 @@ export function createUserRouter() {
         })),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load packages.',
+      const publicError = toPublicApiError(error, 'Failed to load packages.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -164,8 +213,9 @@ export function createUserRouter() {
         })),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load token balance.',
+      const publicError = toPublicApiError(error, 'Failed to load token balance.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -181,20 +231,18 @@ export function createUserRouter() {
           createdAt: payment.created_at,
           currency: payment.currency,
           id: payment.id,
-          metadata: payment.metadata,
           packageCode: payment.package_code,
           paymentType: payment.payment_type,
           provider: payment.provider,
-          providerPaymentId: payment.provider_payment_id,
-          providerTransactionId: payment.provider_transaction_id,
           status: payment.status,
           tokenAmount: payment.token_amount === null ? null : Number(payment.token_amount),
           updatedAt: payment.updated_at,
         })),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load payment history.',
+      const publicError = toPublicApiError(error, 'Failed to load payment history.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -213,8 +261,13 @@ export function createUserRouter() {
       const nextCountryCode = normalizeText(req.body.countryCode) ?? user.country_code;
       const nextMobileNumber = normalizeText(req.body.mobileNumber) ?? user.mobile_number;
 
-      if (!isValidEmail(nextEmail)) {
+      if (!isValidEmail(nextEmail) || nextEmail.length > maxEmailLength) {
         res.status(400).json({ error: 'Enter a valid email address.' });
+        return;
+      }
+
+      if (nextFullName && nextFullName.length > maxFullNameLength) {
+        res.status(400).json({ error: `Name must be ${maxFullNameLength} characters or fewer.` });
         return;
       }
 
@@ -235,6 +288,21 @@ export function createUserRouter() {
       const emailVerificationRequired = emailChanged && isCustomerEmailVerificationRequired();
       const phoneVerificationRequired = phoneChanged && isCustomerPhoneVerificationRequired();
 
+      if (emailChanged || phoneChanged) {
+        const currentPassword = requireText(
+          req.body.currentPassword,
+          'Enter your current password to change email or phone details.',
+        );
+
+        if (
+          currentPassword.length > maxPasswordLength ||
+          !(await verifyPassword(user.password_hash, currentPassword))
+        ) {
+          res.status(400).json({ error: 'Current password is incorrect.' });
+          return;
+        }
+      }
+
       if (emailChanged) {
         const existingUser = await getUserByEmail(nextEmail);
 
@@ -254,6 +322,7 @@ export function createUserRouter() {
       }
 
       const updatedUser = await updateUserProfile({
+        contactChanged: emailChanged || phoneChanged,
         countryCode: nextCountryCode,
         email: nextEmail,
         emailChanged: emailVerificationRequired,
@@ -286,8 +355,9 @@ export function createUserRouter() {
       ]);
 
       req.session.customerUser = {
+        authVersion: Number(updatedUser.auth_version),
         email: updatedUser.email,
-        id: updatedUser.id,
+        id: Number(updatedUser.id),
       };
 
       res.json({
@@ -306,8 +376,9 @@ export function createUserRouter() {
         },
       });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to update profile.',
+      const publicError = toPublicApiError(error, 'Failed to update profile.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -317,6 +388,15 @@ export function createUserRouter() {
       const currentPassword = requireText(req.body.currentPassword, 'Current password is required.');
       const newPassword = requireText(req.body.newPassword, 'New password is required.');
       const confirmPassword = requireText(req.body.confirmPassword, 'Confirm password is required.');
+
+      if (
+        currentPassword.length > maxPasswordLength ||
+        newPassword.length > maxPasswordLength ||
+        confirmPassword.length > maxPasswordLength
+      ) {
+        res.status(400).json({ error: `Passwords must be ${maxPasswordLength} characters or fewer.` });
+        return;
+      }
 
       if (newPassword.length < 8) {
         res.status(400).json({ error: 'New password must be at least 8 characters long.' });
@@ -355,10 +435,12 @@ export function createUserRouter() {
         userId: updatedUser.id,
       });
 
+      await replaceCustomerSession(req, updatedUser);
       res.json({ message: 'Password updated successfully.' });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to change password.',
+      const publicError = toPublicApiError(error, 'Failed to change password.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });
@@ -372,81 +454,9 @@ export function createUserRouter() {
         user: toCustomerUserResponse(result.user),
       });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to change plan.',
-      });
-    }
-  });
-
-  router.post('/api/user/use-token', requireCustomer, async (req, res) => {
-    try {
-      const user = await getHydratedCustomer(req.session.customerUser!.id);
-
-      if (!user) {
-        res.status(404).json({ error: 'User not found.' });
-        return;
-      }
-
-      const hasExplicitAmount = Object.prototype.hasOwnProperty.call(req.body, 'amount');
-      const amountRaw = hasExplicitAmount ? Number(req.body.amount) : 1;
-
-      if (!Number.isFinite(amountRaw) || amountRaw <= 0) {
-        res.status(400).json({ error: 'Provide a positive token usage amount.' });
-        return;
-      }
-
-      const amount = Math.floor(amountRaw);
-      const notes = normalizeText(req.body.notes) ?? normalizeText(req.body.reason) ?? 'Sample usage';
-
-      if (!isCustomerEmailVerified(user)) {
-        res.status(403).json({ error: 'Verify your email before using samples.' });
-        return;
-      }
-
-      if (!isCustomerPhoneVerified(user)) {
-        res.status(403).json({ error: 'Verify your phone before using samples.' });
-        return;
-      }
-
-      if (Number(user.token_balance) < amount) {
-        res.status(402).json({ error: 'Insufficient token balance. Upgrade or buy extra tokens.' });
-        return;
-      }
-
-      const nextBalance = Number(user.token_balance) - amount;
-      const updatedUser = await updateUserBalance({
-        nextBalance,
-        userId: user.id,
-      });
-
-      if (!updatedUser) {
-        res.status(500).json({ error: 'Failed to update token balance.' });
-        return;
-      }
-
-      const transaction = await createTokenTransaction({
-        balanceAfter: nextBalance,
-        notes,
-        tokenDelta: -amount,
-        transactionType: 'usage',
-        userId: user.id,
-      });
-
-      res.json({
-        message: 'Token usage recorded.',
-        tokenBalance: Number(updatedUser.token_balance),
-        transaction: {
-          balanceAfter: Number(transaction.balance_after),
-          createdAt: transaction.created_at,
-          id: transaction.id,
-          notes: transaction.notes,
-          tokenDelta: Number(transaction.token_delta),
-          transactionType: transaction.transaction_type,
-        },
-      });
-    } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to record token usage.',
+      const publicError = toPublicApiError(error, 'Failed to change plan.');
+      res.status(publicError.statusCode).json({
+        error: publicError.message,
       });
     }
   });

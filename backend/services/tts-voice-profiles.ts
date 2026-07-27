@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +12,19 @@ import {
   pool,
   type TtsVoiceProfileRecord,
 } from '../db.ts';
+import {
+  assertAndRecordTtsProviderUsage,
+  readBoundedIntegerEnv,
+} from './tts-provider-usage.ts';
+import {
+  fetchSafeProviderAudio,
+  readResponseBufferWithLimit,
+} from './provider-audio-fetch.ts';
+import {
+  runMediaCommand as runCommand,
+  runMediaCommandForStderr as getAudioFilterOutput,
+  runMediaCommandForStdout as runCommandForStdout,
+} from './process-runner.ts';
 
 const defaultKeypillarTtsBaseUrl = 'https://api.keypillar.org';
 const defaultKeypillarTtsEndpoint = '/v1/voice/generate';
@@ -24,14 +36,19 @@ const defaultKeypillarTtsRequestTimeoutMs = 180_000;
 const defaultFixedVoiceDisplayName = 'Keypillar Bangla Female';
 const defaultFfmpegPath = 'ffmpeg';
 const defaultMaxActiveVoiceProfilesPerUser = 3;
+const defaultVoiceProfileDailyCreateLimit = 3;
+const defaultVoiceProfileDailySyncLimit = 6;
+const defaultVoiceTestPreviewDailyLimit = 6;
+const defaultVoiceTestPreviewCooldownMinutes = 30;
+const defaultVoiceProfileMaxUploadMegabytes = 40;
 const maxVoiceProfileNameLength = 80;
 const maxReferenceTextLength = 4_000;
 const minReferenceAudioSeconds = 120;
 const maxReferenceAudioSeconds = 300;
-const maxReferenceAudioBytes = 64 * 1024 * 1024;
 const providerUnavailablePublicMessage = 'Keypillar voice profile API is currently unavailable. The reference WAV was saved here and can be activated after the API is back online.';
 const providerDeactivateUnavailablePublicMessage = 'Keypillar voice profile API is currently unavailable. The voice was not deleted yet; please try again after the API is back online.';
 const testPreviewText = 'এটি আমার কাস্টম কণ্ঠের একটি ছোট পরীক্ষামূলক অডিও। বাক্যগুলো পরিষ্কারভাবে পড়া হচ্ছে, যাতে স্বর, বিরতি এবং উচ্চারণ বোঝা যায়।';
+const voiceConsentVersion = 'voice-consent-v1';
 
 type AudioMetadata = {
   durationSeconds: number;
@@ -149,17 +166,52 @@ function getVoiceProfileConfig() {
     process.env.KEYPILLAR_TTS_REQUEST_TIMEOUT_MS,
     defaultKeypillarTtsRequestTimeoutMs,
   );
+  const dailyCreateLimit = readBoundedIntegerEnv(
+    'TTS_VOICE_PROFILE_DAILY_CREATE_LIMIT_PER_USER',
+    defaultVoiceProfileDailyCreateLimit,
+    1,
+    20,
+  );
+  const dailySyncLimit = readBoundedIntegerEnv(
+    'TTS_VOICE_PROFILE_DAILY_SYNC_LIMIT_PER_USER',
+    defaultVoiceProfileDailySyncLimit,
+    1,
+    50,
+  );
+  const dailyTestPreviewLimit = readBoundedIntegerEnv(
+    'TTS_VOICE_TEST_PREVIEW_DAILY_LIMIT_PER_USER',
+    defaultVoiceTestPreviewDailyLimit,
+    1,
+    50,
+  );
+  const testPreviewCooldownMinutes = readBoundedIntegerEnv(
+    'TTS_VOICE_TEST_PREVIEW_COOLDOWN_MINUTES',
+    defaultVoiceTestPreviewCooldownMinutes,
+    1,
+    1_440,
+  );
+  const maxUploadMegabytes = readBoundedIntegerEnv(
+    'TTS_VOICE_PROFILE_MAX_UPLOAD_MB',
+    defaultVoiceProfileMaxUploadMegabytes,
+    16,
+    64,
+  );
 
   return {
     apiKey,
     apiUrl,
+    dailyCreateLimit,
+    dailySyncLimit,
+    dailyTestPreviewLimit,
     ffmpegPath: normalizeText(process.env.FFMPEG_PATH) ?? defaultFfmpegPath,
     format: defaultKeypillarTtsFormat,
     maxActiveProfiles: Number.isFinite(configuredMaxActive) && configuredMaxActive > 0
       ? Math.floor(configuredMaxActive)
       : defaultMaxActiveVoiceProfilesPerUser,
+    maxAudioBytes: maxUploadMegabytes * 1024 * 1024,
     pronunciationMode: normalizeText(process.env.KEYPILLAR_TTS_PRONUNCIATION_MODE) ?? defaultKeypillarTtsPronunciationMode,
     requestTimeoutMs,
+    testPreviewCooldownMs: testPreviewCooldownMinutes * 60_000,
     ttsApiUrl,
     voiceId: normalizeText(process.env.KEYPILLAR_TTS_VOICE_ID) ?? defaultKeypillarTtsVoiceId,
   };
@@ -199,65 +251,6 @@ function resolveFfprobePath(ffmpegPath: string) {
   }
 
   return path.join(path.dirname(ffmpegPath), path.basename(ffmpegPath).replace(/ffmpeg$/, 'ffprobe'));
-}
-
-async function runCommandForStdout(command: string, args: string[]) {
-  return new Promise<string>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on('error', (error) => {
-      reject(error);
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve(stdout);
-        return;
-      }
-
-      reject(new Error(stderr.trim() || `${command} exited with code ${code ?? 'unknown'}.`));
-    });
-  });
-}
-
-async function runCommand(command: string, args: string[]) {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-
-    let stderr = '';
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on('error', (error) => {
-      reject(error);
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      reject(new Error(stderr.trim() || `${command} exited with code ${code ?? 'unknown'}.`));
-    });
-  });
 }
 
 function assertWavBuffer(audioBuffer: Buffer) {
@@ -360,33 +353,6 @@ function parseSilenceWarnings(output: string, durationSeconds: number) {
   return warnings;
 }
 
-async function getAudioFilterOutput(command: string, args: string[]) {
-  return new Promise<string>((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-
-    let stderr = '';
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on('error', (error) => {
-      reject(error);
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve(stderr);
-        return;
-      }
-
-      reject(new Error(stderr.trim() || `${command} exited with code ${code ?? 'unknown'}.`));
-    });
-  });
-}
-
 async function buildReferenceQualityWarnings(filePath: string, metadata: AudioMetadata) {
   const config = getVoiceProfileConfig();
   const warnings: string[] = [];
@@ -446,10 +412,18 @@ async function buildReferenceQualityWarnings(filePath: string, metadata: AudioMe
 }
 
 async function normalizeReferenceAudio(audioBuffer: Buffer): Promise<NormalizedReferenceAudio> {
+  const config = getVoiceProfileConfig();
+
+  if (audioBuffer.byteLength > config.maxAudioBytes) {
+    throw withStatus(
+      `Reference WAV files must stay under ${Math.floor(config.maxAudioBytes / (1024 * 1024))} MB.`,
+      413,
+    );
+  }
+
   assertWavBuffer(audioBuffer);
   await inspectReferenceWav(audioBuffer);
 
-  const config = getVoiceProfileConfig();
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'keypillar-reference-normalize-'));
   const inputPath = path.join(tempDirectory, `${randomUUID()}-input.wav`);
   const outputPath = path.join(tempDirectory, `${randomUUID()}-normalized.wav`);
@@ -626,45 +600,28 @@ function extractAudioUrlFromPayload(payload: unknown) {
   return null;
 }
 
-function resolveProviderAudioUrl(audioUrl: string, apiUrl: string) {
-  try {
-    return new URL(audioUrl, apiUrl).toString();
-  } catch {
-    throw withStatus('Keypillar TTS response included an invalid audio URL.', 502);
-  }
-}
-
 async function fetchProviderAudioUrl(audioUrl: string, config: ReturnType<typeof getVoiceProfileConfig>) {
-  const resolvedUrl = resolveProviderAudioUrl(audioUrl, config.ttsApiUrl);
-  const providerOrigin = new URL(config.ttsApiUrl).origin;
-  const audioOrigin = new URL(resolvedUrl).origin;
-  const headers: Record<string, string> = {};
   const delaysMs = [0, 500, 1_000, 1_500, 2_500, 4_000];
   let lastStatusCode: number | null = null;
-
-  if (audioOrigin === providerOrigin) {
-    headers.Authorization = `Bearer ${config.apiKey}`;
-  }
 
   for (const [attemptIndex, delayMs] of delaysMs.entries()) {
     if (delayMs > 0) {
       await wait(delayMs);
     }
 
-    const response = await fetchWithTimeout(
-      resolvedUrl,
-      { headers },
-      config.requestTimeoutMs,
-      `Test preview audio fetch timed out after ${Math.round(config.requestTimeoutMs / 1_000)} seconds.`,
-      'Keypillar TTS API is currently unavailable. Try the custom voice test again after the API is back online.',
-    );
+    const response = await fetchSafeProviderAudio({
+      apiKey: config.apiKey,
+      audioUrl,
+      providerApiUrl: config.ttsApiUrl,
+      timeoutMs: config.requestTimeoutMs,
+    });
 
     if (response.ok) {
-      return Buffer.from(await response.arrayBuffer());
+      return readResponseBufferWithLimit(response);
     }
 
     lastStatusCode = response.status;
-    await response.arrayBuffer().catch(() => undefined);
+    await response.body?.cancel().catch(() => undefined);
 
     const hasMoreAttempts = attemptIndex < delaysMs.length - 1;
     const retryable = response.status === 404 ||
@@ -755,7 +712,7 @@ async function generateProviderTestPreview(input: {
   }
 
   if (contentType.includes('audio') || contentType.includes('octet-stream')) {
-    return Buffer.from(await response.arrayBuffer());
+    return readResponseBufferWithLimit(response);
   }
 
   if (contentType.includes('json')) {
@@ -882,6 +839,9 @@ async function deactivateProviderVoiceProfile(providerProfileId: string) {
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');
+    if (response.status === 404 || response.status === 410) {
+      return;
+    }
     if (isCloudflareOriginUnavailable(response.status, errorBody)) {
       throw withStatus(
         `Keypillar voice profile deactivate unavailable with status ${response.status}${errorBody ? `: ${errorBody.slice(0, 240)}` : '.'}`,
@@ -1016,10 +976,11 @@ export async function resolveTtsVoiceSelectionForUser(
 
   const localProfileId = typeof normalized === 'number' ? normalized : Number(normalized);
 
-  if (!Number.isInteger(localProfileId) || localProfileId <= 0) {
+  if (!Number.isSafeInteger(localProfileId) || localProfileId <= 0) {
     throw withStatus('Choose a valid voice profile.', 400);
   }
 
+  await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [-Math.abs(localProfileId)]);
   const result = await client.query<TtsVoiceProfileRecord>(
     `
       SELECT *
@@ -1028,6 +989,7 @@ export async function resolveTtsVoiceSelectionForUser(
         AND user_id = $2
         AND is_active = TRUE
       LIMIT 1
+      FOR SHARE
     `,
     [localProfileId, userId],
   );
@@ -1096,51 +1058,21 @@ export async function getOwnedTtsVoiceProfileReferencePath(profileId: number, us
 
 export async function createTtsVoiceProfile(input: {
   audioBuffer: Buffer;
+  consentConfirmed: boolean;
   displayName: string;
   referenceText: string;
   setDefault: boolean;
   userId: number;
 }) {
+  if (!input.consentConfirmed) {
+    throw withStatus('Confirm that this is your voice or that you have explicit permission to use it.', 400);
+  }
+
   const displayName = normalizeProfileName(input.displayName);
   const referenceText = normalizeReferenceText(input.referenceText);
   const config = getVoiceProfileConfig();
-
-  const preflightResult = await pool.query<{ count: string }>(
-    `
-      SELECT COUNT(*)::text AS count
-      FROM tts_voice_profiles
-      WHERE user_id = $1
-        AND is_active = TRUE
-    `,
-    [input.userId],
-  );
-  const currentActiveCount = Number(preflightResult.rows[0]?.count ?? 0);
-
-  if (currentActiveCount >= config.maxActiveProfiles) {
-    throw withStatus(`You can keep up to ${config.maxActiveProfiles} active custom voices. Deactivate one before creating another.`, 409);
-  }
-
-  const normalizedReference = await normalizeReferenceAudio(input.audioBuffer);
-
+  let normalizedReference: NormalizedReferenceAudio | null = null;
   let providerProfileId: string | null = null;
-  let providerSyncStatus: ProviderSyncStatus = 'ready';
-  let providerSyncError: string | null = null;
-
-  try {
-    providerProfileId = await createProviderVoiceProfile({
-      audioBuffer: normalizedReference.audioBuffer,
-      displayName,
-      referenceText,
-    });
-  } catch (error) {
-    if (!isProviderVoiceProfileUnavailableError(error)) {
-      throw error;
-    }
-
-    providerSyncStatus = 'pending';
-    providerSyncError = (error as { publicMessage?: string }).publicMessage ?? providerUnavailablePublicMessage;
-  }
-
   const client = await pool.connect();
   let profileDirectoryToClean: string | null = null;
 
@@ -1152,6 +1084,33 @@ export async function createTtsVoiceProfile(input: {
 
     if (activeCount >= config.maxActiveProfiles) {
       throw withStatus(`You can keep up to ${config.maxActiveProfiles} active custom voices. Deactivate one before creating another.`, 409);
+    }
+
+    await assertAndRecordTtsProviderUsage(client, {
+      eventType: 'voice_profile_create',
+      limit: config.dailyCreateLimit,
+      limitMessage: `You can create up to ${config.dailyCreateLimit} custom voice profiles in 24 hours. Try again later.`,
+      userId: input.userId,
+    });
+
+    normalizedReference = await normalizeReferenceAudio(input.audioBuffer);
+
+    let providerSyncStatus: ProviderSyncStatus = 'ready';
+    let providerSyncError: string | null = null;
+
+    try {
+      providerProfileId = await createProviderVoiceProfile({
+        audioBuffer: normalizedReference.audioBuffer,
+        displayName,
+        referenceText,
+      });
+    } catch (error) {
+      if (!isProviderVoiceProfileUnavailableError(error)) {
+        throw error;
+      }
+
+      providerSyncStatus = 'pending';
+      providerSyncError = (error as { publicMessage?: string }).publicMessage ?? providerUnavailablePublicMessage;
     }
 
     const canSetDefault = input.setDefault && providerSyncStatus === 'ready';
@@ -1184,9 +1143,11 @@ export async function createTtsVoiceProfile(input: {
           reference_sample_rate,
           reference_normalized_at,
           reference_quality_warnings,
+          consent_confirmed_at,
+          consent_version,
           is_default
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, NOW(), $12, $13)
         RETURNING *
       `,
       [
@@ -1201,6 +1162,7 @@ export async function createTtsVoiceProfile(input: {
         normalizedReference.metadata.sampleRate,
         normalizedReference.normalizedAt,
         JSON.stringify(normalizedReference.qualityWarnings),
+        voiceConsentVersion,
         canSetDefault,
       ],
     );
@@ -1239,55 +1201,93 @@ export async function createTtsVoiceProfile(input: {
 }
 
 export async function syncTtsVoiceProfileWithProvider(profileId: number, userId: number) {
-  const profileResult = await pool.query<TtsVoiceProfileRecord>(
-    `
-      SELECT *
-      FROM tts_voice_profiles
-      WHERE id = $1
-        AND user_id = $2
-        AND is_active = TRUE
-      LIMIT 1
-    `,
-    [profileId, userId],
-  );
-  const profile = profileResult.rows[0];
-
-  if (!profile) {
-    throw withStatus('Voice profile not found.', 404);
-  }
-
-  if (profile.provider_sync_status === 'ready' && profile.provider_profile_id) {
-    return profile;
-  }
-
-  if (!profile.reference_audio_file) {
-    throw withStatus('Reference WAV is not stored for this voice profile.', 409);
-  }
-
-  const referenceAudioPath = resolvePrivateReferencePath(profile.reference_audio_file);
-  const audioBuffer = await fs.readFile(referenceAudioPath).catch((error: unknown) => {
-    throw withStatus(
-      `Reference WAV is missing: ${error instanceof Error ? error.message : String(error)}`,
-      409,
-      'Reference WAV is missing. Delete this voice and create a new one.',
-    );
-  });
-  const normalizedReference = await normalizeReferenceAudio(audioBuffer);
-
+  const config = getVoiceProfileConfig();
+  const client = await pool.connect();
   let providerProfileId: string | null = null;
+  let transactionFinished = false;
 
   try {
-    providerProfileId = await createProviderVoiceProfile({
-      audioBuffer: normalizedReference.audioBuffer,
-      displayName: profile.display_name,
-      referenceText: profile.reference_text,
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [-Math.abs(profileId)]);
+
+    const profileResult = await client.query<TtsVoiceProfileRecord>(
+      `
+        SELECT *
+        FROM tts_voice_profiles
+        WHERE id = $1
+          AND user_id = $2
+          AND is_active = TRUE
+        FOR UPDATE
+      `,
+      [profileId, userId],
+    );
+    const profile = profileResult.rows[0];
+
+    if (!profile) {
+      throw withStatus('Voice profile not found.', 404);
+    }
+
+    if (profile.provider_sync_status === 'ready' && profile.provider_profile_id) {
+      await client.query('COMMIT');
+      transactionFinished = true;
+      return profile;
+    }
+
+    if (!profile.reference_audio_file) {
+      throw withStatus('Reference WAV is not stored for this voice profile.', 409);
+    }
+
+    await assertAndRecordTtsProviderUsage(client, {
+      eventType: 'voice_profile_sync',
+      limit: config.dailySyncLimit,
+      limitMessage: `You can retry custom voice activation up to ${config.dailySyncLimit} times in 24 hours. Try again later.`,
+      resourceId: profileId,
+      userId,
     });
-  } catch (error) {
-    if (isProviderVoiceProfileUnavailableError(error)) {
-      await pool.query(
+
+    await client.query(
+      `
+        UPDATE tts_voice_profiles
+        SET
+          provider_sync_status = 'syncing',
+          provider_sync_started_at = NOW(),
+          provider_sync_error = NULL,
+          updated_at = NOW()
+        WHERE id = $1
+          AND user_id = $2
+      `,
+      [profileId, userId],
+    );
+
+    const referenceAudioPath = resolvePrivateReferencePath(profile.reference_audio_file);
+    const audioBuffer = await fs.readFile(referenceAudioPath).catch((error: unknown) => {
+      throw withStatus(
+        `Reference WAV is missing: ${error instanceof Error ? error.message : String(error)}`,
+        409,
+        'Reference WAV is missing. Delete this voice and create a new one.',
+      );
+    });
+    const normalizedReference = await normalizeReferenceAudio(audioBuffer);
+
+    try {
+      providerProfileId = await createProviderVoiceProfile({
+        audioBuffer: normalizedReference.audioBuffer,
+        displayName: profile.display_name,
+        referenceText: profile.reference_text,
+      });
+    } catch (error) {
+      const publicMessage = error instanceof Error
+        && 'publicMessage' in error
+        && typeof (error as Error & { publicMessage?: unknown }).publicMessage === 'string'
+        ? (error as Error & { publicMessage: string }).publicMessage
+        : 'Custom voice activation failed. Try again later.';
+
+      await client.query(
         `
           UPDATE tts_voice_profiles
           SET
+            provider_sync_status = 'pending',
+            provider_sync_started_at = NULL,
             provider_sync_error = $3,
             updated_at = NOW()
           WHERE id = $1
@@ -1296,25 +1296,26 @@ export async function syncTtsVoiceProfileWithProvider(profileId: number, userId:
         [
           profileId,
           userId,
-          (error as { publicMessage?: string }).publicMessage ?? providerUnavailablePublicMessage,
+          publicMessage,
         ],
       );
+
+      await client.query('COMMIT');
+      transactionFinished = true;
+      throw error;
     }
 
-    throw error;
-  }
-
-  try {
     const profilePaths = getVoiceProfilePaths(profile);
     await fs.mkdir(profilePaths.profileDirectory, { recursive: true });
     await fs.writeFile(profilePaths.referenceAbsolutePath, normalizedReference.audioBuffer);
 
-    const updatedResult = await pool.query<TtsVoiceProfileRecord>(
+    const updatedResult = await client.query<TtsVoiceProfileRecord>(
       `
         UPDATE tts_voice_profiles
         SET
           provider_profile_id = $3,
           provider_sync_status = 'ready',
+          provider_sync_started_at = NULL,
           provider_sync_error = NULL,
           provider_synced_at = NOW(),
           reference_audio_seconds = $4,
@@ -1347,66 +1348,134 @@ export async function syncTtsVoiceProfileWithProvider(profileId: number, userId:
       throw withStatus('Voice profile not found.', 404);
     }
 
+    await client.query('COMMIT');
+    transactionFinished = true;
     return updatedProfile;
   } catch (error) {
-    await tryDeactivateProviderVoiceProfile(providerProfileId);
+    if (!transactionFinished) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      await tryDeactivateProviderVoiceProfile(providerProfileId);
+    }
     throw error;
+  } finally {
+    client.release();
   }
 }
 
 export async function generateTtsVoiceProfileTestPreview(profileId: number, userId: number) {
-  const profileResult = await pool.query<TtsVoiceProfileRecord>(
-    `
-      SELECT *
-      FROM tts_voice_profiles
-      WHERE id = $1
-        AND user_id = $2
-        AND is_active = TRUE
-      LIMIT 1
-    `,
-    [profileId, userId],
-  );
-  const profile = profileResult.rows[0];
+  const config = getVoiceProfileConfig();
+  const client = await pool.connect();
+  let transactionFinished = false;
+  let providerUsageRecorded = false;
 
-  if (!profile) {
-    throw withStatus('Voice profile not found.', 404);
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [-Math.abs(profileId)]);
+
+    const profileResult = await client.query<TtsVoiceProfileRecord>(
+      `
+        SELECT *
+        FROM tts_voice_profiles
+        WHERE id = $1
+          AND user_id = $2
+          AND is_active = TRUE
+        FOR UPDATE
+      `,
+      [profileId, userId],
+    );
+    const profile = profileResult.rows[0];
+
+    if (!profile) {
+      throw withStatus('Voice profile not found.', 404);
+    }
+
+    if (profile.provider_sync_status !== 'ready' || !profile.provider_profile_id) {
+      throw withStatus('Activate this voice before generating a test preview.', 409);
+    }
+
+    const profilePaths = getVoiceProfilePaths(profile);
+    const generatedAtMs = profile.test_preview_generated_at?.getTime?.() ?? 0;
+    const cacheIsFresh = Boolean(
+      profile.test_preview_file
+      && generatedAtMs > 0
+      && Date.now() - generatedAtMs < config.testPreviewCooldownMs,
+    );
+
+    if (cacheIsFresh) {
+      const cachedPreviewExists = await fs.access(profilePaths.testPreviewAbsolutePath)
+        .then(() => true)
+        .catch(() => false);
+
+      if (cachedPreviewExists) {
+        await client.query('COMMIT');
+        transactionFinished = true;
+        return profile;
+      }
+    }
+
+    await assertAndRecordTtsProviderUsage(client, {
+      eventType: 'voice_test_preview',
+      limit: config.dailyTestPreviewLimit,
+      limitMessage: `You can generate up to ${config.dailyTestPreviewLimit} custom voice tests in 24 hours. Reuse the existing test audio or try again later.`,
+      resourceId: profileId,
+      userId,
+    });
+    providerUsageRecorded = true;
+
+    let previewAudio: Buffer;
+    try {
+      previewAudio = await generateProviderTestPreview({
+        providerVoiceProfileId: profile.provider_profile_id,
+      });
+    } catch (error) {
+      await client.query('COMMIT');
+      transactionFinished = true;
+      throw error;
+    }
+
+    const metadata = await inspectReferenceWav(previewAudio, { enforceDurationLimits: false });
+    await fs.mkdir(profilePaths.profileDirectory, { recursive: true });
+    await fs.writeFile(profilePaths.testPreviewAbsolutePath, previewAudio);
+
+    const updatedResult = await client.query<TtsVoiceProfileRecord>(
+      `
+        UPDATE tts_voice_profiles
+        SET
+          test_preview_file = $3,
+          test_preview_audio_seconds = $4,
+          test_preview_generated_at = NOW(),
+          updated_at = NOW()
+        WHERE id = $1
+          AND user_id = $2
+          AND is_active = TRUE
+        RETURNING *
+      `,
+      [profileId, userId, profilePaths.testPreviewRelativePath, metadata.durationSeconds],
+    );
+    const updatedProfile = updatedResult.rows[0];
+
+    if (!updatedProfile) {
+      throw withStatus('Voice profile not found.', 404);
+    }
+
+    await client.query('COMMIT');
+    transactionFinished = true;
+    return updatedProfile;
+  } catch (error) {
+    if (!transactionFinished && providerUsageRecorded) {
+      await client.query('COMMIT')
+        .then(() => {
+          transactionFinished = true;
+        })
+        .catch(() => undefined);
+    }
+    if (!transactionFinished) {
+      await client.query('ROLLBACK').catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    client.release();
   }
-
-  if (profile.provider_sync_status !== 'ready' || !profile.provider_profile_id) {
-    throw withStatus('Activate this voice before generating a test preview.', 409);
-  }
-
-  const profilePaths = getVoiceProfilePaths(profile);
-  const previewAudio = await generateProviderTestPreview({
-    providerVoiceProfileId: profile.provider_profile_id,
-  });
-  const metadata = await inspectReferenceWav(previewAudio, { enforceDurationLimits: false });
-
-  await fs.mkdir(profilePaths.profileDirectory, { recursive: true });
-  await fs.writeFile(profilePaths.testPreviewAbsolutePath, previewAudio);
-
-  const updatedResult = await pool.query<TtsVoiceProfileRecord>(
-    `
-      UPDATE tts_voice_profiles
-      SET
-        test_preview_file = $3,
-        test_preview_audio_seconds = $4,
-        test_preview_generated_at = NOW(),
-        updated_at = NOW()
-      WHERE id = $1
-        AND user_id = $2
-        AND is_active = TRUE
-      RETURNING *
-    `,
-    [profileId, userId, profilePaths.testPreviewRelativePath, metadata.durationSeconds],
-  );
-  const updatedProfile = updatedResult.rows[0];
-
-  if (!updatedProfile) {
-    throw withStatus('Voice profile not found.', 404);
-  }
-
-  return updatedProfile;
 }
 
 export async function getOwnedTtsVoiceProfileTestPreviewPath(profileId: number, userId: number) {
@@ -1442,6 +1511,7 @@ export async function setDefaultTtsVoiceProfile(profileId: number, userId: numbe
 
   try {
     await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [-Math.abs(profileId)]);
 
     const profileResult = await client.query<TtsVoiceProfileRecord>(
       `
@@ -1501,11 +1571,13 @@ export async function setDefaultTtsVoiceProfile(profileId: number, userId: numbe
 
 export async function deactivateTtsVoiceProfile(profileId: number, userId: number) {
   const client = await pool.connect();
-  let profileDirectoryToClean: string | null = null;
   let userDirectoryToClean: string | null = null;
+  let transactionOpen = false;
 
   try {
     await client.query('BEGIN');
+    transactionOpen = true;
+    await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [-Math.abs(profileId)]);
 
     const profileResult = await client.query<TtsVoiceProfileRecord>(
       `
@@ -1533,11 +1605,16 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
       );
     }
 
-    await tryDeactivateProviderVoiceProfile(profile.provider_profile_id);
+    if (profile.provider_profile_id) {
+      await deactivateProviderVoiceProfile(profile.provider_profile_id);
+    }
 
     const profilePaths = getVoiceProfilePaths(profile);
-    profileDirectoryToClean = profilePaths.profileDirectory;
     userDirectoryToClean = profilePaths.userDirectory;
+
+    // Do not redact the database row until the private reference and previews
+    // are gone. A filesystem failure remains visible and retryable to the owner.
+    await fs.rm(profilePaths.profileDirectory, { force: true, recursive: true });
 
     const updatedResult = await client.query<TtsVoiceProfileRecord>(
       `
@@ -1545,8 +1622,18 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
         SET
           is_active = FALSE,
           is_default = FALSE,
+          provider_profile_id = NULL,
+          provider_sync_status = 'pending',
+          provider_sync_error = NULL,
+          provider_sync_started_at = NULL,
+          provider_deactivated_at = NOW(),
+          reference_text = '[deleted]',
+          reference_audio_seconds = NULL,
+          reference_sample_rate = NULL,
           reference_audio_file = NULL,
           reference_audio_file_size_bytes = NULL,
+          reference_normalized_at = NULL,
+          reference_quality_warnings = '[]'::jsonb,
           test_preview_file = NULL,
           test_preview_audio_seconds = NULL,
           test_preview_generated_at = NULL,
@@ -1559,15 +1646,15 @@ export async function deactivateTtsVoiceProfile(profileId: number, userId: numbe
     );
 
     await client.query('COMMIT');
-    if (profileDirectoryToClean) {
-      await fs.rm(profileDirectoryToClean, { force: true, recursive: true }).catch(() => undefined);
-    }
+    transactionOpen = false;
     if (userDirectoryToClean) {
       await fs.rmdir(userDirectoryToClean).catch(() => undefined);
     }
     return updatedResult.rows[0];
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (transactionOpen) {
+      await client.query('ROLLBACK').catch(() => undefined);
+    }
     throw error;
   } finally {
     client.release();
@@ -1579,7 +1666,7 @@ export function getTtsVoiceProfileLimits() {
 
   return {
     maxActiveProfiles: config.maxActiveProfiles,
-    maxAudioBytes: maxReferenceAudioBytes,
+    maxAudioBytes: config.maxAudioBytes,
     maxAudioSeconds: maxReferenceAudioSeconds,
     minAudioSeconds: minReferenceAudioSeconds,
   };

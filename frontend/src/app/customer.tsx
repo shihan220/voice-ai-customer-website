@@ -34,6 +34,12 @@ export type CustomerUser = {
   tokenBalance: number;
 };
 
+const customerPackageRank: Record<CustomerUser['packageType'], number> = {
+  gold: 1,
+  platinum: 2,
+  starter: 0,
+};
+
 type CustomerSessionResponse = {
   authenticated: boolean;
   user: CustomerUser | null;
@@ -54,12 +60,9 @@ type PaymentHistoryItem = {
   createdAt: string;
   currency: string;
   id: number;
-  metadata: Record<string, unknown>;
   packageCode: string | null;
   paymentType: string;
   provider: string;
-  providerPaymentId: string | null;
-  providerTransactionId: string | null;
   status: string;
   tokenAmount: number | null;
   updatedAt: string;
@@ -81,7 +84,14 @@ type PaymentProviderAvailability = {
   providers: {
     bkash: {
       configured: boolean;
+      extra5000: boolean;
+      gold: boolean;
+      platinum: boolean;
     };
+    prices: Record<'extra5000' | 'gold' | 'platinum', {
+      bkash: { amount: number; currency: string } | null;
+      stripe: { amount: number; currency: string };
+    }>;
     stripe: {
       configured: boolean;
       extra5000: boolean;
@@ -922,7 +932,20 @@ export function PaymentMethodDialog({
           ? providerAvailability.providers.stripe.platinum
           : false
     : false;
-  const bkashAvailable = Boolean(providerAvailability?.providers.bkash.configured);
+  const purchaseKey =
+    'extraTokenAmount' in selection
+      ? 'extra5000'
+      : selection.packageCode === 'gold'
+        ? 'gold'
+        : 'platinum';
+  const bkashAvailable = providerAvailability
+    ? purchaseKey === 'extra5000'
+      ? providerAvailability.providers.bkash.extra5000
+      : purchaseKey === 'gold'
+        ? providerAvailability.providers.bkash.gold
+        : providerAvailability.providers.bkash.platinum
+    : false;
+  const providerPrices = providerAvailability?.providers.prices[purchaseKey] ?? null;
   const noProviderAvailable = Boolean(providerAvailability && !stripeAvailable && !bkashAvailable);
 
   const handleProvider = async (provider: 'bkash' | 'stripe') => {
@@ -978,6 +1001,24 @@ export function PaymentMethodDialog({
         <p className="mt-3 text-sm leading-7 text-[#64584f]">
           Choose how to continue the payment. Final package and token updates are applied by the backend after provider confirmation.
         </p>
+        {providerPrices ? (
+          <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+            <div className="rounded-2xl border border-[#d8cbbe] bg-white/70 px-4 py-3 text-[#4f4740]">
+              Card:{' '}
+              <span className="font-semibold">
+                {providerPrices.stripe.amount.toFixed(2)} {providerPrices.stripe.currency}
+              </span>
+            </div>
+            <div className="rounded-2xl border border-[#d8cbbe] bg-white/70 px-4 py-3 text-[#4f4740]">
+              bKash:{' '}
+              <span className="font-semibold">
+                {providerPrices.bkash
+                  ? `${providerPrices.bkash.amount.toFixed(2)} ${providerPrices.bkash.currency}`
+                  : 'Not configured'}
+              </span>
+            </div>
+          </div>
+        ) : null}
         {loadingProviders ? <div className="mt-4"><InlineMessage>Checking available payment methods...</InlineMessage></div> : null}
         {noProviderAvailable ? (
           <div className="mt-4">
@@ -2048,6 +2089,7 @@ export function CustomerDashboardPage({
   const [voiceSubmitting, setVoiceSubmitting] = useState(false);
   const [voiceScriptMode, setVoiceScriptMode] = useState<VoiceScriptMode>('recommended');
   const [customScriptConfirmed, setCustomScriptConfirmed] = useState(false);
+  const [voiceConsentConfirmed, setVoiceConsentConfirmed] = useState(false);
   const [voiceForm, setVoiceForm] = useState({
     name: '',
     referenceText: recommendedVoiceReferenceScript,
@@ -2434,6 +2476,7 @@ export function CustomerDashboardPage({
     clearRecordedReference();
     setVoiceScriptMode('recommended');
     setCustomScriptConfirmed(false);
+    setVoiceConsentConfirmed(false);
     setVoiceForm({
       name: '',
       referenceText: recommendedVoiceReferenceScript,
@@ -2488,6 +2531,10 @@ export function CustomerDashboardPage({
         throw new Error('Confirm that the WAV says exactly the custom script before creating the voice.');
       }
 
+      if (!voiceConsentConfirmed) {
+        throw new Error('Confirm that this is your voice or that you have explicit permission to use it.');
+      }
+
       if (isVoiceRecordingBusy) {
         throw new Error('Stop the microphone recording before creating the custom voice.');
       }
@@ -2521,6 +2568,7 @@ export function CustomerDashboardPage({
       formData.append('name', voiceForm.name.trim());
       formData.append('referenceText', voiceForm.referenceText.trim());
       formData.append('setDefault', String(voiceForm.setDefault));
+      formData.append('consentConfirmed', String(voiceConsentConfirmed));
 
       const payload = await apiRequest<{
         message?: string;
@@ -3578,13 +3626,23 @@ export function CustomerDashboardPage({
                       </label>
                     </div>
                   )}
+                  <label className="mt-4 flex items-start gap-3 rounded-2xl border border-[#d8cbbe] bg-white/90 px-4 py-3 text-sm font-semibold leading-6 text-[#4f4740]">
+                    <input
+                      checked={voiceConsentConfirmed}
+                      className="mt-1"
+                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy}
+                      type="checkbox"
+                      onChange={(event) => setVoiceConsentConfirmed(event.target.checked)}
+                    />
+                    I confirm this is my voice, or I have explicit permission from the speaker to create and use this custom voice.
+                  </label>
                   <div className="mt-5 flex flex-col gap-4 border-t border-[#eadfce] pt-4 sm:flex-row sm:items-center sm:justify-between">
                     <p className="max-w-2xl text-xs leading-5 text-[#6f645c]">
                       The voice becomes selectable after the provider profile is active. If the provider is unavailable, the reference WAV is saved for retry.
                     </p>
                     <PrimaryButton
                       className="w-full justify-center sm:w-auto"
-                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy || (voiceScriptMode === 'custom' && !customScriptConfirmed)}
+                      disabled={!canCreateMoreVoiceProfiles || voiceSubmitting || isVoiceRecordingBusy || !voiceConsentConfirmed || (voiceScriptMode === 'custom' && !customScriptConfirmed)}
                       type="submit"
                     >
                       {voiceSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileAudio2 className="h-4 w-4" />}
@@ -4200,6 +4258,7 @@ const validAccountSections = new Set<AccountSection>(['credits', 'payments', 'pl
 function buildProfileFormState(user: CustomerUser) {
   return {
     countryCode: user.countryCode ?? '+880',
+    currentPassword: '',
     email: user.email,
     fullName: user.fullName ?? '',
     mobileNumber: user.mobileNumber ?? '',
@@ -4283,6 +4342,10 @@ export function CustomerAccountPage({
   );
   const profileDisplayName = user.fullName?.trim() || 'Name not set';
   const profileDisplayContact = [user.countryCode, user.mobileNumber].filter(Boolean).join(' ') || 'Contact not set';
+  const profileContactChanged =
+    profileForm.email.trim().toLowerCase() !== user.email.trim().toLowerCase() ||
+    profileForm.countryCode.trim() !== (user.countryCode ?? '').trim() ||
+    profileForm.mobileNumber.trim() !== (user.mobileNumber ?? '').trim();
 
   const handleCancelProfileEdit = () => {
     setProfileEditing(false);
@@ -4299,6 +4362,10 @@ export function CustomerAccountPage({
     try {
       if (!profileForm.fullName.trim()) {
         throw new Error('Enter your name before saving.');
+      }
+
+      if (profileContactChanged && !profileForm.currentPassword) {
+        throw new Error('Enter your current password to change email or phone details.');
       }
 
       const payload = await apiRequest<{
@@ -4521,8 +4588,18 @@ export function CustomerAccountPage({
                     />
                   </div>
                   <InlineMessage>
-                    Contact changes are saved immediately while email and phone verification are disabled.
+                    Contact changes are saved immediately while email and phone verification are disabled. Your current password is required to protect those changes.
                   </InlineMessage>
+                  {profileContactChanged ? (
+                    <TextInput
+                      autoComplete="current-password"
+                      placeholder="Current password"
+                      required
+                      type="password"
+                      value={profileForm.currentPassword}
+                      onChange={(event) => setProfileForm((current) => ({ ...current, currentPassword: event.target.value }))}
+                    />
+                  ) : null}
                   {profileError ? <InlineMessage tone="error">{profileError}</InlineMessage> : null}
                   <div className="flex flex-wrap gap-3">
                     <PrimaryButton className="justify-center" disabled={profileSubmitting} type="submit">
@@ -4563,7 +4640,7 @@ export function CustomerAccountPage({
                       {user.packageType === item.code ? 'Current' : item.isPremium ? 'Premium' : 'Default'}
                     </span>
                   </div>
-                  {item.code !== user.packageType && item.code !== 'starter' ? (
+                  {customerPackageRank[item.code] > customerPackageRank[user.packageType] ? (
                     <div className="mt-4">
                       <PrimaryButton onClick={() => onStartPurchase({ label: item.name, packageCode: item.code })} type="button">
                         Upgrade to {item.name}

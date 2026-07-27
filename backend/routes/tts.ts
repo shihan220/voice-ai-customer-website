@@ -1,4 +1,8 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   createJsonRateLimiter,
   multer,
@@ -15,7 +19,7 @@ import {
 import {
   cancelTtsGenerationJob,
   deleteOwnedTtsGenerationJob,
-  extractPdfText,
+  extractPdfTextFromFile,
   getOwnedTtsGenerationJob,
   getTtsGenerationAttachmentPath,
   getTtsGenerationPreviewPath,
@@ -37,9 +41,25 @@ import {
   setDefaultTtsVoiceProfile,
   syncTtsVoiceProfileWithProvider,
 } from '../services/tts-voice-profiles.ts';
+import { readBoundedIntegerEnv } from '../services/tts-provider-usage.ts';
 
 const maxPdfFileSizeBytes = 10 * 1024 * 1024;
-const maxVoiceReferenceFileSizeBytes = 64 * 1024 * 1024;
+const maxVoiceReferenceFileSizeBytes = getTtsVoiceProfileLimits().maxAudioBytes;
+const pdfUploadDirectory = path.join(os.tmpdir(), 'bangla-speech-ai-pdf-uploads');
+const voiceReferenceUploadDirectory = path.join(os.tmpdir(), 'bangla-speech-ai-voice-uploads');
+const stalePdfUploadAgeMs = 60 * 60 * 1_000;
+const staleVoiceReferenceUploadAgeMs = 60 * 60 * 1_000;
+const pdfUploadCleanupIntervalMs = 5 * 60 * 1_000;
+const voiceReferenceUploadCleanupIntervalMs = 5 * 60 * 1_000;
+let lastPdfUploadCleanupAt = 0;
+let lastVoiceReferenceUploadCleanupAt = 0;
+const maxConcurrentVoiceProfileProcessing = readBoundedIntegerEnv(
+  'TTS_VOICE_PROFILE_MAX_CONCURRENT_PROCESSING',
+  1,
+  1,
+  4,
+);
+let activeVoiceProfileProcessing = 0;
 const ttsPreviewLimiter = createJsonRateLimiter({
   maxDevelopment: 20,
   maxProduction: 5,
@@ -65,6 +85,78 @@ const ttsVoiceProfileLimiter = createJsonRateLimiter({
   windowMs: 15 * 60 * 1000,
 });
 
+function tryAcquireVoiceProfileProcessingSlot() {
+  if (activeVoiceProfileProcessing >= maxConcurrentVoiceProfileProcessing) {
+    return null;
+  }
+
+  activeVoiceProfileProcessing += 1;
+  let released = false;
+
+  return () => {
+    if (released) {
+      return;
+    }
+
+    released = true;
+    activeVoiceProfileProcessing = Math.max(0, activeVoiceProfileProcessing - 1);
+  };
+}
+
+async function preparePdfUploadDirectory() {
+  await fs.mkdir(pdfUploadDirectory, { recursive: true });
+  const now = Date.now();
+
+  if (now - lastPdfUploadCleanupAt < pdfUploadCleanupIntervalMs) {
+    return;
+  }
+
+  lastPdfUploadCleanupAt = now;
+  const entries = await fs.readdir(pdfUploadDirectory, {
+    withFileTypes: true,
+  }).catch(() => []);
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.pdf'))
+      .map(async (entry) => {
+        const filePath = path.join(pdfUploadDirectory, entry.name);
+        const stats = await fs.stat(filePath).catch(() => null);
+
+        if (stats && now - stats.mtimeMs > stalePdfUploadAgeMs) {
+          await fs.rm(filePath, { force: true }).catch(() => undefined);
+        }
+      }),
+  );
+}
+
+async function prepareVoiceReferenceUploadDirectory() {
+  await fs.mkdir(voiceReferenceUploadDirectory, { recursive: true });
+  const now = Date.now();
+
+  if (now - lastVoiceReferenceUploadCleanupAt < voiceReferenceUploadCleanupIntervalMs) {
+    return;
+  }
+
+  lastVoiceReferenceUploadCleanupAt = now;
+  const entries = await fs.readdir(voiceReferenceUploadDirectory, {
+    withFileTypes: true,
+  }).catch(() => []);
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.wav'))
+      .map(async (entry) => {
+        const filePath = path.join(voiceReferenceUploadDirectory, entry.name);
+        const stats = await fs.stat(filePath).catch(() => null);
+
+        if (stats && now - stats.mtimeMs > staleVoiceReferenceUploadAgeMs) {
+          await fs.rm(filePath, { force: true }).catch(() => undefined);
+        }
+      }),
+  );
+}
+
 const pdfUpload = multer({
   fileFilter: (_req, file, callback) => {
     const extension = file.originalname.toLowerCase().endsWith('.pdf');
@@ -80,7 +172,16 @@ const pdfUpload = multer({
   limits: {
     fileSize: maxPdfFileSizeBytes,
   },
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => {
+      preparePdfUploadDirectory()
+        .then(() => callback(null, pdfUploadDirectory))
+        .catch((error: unknown) => callback(error as Error, pdfUploadDirectory));
+    },
+    filename: (_req, _file, callback) => {
+      callback(null, `${randomUUID()}.pdf`);
+    },
+  }),
 });
 
 const voiceReferenceUpload = multer({
@@ -99,7 +200,16 @@ const voiceReferenceUpload = multer({
   limits: {
     fileSize: maxVoiceReferenceFileSizeBytes,
   },
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => {
+      prepareVoiceReferenceUploadDirectory()
+        .then(() => callback(null, voiceReferenceUploadDirectory))
+        .catch((error: unknown) => callback(error as Error, voiceReferenceUploadDirectory));
+    },
+    filename: (_req, _file, callback) => {
+      callback(null, `${randomUUID()}.wav`);
+    },
+  }),
 });
 
 function resolveStatusCode(error: unknown) {
@@ -111,7 +221,18 @@ function resolveStatusCode(error: unknown) {
     return 413;
   }
 
-  return 400;
+  if (error instanceof multer.MulterError) {
+    return 400;
+  }
+
+  if (
+    error instanceof Error
+    && (error.message === 'Upload a PDF file.' || error.message === 'Upload a WAV reference file.')
+  ) {
+    return 400;
+  }
+
+  return 500;
 }
 
 function safeTtsErrorMessage(error: unknown, fallback: string) {
@@ -119,6 +240,10 @@ function safeTtsErrorMessage(error: unknown, fallback: string) {
 
   if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
     return `PDF files must stay under ${Math.floor(maxPdfFileSizeBytes / (1024 * 1024))} MB.`;
+  }
+
+  if (error instanceof multer.MulterError) {
+    return 'Upload one PDF file using the expected file field.';
   }
 
   if (error instanceof Error && statusCode < 500) {
@@ -133,6 +258,10 @@ function safeVoiceProfileErrorMessage(error: unknown, fallback: string) {
 
   if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
     return `Reference WAV files must stay under ${Math.floor(maxVoiceReferenceFileSizeBytes / (1024 * 1024))} MB.`;
+  }
+
+  if (error instanceof multer.MulterError) {
+    return 'Upload one WAV reference file using the expected file field.';
   }
 
   if (
@@ -267,13 +396,16 @@ export function createTtsRouter() {
         voiceProfiles: profiles.map(toTtsVoiceProfilePayload),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load voice profiles.',
+      res.status(resolveStatusCode(error)).json({
+        error: safeVoiceProfileErrorMessage(error, 'Failed to load voice profiles.'),
       });
     }
   });
 
   router.post('/api/tts/voice-profiles', requireCustomer, ttsVoiceProfileLimiter, async (req, res) => {
+    let audioBuffer: Buffer | null = null;
+    let releaseProcessingSlot: (() => void) | null = null;
+
     try {
       await runVoiceReferenceUpload(req, res);
 
@@ -282,8 +414,19 @@ export function createTtsRouter() {
         return;
       }
 
+      releaseProcessingSlot = tryAcquireVoiceProfileProcessingSlot();
+
+      if (!releaseProcessingSlot) {
+        res.status(503).json({
+          error: 'Voice profile processing is busy. Try again shortly.',
+        });
+        return;
+      }
+
+      audioBuffer = await fs.readFile(req.file.path);
       const profile = await createTtsVoiceProfile({
-        audioBuffer: req.file.buffer,
+        audioBuffer,
+        consentConfirmed: req.body.consentConfirmed === 'true' || req.body.consentConfirmed === true,
         displayName: requireText(req.body.name, 'Voice name is required.'),
         referenceText: requireText(req.body.referenceText, 'Reference text is required.'),
         setDefault: req.body.setDefault === 'true' || req.body.setDefault === true,
@@ -305,14 +448,29 @@ export function createTtsRouter() {
       res.status(statusCode).json({
         error: safeVoiceProfileErrorMessage(error, 'Failed to create the voice profile.'),
       });
+    } finally {
+      audioBuffer?.fill(0);
+      if (req.file?.path) {
+        await fs.rm(req.file.path, { force: true }).catch(() => undefined);
+      }
+      releaseProcessingSlot?.();
     }
   });
 
   router.post('/api/tts/voice-profiles/:id/sync', requireCustomer, ttsVoiceProfileLimiter, async (req, res) => {
+    const releaseProcessingSlot = tryAcquireVoiceProfileProcessingSlot();
+
+    if (!releaseProcessingSlot) {
+      res.status(503).json({
+        error: 'Voice profile processing is busy. Try again shortly.',
+      });
+      return;
+    }
+
     try {
       const profileId = Number(req.params.id);
 
-      if (!Number.isFinite(profileId)) {
+      if (!Number.isSafeInteger(profileId) || profileId <= 0) {
         res.status(400).json({ error: 'Valid voice profile id is required.' });
         return;
       }
@@ -329,6 +487,8 @@ export function createTtsRouter() {
       res.status(statusCode).json({
         error: safeVoiceProfileErrorMessage(error, 'Failed to activate the voice profile.'),
       });
+    } finally {
+      releaseProcessingSlot();
     }
   });
 
@@ -336,7 +496,7 @@ export function createTtsRouter() {
     try {
       const profileId = Number(req.params.id);
 
-      if (!Number.isFinite(profileId)) {
+      if (!Number.isSafeInteger(profileId) || profileId <= 0) {
         res.status(400).json({ error: 'Valid voice profile id is required.' });
         return;
       }
@@ -360,7 +520,7 @@ export function createTtsRouter() {
     try {
       const profileId = Number(req.params.id);
 
-      if (!Number.isFinite(profileId)) {
+      if (!Number.isSafeInteger(profileId) || profileId <= 0) {
         res.status(400).json({ error: 'Valid voice profile id is required.' });
         return;
       }
@@ -384,7 +544,7 @@ export function createTtsRouter() {
     try {
       const profileId = Number(req.params.id);
 
-      if (!Number.isFinite(profileId)) {
+      if (!Number.isSafeInteger(profileId) || profileId <= 0) {
         res.status(400).json({ error: 'Valid voice profile id is required.' });
         return;
       }
@@ -408,7 +568,7 @@ export function createTtsRouter() {
     try {
       const profileId = Number(req.params.id);
 
-      if (!Number.isFinite(profileId)) {
+      if (!Number.isSafeInteger(profileId) || profileId <= 0) {
         res.status(400).json({ error: 'Valid voice profile id is required.' });
         return;
       }
@@ -427,7 +587,7 @@ export function createTtsRouter() {
     try {
       const profileId = Number(req.params.id);
 
-      if (!Number.isFinite(profileId)) {
+      if (!Number.isSafeInteger(profileId) || profileId <= 0) {
         res.status(400).json({ error: 'Valid voice profile id is required.' });
         return;
       }
@@ -519,7 +679,7 @@ export function createTtsRouter() {
         return;
       }
 
-      const extractedText = await extractPdfText(req.file.buffer);
+      const extractedText = await extractPdfTextFromFile(req.file.path);
       const sourceName = normalizeText(req.body.sourceName) ?? normalizeText(req.file.originalname);
 
       const result = await queueTtsPreviewJob({
@@ -540,6 +700,10 @@ export function createTtsRouter() {
       res.status(statusCode).json({
         error: safeTtsErrorMessage(error, 'Voice generation failed. Please try again.'),
       });
+    } finally {
+      if (req.file?.path) {
+        await fs.rm(req.file.path, { force: true }).catch(() => undefined);
+      }
     }
   });
 
@@ -559,7 +723,7 @@ export function createTtsRouter() {
         return;
       }
 
-      const extractedText = await extractPdfText(req.file.buffer);
+      const extractedText = await extractPdfTextFromFile(req.file.path);
       const sourceName = normalizeText(req.body.sourceName) ?? normalizeText(req.file.originalname);
 
       const result = await queueTtsGenerationJob({
@@ -580,6 +744,10 @@ export function createTtsRouter() {
       res.status(statusCode).json({
         error: safeTtsErrorMessage(error, 'Voice generation failed. Please try again.'),
       });
+    } finally {
+      if (req.file?.path) {
+        await fs.rm(req.file.path, { force: true }).catch(() => undefined);
+      }
     }
   });
 
@@ -590,8 +758,8 @@ export function createTtsRouter() {
         jobs: jobs.map((job) => toTtsJobPayload(job)),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load audio generation jobs.',
+      res.status(resolveStatusCode(error)).json({
+        error: safeTtsErrorMessage(error, 'Failed to load audio generation jobs.'),
       });
     }
   });
@@ -600,7 +768,7 @@ export function createTtsRouter() {
     try {
       const jobId = Number(req.params.id);
 
-      if (!Number.isFinite(jobId)) {
+      if (!Number.isSafeInteger(jobId) || jobId <= 0) {
         res.status(400).json({ error: 'Valid job id is required.' });
         return;
       }
@@ -618,7 +786,7 @@ export function createTtsRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to load the audio generation job.',
+        error: safeTtsErrorMessage(error, 'Failed to load the audio generation job.'),
       });
     }
   });
@@ -627,7 +795,7 @@ export function createTtsRouter() {
     try {
       const jobId = Number(req.params.id);
 
-      if (!Number.isFinite(jobId)) {
+      if (!Number.isSafeInteger(jobId) || jobId <= 0) {
         res.status(400).json({ error: 'Valid job id is required.' });
         return;
       }
@@ -650,7 +818,7 @@ export function createTtsRouter() {
     try {
       const jobId = Number(req.params.id);
 
-      if (!Number.isFinite(jobId)) {
+      if (!Number.isSafeInteger(jobId) || jobId <= 0) {
         res.status(400).json({ error: 'Valid job id is required.' });
         return;
       }
@@ -673,7 +841,7 @@ export function createTtsRouter() {
     try {
       const jobId = Number(req.params.id);
 
-      if (!Number.isFinite(jobId)) {
+      if (!Number.isSafeInteger(jobId) || jobId <= 0) {
         res.status(400).json({ error: 'Valid job id is required.' });
         return;
       }
@@ -686,7 +854,7 @@ export function createTtsRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to cancel the audio generation job.',
+        error: safeTtsErrorMessage(error, 'Failed to cancel the audio generation job.'),
       });
     }
   });
@@ -695,7 +863,7 @@ export function createTtsRouter() {
     try {
       const jobId = Number(req.params.id);
 
-      if (!Number.isFinite(jobId)) {
+      if (!Number.isSafeInteger(jobId) || jobId <= 0) {
         res.status(400).json({ error: 'Valid job id is required.' });
         return;
       }
@@ -721,7 +889,7 @@ export function createTtsRouter() {
     try {
       const jobId = Number(req.params.id);
 
-      if (!Number.isFinite(jobId)) {
+      if (!Number.isSafeInteger(jobId) || jobId <= 0) {
         res.status(400).json({ error: 'Valid job id is required.' });
         return;
       }
@@ -745,7 +913,7 @@ export function createTtsRouter() {
       const jobId = Number(req.params.id);
       const format = req.query.format === 'mp3' ? 'mp3' : req.query.format === 'wav' ? 'wav' : null;
 
-      if (!Number.isFinite(jobId)) {
+      if (!Number.isSafeInteger(jobId) || jobId <= 0) {
         res.status(400).json({ error: 'Valid job id is required.' });
         return;
       }

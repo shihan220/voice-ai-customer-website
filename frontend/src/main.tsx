@@ -4,7 +4,12 @@ import './styles/index.css';
 
 function showStartupError(error: unknown) {
   const root = document.getElementById('root');
-  const message = error instanceof Error ? error.message : 'Unknown startup error.';
+  const isDevelopment = Boolean(
+    (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV,
+  );
+  const message = isDevelopment && error instanceof Error
+    ? error.message
+    : 'A client-side error prevented the website from starting.';
 
   console.error('Frontend startup failed:', error);
 

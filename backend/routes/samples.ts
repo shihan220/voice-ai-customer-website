@@ -73,7 +73,12 @@ function resolveStatusCode(error: unknown) {
     return error.statusCode;
   }
 
-  return 400;
+  return 500;
+}
+
+function safeSampleErrorMessage(error: unknown, fallback: string) {
+  const statusCode = resolveStatusCode(error);
+  return statusCode < 500 && error instanceof Error ? error.message : fallback;
 }
 
 export function createSamplesRouter() {
@@ -109,11 +114,11 @@ export function createSamplesRouter() {
         clientName: requireText(req.body.clientName ?? req.body.full_name, 'Full name is required.'),
         companyName: normalizeText(req.body.companyName ?? req.body.company_name),
         email,
-        referrer: normalizeText(req.body.referrer),
+        referrer: normalizeText(req.get('referer')),
         scriptText: requireText(req.body.scriptText ?? req.body.messageDetails, 'Script text is required.'),
         selectedService: requireText(req.body.selectedService ?? req.body.selected_service, 'Use case is required.'),
         sourceUrl: normalizeText(req.body.sourceUrl ?? req.body.source_url),
-        userAgent: normalizeText(req.body.userAgent ?? req.body.user_agent),
+        userAgent: normalizeText(req.get('user-agent')),
         userId: user.id,
       });
 
@@ -125,7 +130,7 @@ export function createSamplesRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to generate the sample preview.',
+        error: safeSampleErrorMessage(error, 'Failed to generate the sample preview.'),
       });
     }
   });
@@ -151,7 +156,7 @@ export function createSamplesRouter() {
 
       const sampleId = Number(req.body.sampleId);
 
-      if (!Number.isFinite(sampleId)) {
+      if (!Number.isSafeInteger(sampleId) || sampleId <= 0) {
         res.status(400).json({ error: 'Valid sample id is required.' });
         return;
       }
@@ -171,7 +176,7 @@ export function createSamplesRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to regenerate the sample preview.',
+        error: safeSampleErrorMessage(error, 'Failed to regenerate the sample preview.'),
       });
     }
   });
@@ -180,7 +185,7 @@ export function createSamplesRouter() {
     try {
       const sampleId = Number(req.body.sampleId);
 
-      if (!Number.isFinite(sampleId)) {
+      if (!Number.isSafeInteger(sampleId) || sampleId <= 0) {
         res.status(400).json({ error: 'Valid sample id is required.' });
         return;
       }
@@ -196,7 +201,7 @@ export function createSamplesRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to finalize the sample preview.',
+        error: safeSampleErrorMessage(error, 'Failed to finalize the sample preview.'),
       });
     }
   });
@@ -205,7 +210,7 @@ export function createSamplesRouter() {
     try {
       const sampleId = Number(req.params.id);
 
-      if (!Number.isFinite(sampleId)) {
+      if (!Number.isSafeInteger(sampleId) || sampleId <= 0) {
         res.status(400).json({ error: 'Valid sample id is required.' });
         return;
       }
@@ -234,7 +239,7 @@ export function createSamplesRouter() {
     } catch (error) {
       const statusCode = resolveStatusCode(error);
       res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to download the sample preview.',
+        error: safeSampleErrorMessage(error, 'Failed to download the sample preview.'),
       });
     }
   });

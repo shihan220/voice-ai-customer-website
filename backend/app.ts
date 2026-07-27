@@ -114,10 +114,28 @@ export function createApp() {
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), microphone=(self), payment=(), usb=()');
-    res.setHeader('Content-Security-Policy', "base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'");
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "connect-src 'self'",
+        "font-src 'self' data:",
+        "form-action 'self'",
+        "frame-ancestors 'self'",
+        "img-src 'self' data: blob:",
+        "media-src 'self' blob:",
+        "object-src 'none'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "worker-src 'self' blob:",
+      ].join('; '),
+    );
 
     if (req.secure || req.get('x-forwarded-proto') === 'https') {
-      res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     }
 
     next();
@@ -156,6 +174,11 @@ export function createApp() {
     }),
   );
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+    next();
+  });
   app.use(['/api/admin', '/admin'], adminSessionMiddleware);
   app.use((req, res, next) => {
     if (req.path.startsWith('/api/admin') || req.path.startsWith('/admin')) {
@@ -169,9 +192,13 @@ export function createApp() {
   app.use(['/media/tts-jobs', '/media/tts-voice-profiles'], (_req, res) => {
     res.status(404).json({ error: 'Not found.' });
   });
-  app.use('/media', express.static(mediaRoot));
+  const publicMediaOptions = {
+    immutable: false,
+    maxAge: '1h',
+  } as const;
+  app.use('/media', express.static(mediaRoot, publicMediaOptions));
   if (path.resolve(bundledMediaRoot) !== path.resolve(mediaRoot)) {
-    app.use('/media', express.static(bundledMediaRoot));
+    app.use('/media', express.static(bundledMediaRoot, publicMediaOptions));
   }
   app.use('/media', (_req, res) => {
     res.status(404).json({ error: 'Not found.' });
@@ -179,7 +206,17 @@ export function createApp() {
   app.get('/favicon.ico', (_req, res) => {
     res.redirect(302, '/favicon.png');
   });
-  app.use('/admin', express.static(adminDistRoot, { index: false }));
+  app.use('/admin', express.static(adminDistRoot, {
+    index: false,
+    setHeaders(res, filePath) {
+      res.setHeader(
+        'Cache-Control',
+        filePath.includes(`${path.sep}assets${path.sep}`)
+          ? 'public, max-age=31536000, immutable'
+          : 'no-cache',
+      );
+    },
+  }));
   app.use(createPublicRouter());
   app.use(createAuthRouter());
   app.use(createUserRouter());
@@ -198,7 +235,17 @@ export function createApp() {
 
     next();
   });
-  app.use(express.static(frontendDistRoot, { index: false }));
+  app.use(express.static(frontendDistRoot, {
+    index: false,
+    setHeaders(res, filePath) {
+      res.setHeader(
+        'Cache-Control',
+        filePath.includes(`${path.sep}assets${path.sep}`)
+          ? 'public, max-age=31536000, immutable'
+          : 'no-cache',
+      );
+    },
+  }));
   app.get(/.*/, (req, res, next) => {
     if (req.path.startsWith('/api') || req.path.startsWith('/admin') || req.path.startsWith('/media')) {
       next();
@@ -209,6 +256,7 @@ export function createApp() {
       res.status(404);
     }
 
+    res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.join(frontendDistRoot, 'index.html'), (error) => {
       if (error) {
         res.status(503).send('Public frontend is not built yet. Run npm run build first.');
