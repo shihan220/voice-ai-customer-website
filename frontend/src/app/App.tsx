@@ -131,18 +131,18 @@ function Header({
 
   return (
     <header className="sticky top-0 z-40 border-b border-[#d9cbbd] bg-[#f8f3ec]/92 backdrop-blur">
-      <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-10">
+      <div className="mx-auto max-w-7xl px-4 py-3 sm:px-6 sm:py-4 lg:px-10">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center justify-between gap-3">
-            <a className="flex min-w-0 items-center gap-3" href="/">
+            <a className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3" href="/">
               <img
                 src={brandLogo}
                 alt="BANGLA SPEECH AI logo"
                 className="h-10 w-auto shrink-0 mix-blend-multiply sm:h-11"
               />
-              <div className="min-w-0">
+              <div className="min-w-0 max-w-[145px] sm:max-w-none">
                 <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#995842] sm:text-[11px]">BANGLA SPEECH AI</div>
-                <div className="truncate text-xs font-semibold text-[#373A40] sm:text-sm">Bangladeshi Bangla AI Voice</div>
+                <div className="text-[11px] font-semibold leading-4 text-[#373A40] sm:text-sm sm:leading-5">Bangladeshi Bangla AI Voice</div>
               </div>
             </a>
 
@@ -256,11 +256,13 @@ function Header({
           </div>
         </div>
 
-        <nav className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 text-sm font-semibold text-[#5d544d] md:hidden [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }}>
-          {navLinks.map((link) => (
+        <nav className="grid grid-cols-6 gap-2 pb-1 text-sm font-semibold text-[#5d544d] md:hidden">
+          {navLinks.map((link, index) => (
             <a
               key={link.href}
-              className="shrink-0 rounded-full border border-[#d8cbbe] bg-white/80 px-3 py-2 text-xs transition hover:border-[#c39680] hover:text-[#ae6c4a]"
+              className={`col-span-2 rounded-full border border-[#d8cbbe] bg-white/80 px-2 py-2 text-center text-xs transition hover:border-[#c39680] hover:text-[#ae6c4a] ${
+                index === 3 ? 'col-start-2' : ''
+              }`}
               href={link.href}
             >
               {link.label}
