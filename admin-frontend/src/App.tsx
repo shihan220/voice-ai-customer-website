@@ -2436,9 +2436,13 @@ function FieldLabel({ children, label }: { children: ReactNode; label: string })
 }
 
 function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
+  const ariaLabelledBy = props['aria-labelledby'];
+  const fallbackLabel = !ariaLabelledBy && typeof props.placeholder === 'string' ? props.placeholder : undefined;
+
   return (
     <input
       {...props}
+      aria-label={props['aria-label'] ?? fallbackLabel}
       className={cx(
         'w-full rounded-2xl border border-[#dbcdbf] bg-white px-4 py-3 text-sm text-[#2f343b] outline-none transition placeholder:text-[#a39487] focus:border-[#ae6c4a] focus:ring-4 focus:ring-[#ae6c4a]/10',
         props.className,

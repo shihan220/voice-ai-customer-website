@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS packages (
 
 INSERT INTO packages (package_code, name, monthly_refill_tokens, signup_token_grant, is_premium, display_order)
 VALUES
-  ('starter', 'Starter', 1000, 1000, FALSE, 0),
+  ('starter', 'Starter', 10000, 10000, FALSE, 0),
   ('gold', 'Gold', 0, 10000, TRUE, 1),
   ('platinum', 'Platinum', 0, 100000, TRUE, 2)
 ON CONFLICT (package_code) DO UPDATE
@@ -156,13 +156,16 @@ CREATE TABLE IF NOT EXISTS users (
   full_name TEXT,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
+  auth_version INTEGER NOT NULL DEFAULT 1
+    CHECK (auth_version > 0),
   country_code TEXT,
   mobile_number TEXT,
   mobile_e164 TEXT,
   email_verified_at TIMESTAMPTZ,
   phone_verified_at TIMESTAMPTZ,
   package_code TEXT NOT NULL DEFAULT 'starter' REFERENCES packages (package_code),
-  token_balance BIGINT NOT NULL DEFAULT 0,
+  token_balance BIGINT NOT NULL DEFAULT 0
+    CHECK (token_balance >= 0),
   starter_granted_at TIMESTAMPTZ,
   starter_last_refill_at TIMESTAMPTZ,
   account_status TEXT NOT NULL DEFAULT 'active'
@@ -177,6 +180,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_mobile_e164_unique
 
 CREATE INDEX IF NOT EXISTS idx_users_package_code_status
   ON users (package_code, account_status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS signup_rate_limits (
+  ip_key_hash TEXT NOT NULL,
+  bucket_date DATE NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0
+    CHECK (attempt_count >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (ip_key_hash, bucket_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_signup_rate_limits_updated_at
+  ON signup_rate_limits (updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_signup_rate_limits_bucket_date
+  ON signup_rate_limits (bucket_date);
+
+CREATE TABLE IF NOT EXISTS public_action_rate_limits (
+  action_type TEXT NOT NULL,
+  ip_key_hash TEXT NOT NULL,
+  bucket_date DATE NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0
+    CHECK (attempt_count >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (action_type, ip_key_hash, bucket_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_public_action_rate_limits_updated_at
+  ON public_action_rate_limits (updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_public_action_rate_limits_bucket_date
+  ON public_action_rate_limits (bucket_date);
 
 CREATE TABLE IF NOT EXISTS email_verifications (
   id BIGSERIAL PRIMARY KEY,
@@ -195,6 +229,9 @@ CREATE TABLE IF NOT EXISTS email_verifications (
 CREATE INDEX IF NOT EXISTS idx_email_verifications_user_created_at
   ON email_verifications (user_id, created_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_email_verifications_created_at
+  ON email_verifications (created_at);
+
 CREATE TABLE IF NOT EXISTS phone_verifications (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -212,6 +249,9 @@ CREATE TABLE IF NOT EXISTS phone_verifications (
 CREATE INDEX IF NOT EXISTS idx_phone_verifications_user_created_at
   ON phone_verifications (user_id, created_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_phone_verifications_created_at
+  ON phone_verifications (created_at);
+
 CREATE TABLE IF NOT EXISTS password_resets (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -224,6 +264,9 @@ CREATE TABLE IF NOT EXISTS password_resets (
 CREATE INDEX IF NOT EXISTS idx_password_resets_user_created_at
   ON password_resets (user_id, created_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_password_resets_created_at
+  ON password_resets (created_at);
+
 CREATE TABLE IF NOT EXISTS payments (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -233,8 +276,10 @@ CREATE TABLE IF NOT EXISTS payments (
     CHECK (payment_type IN ('package_upgrade', 'extra_tokens')),
   status TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
-  amount NUMERIC(12, 2) NOT NULL,
-  currency TEXT NOT NULL,
+  amount NUMERIC(12, 2) NOT NULL
+    CHECK (amount > 0),
+  currency TEXT NOT NULL
+    CHECK (currency ~ '^[A-Z]{3}$'),
   package_code TEXT REFERENCES packages (package_code),
   token_amount BIGINT,
   provider_payment_id TEXT,
@@ -242,7 +287,12 @@ CREATE TABLE IF NOT EXISTS payments (
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   completed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (payment_type = 'package_upgrade' AND package_code IS NOT NULL AND token_amount IS NULL)
+    OR
+    (payment_type = 'extra_tokens' AND package_code IS NULL AND token_amount > 0)
+  )
 );
 
 CREATE INDEX IF NOT EXISTS idx_payments_user_status_created_at
@@ -287,7 +337,8 @@ CREATE TABLE IF NOT EXISTS package_upgrades (
   from_package_code TEXT REFERENCES packages (package_code),
   to_package_code TEXT NOT NULL REFERENCES packages (package_code),
   payment_id BIGINT REFERENCES payments (id) ON DELETE SET NULL,
-  granted_token_amount BIGINT,
+  granted_token_amount BIGINT
+    CHECK (granted_token_amount IS NULL OR granted_token_amount >= 0),
   status TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -315,7 +366,8 @@ CREATE TABLE IF NOT EXISTS token_transactions (
       'tts_generation_refund'
     )),
   token_delta BIGINT NOT NULL,
-  balance_after BIGINT NOT NULL,
+  balance_after BIGINT NOT NULL
+    CHECK (balance_after >= 0),
   notes TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -329,16 +381,20 @@ CREATE TABLE IF NOT EXISTS sample_generations (
   sample_request_id BIGINT REFERENCES sample_requests (id) ON DELETE SET NULL,
   script_text TEXT NOT NULL,
   selected_service TEXT NOT NULL,
-  word_count INTEGER NOT NULL,
-  token_cost BIGINT NOT NULL,
+  word_count INTEGER NOT NULL
+    CHECK (word_count > 0),
+  token_cost BIGINT NOT NULL
+    CHECK (token_cost >= 0),
   audio_file TEXT NOT NULL,
   storage_key TEXT,
   source_kind TEXT NOT NULL DEFAULT 'fallback'
     CHECK (source_kind IN ('fallback', 'provider')),
   status TEXT NOT NULL DEFAULT 'preview'
     CHECK (status IN ('preview', 'finalized', 'failed')),
-  regeneration_attempts_used INTEGER NOT NULL DEFAULT 0,
-  max_regeneration_attempts INTEGER NOT NULL DEFAULT 2,
+  regeneration_attempts_used INTEGER NOT NULL DEFAULT 0
+    CHECK (regeneration_attempts_used >= 0),
+  max_regeneration_attempts INTEGER NOT NULL DEFAULT 2
+    CHECK (max_regeneration_attempts >= 0 AND regeneration_attempts_used <= max_regeneration_attempts),
   token_transaction_id BIGINT REFERENCES token_transactions (id) ON DELETE SET NULL,
   finalized_at TIMESTAMPTZ,
   downloaded_at TIMESTAMPTZ,
@@ -352,6 +408,67 @@ CREATE INDEX IF NOT EXISTS idx_sample_generations_user_created_at
 CREATE INDEX IF NOT EXISTS idx_sample_generations_request_created_at
   ON sample_generations (sample_request_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS tts_voice_profiles (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  provider_profile_id TEXT,
+  provider_sync_status TEXT NOT NULL DEFAULT 'ready'
+    CHECK (provider_sync_status IN ('pending', 'syncing', 'ready')),
+  provider_sync_error TEXT,
+  provider_sync_started_at TIMESTAMPTZ,
+  provider_synced_at TIMESTAMPTZ,
+  provider_deactivated_at TIMESTAMPTZ,
+  display_name TEXT NOT NULL,
+  reference_text TEXT NOT NULL,
+  reference_audio_seconds NUMERIC(12, 3)
+    CHECK (reference_audio_seconds IS NULL OR reference_audio_seconds > 0),
+  reference_sample_rate INTEGER
+    CHECK (reference_sample_rate IS NULL OR reference_sample_rate > 0),
+  reference_audio_file TEXT,
+  reference_audio_file_size_bytes BIGINT
+    CHECK (reference_audio_file_size_bytes IS NULL OR reference_audio_file_size_bytes > 0),
+  reference_normalized_at TIMESTAMPTZ,
+  reference_quality_warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  consent_confirmed_at TIMESTAMPTZ,
+  consent_version TEXT,
+  test_preview_file TEXT,
+  test_preview_audio_seconds NUMERIC(12, 3)
+    CHECK (test_preview_audio_seconds IS NULL OR test_preview_audio_seconds > 0),
+  test_preview_generated_at TIMESTAMPTZ,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_active_created_at
+  ON tts_voice_profiles (user_id, is_active, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tts_voice_profiles_user_default_unique
+  ON tts_voice_profiles (user_id)
+  WHERE is_default = TRUE AND is_active = TRUE;
+
+CREATE TABLE IF NOT EXISTS tts_provider_usage_events (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL
+    CHECK (event_type IN ('job_full', 'job_preview', 'sample_preview', 'voice_profile_create', 'voice_profile_sync', 'voice_test_preview')),
+  resource_id BIGINT,
+  usage_units INTEGER NOT NULL DEFAULT 1
+    CHECK (usage_units > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tts_provider_usage_events_user_type_created_at
+  ON tts_provider_usage_events (user_id, event_type, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_tts_provider_usage_events_created_at
+  ON tts_provider_usage_events (created_at);
+
+CREATE INDEX IF NOT EXISTS idx_tts_provider_usage_events_resource
+  ON tts_provider_usage_events (user_id, event_type, resource_id, created_at DESC)
+  WHERE resource_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS tts_generation_jobs (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -359,21 +476,33 @@ CREATE TABLE IF NOT EXISTS tts_generation_jobs (
     CHECK (source_type IN ('text', 'pdf')),
   source_name TEXT,
   input_text TEXT NOT NULL,
-  word_count INTEGER NOT NULL,
-  token_cost BIGINT NOT NULL,
+  word_count INTEGER NOT NULL
+    CHECK (word_count > 0),
+  token_cost BIGINT NOT NULL
+    CHECK (token_cost >= 0),
   quality_preset TEXT NOT NULL DEFAULT 'premium_mp3_wav'
     CHECK (quality_preset IN ('premium_mp3_wav', 'high_mp3_wav', 'standard_mp3_wav', 'wav_only')),
   mp3_bitrate_kbps INTEGER,
-  generated_audio_seconds NUMERIC(12, 3),
-  billable_minutes BIGINT,
+  generated_audio_seconds NUMERIC(12, 3)
+    CHECK (generated_audio_seconds IS NULL OR generated_audio_seconds > 0),
+  billable_minutes BIGINT
+    CHECK (billable_minutes IS NULL OR billable_minutes > 0),
   status TEXT NOT NULL DEFAULT 'queued'
     CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'preview_queued', 'preview_processing', 'preview_ready', 'cancelling', 'cancelled')),
   processing_stage TEXT,
+  provider_attempt_count INTEGER NOT NULL DEFAULT 0
+    CHECK (provider_attempt_count >= 0),
+  provider_next_attempt_at TIMESTAMPTZ,
+  provider_last_error TEXT,
   provider_voice TEXT NOT NULL,
+  voice_profile_id BIGINT REFERENCES tts_voice_profiles (id) ON DELETE SET NULL,
+  voice_display_name TEXT NOT NULL DEFAULT 'Keypillar Bangla Female',
+  provider_voice_profile_id TEXT,
   wav_file TEXT,
   mp3_file TEXT,
   preview_file TEXT,
-  preview_audio_seconds NUMERIC(12, 3),
+  preview_audio_seconds NUMERIC(12, 3)
+    CHECK (preview_audio_seconds IS NULL OR preview_audio_seconds > 0),
   error_message TEXT,
   token_transaction_id BIGINT REFERENCES token_transactions (id) ON DELETE SET NULL,
   downloaded_at TIMESTAMPTZ,
@@ -393,11 +522,15 @@ CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_user_created_at
 CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_status_created_at
   ON tts_generation_jobs (status, created_at ASC);
 
+CREATE INDEX IF NOT EXISTS idx_tts_generation_jobs_retry_schedule
+  ON tts_generation_jobs (status, provider_next_attempt_at, created_at ASC);
+
 CREATE TABLE IF NOT EXISTS tts_usage_ledger (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   job_id BIGINT NOT NULL REFERENCES tts_generation_jobs (id) ON DELETE CASCADE,
-  billable_minutes BIGINT NOT NULL,
+  billable_minutes BIGINT NOT NULL
+    CHECK (billable_minutes > 0),
   reason TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

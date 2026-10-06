@@ -28,6 +28,7 @@ type CustomerSessionResponse = {
 };
 
 type AppLocation = {
+  notFoundPath: string | null;
   pathname: CustomerRoute;
   search: string;
 };
@@ -43,6 +44,7 @@ const validRoutes = new Set<CustomerRoute>([
   '/dashboard',
   '/account',
   '/payment/success',
+  '/payment/failed',
 ]);
 
 function isValidRoute(pathname: string) {
@@ -50,11 +52,11 @@ function isValidRoute(pathname: string) {
 }
 
 function readLocation(): AppLocation {
-  const pathname = isValidRoute(window.location.pathname)
-    ? (window.location.pathname as CustomerRoute)
-    : '/';
+  const isKnownRoute = isValidRoute(window.location.pathname);
+  const pathname = isKnownRoute ? (window.location.pathname as CustomerRoute) : '/';
 
   return {
+    notFoundPath: isKnownRoute ? null : window.location.pathname,
     pathname,
     search: window.location.search,
   };
@@ -63,6 +65,14 @@ function readLocation(): AppLocation {
 function createSearch(params: URLSearchParams) {
   const nextSearch = params.toString();
   return nextSearch ? `?${nextSearch}` : '';
+}
+
+function failedPaymentSearch(search: string) {
+  const params = new URLSearchParams(search);
+  if (!params.get('status')) {
+    params.set('status', 'failed');
+  }
+  return createSearch(params);
 }
 
 function parseLeadIntent(search: string): LeadDialogMode | null {
@@ -121,18 +131,18 @@ function Header({
 
   return (
     <header className="sticky top-0 z-40 border-b border-[#d9cbbd] bg-[#f8f3ec]/92 backdrop-blur">
-      <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-10">
+      <div className="mx-auto max-w-7xl px-4 py-3 sm:px-6 sm:py-4 lg:px-10">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center justify-between gap-3">
-            <a className="flex min-w-0 items-center gap-3" href="/">
+            <a className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3" href="/">
               <img
                 src={brandLogo}
                 alt="BANGLA SPEECH AI logo"
                 className="h-10 w-auto shrink-0 mix-blend-multiply sm:h-11"
               />
-              <div className="min-w-0">
+              <div className="min-w-0 max-w-[145px] sm:max-w-none">
                 <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#995842] sm:text-[11px]">BANGLA SPEECH AI</div>
-                <div className="truncate text-xs font-semibold text-[#373A40] sm:text-sm">Bangladeshi Bangla AI Voice</div>
+                <div className="text-[11px] font-semibold leading-4 text-[#373A40] sm:text-sm sm:leading-5">Bangladeshi Bangla AI Voice</div>
               </div>
             </a>
 
@@ -246,11 +256,13 @@ function Header({
           </div>
         </div>
 
-        <nav className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 text-sm font-semibold text-[#5d544d] md:hidden [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }}>
-          {navLinks.map((link) => (
+        <nav className="grid grid-cols-6 gap-2 pb-1 text-sm font-semibold text-[#5d544d] md:hidden">
+          {navLinks.map((link, index) => (
             <a
               key={link.href}
-              className="shrink-0 rounded-full border border-[#d8cbbe] bg-white/80 px-3 py-2 text-xs transition hover:border-[#c39680] hover:text-[#ae6c4a]"
+              className={`col-span-2 rounded-full border border-[#d8cbbe] bg-white/80 px-2 py-2 text-center text-xs transition hover:border-[#c39680] hover:text-[#ae6c4a] ${
+                index === 3 ? 'col-start-2' : ''
+              }`}
               href={link.href}
             >
               {link.label}
@@ -298,6 +310,39 @@ function LandingPage({
   );
 }
 
+function NotFoundPage({ onNavigate, path }: { onNavigate: (href: string, replace?: boolean) => void; path: string }) {
+  return (
+    <main className="min-h-[calc(100vh-160px)] bg-[#F2EFE7] px-5 py-20 sm:px-8 lg:px-10">
+      <section className="mx-auto max-w-3xl rounded-[28px] border border-[#d8cbbe] bg-white/80 p-8 shadow-[0_24px_70px_rgba(55,58,64,0.10)] sm:p-10">
+        <div className="inline-flex rounded-full border border-[#d9c6b2] bg-[#efe2d1] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#a96544]">
+          Page not found
+        </div>
+        <h1 className="mt-5 text-3xl font-bold text-[#2f343b] sm:text-4xl">This page is not available.</h1>
+        <p className="mt-4 text-base leading-7 text-[#64584f]">
+          The address <span className="font-semibold text-[#2f343b]">{path}</span> does not match a customer website route.
+          Use the homepage or account workspace to continue.
+        </p>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <button
+            className="rounded-full bg-[#ae6c4a] px-5 py-3 text-sm font-semibold text-[#f8f3ec] transition hover:brightness-95"
+            onClick={() => onNavigate('/')}
+            type="button"
+          >
+            Back to website
+          </button>
+          <button
+            className="rounded-full border border-[#d2ccbe] bg-white/80 px-5 py-3 text-sm font-semibold text-[#5a514a] transition hover:border-[#c39680] hover:text-[#ae6c4a]"
+            onClick={() => onNavigate('/dashboard')}
+            type="button"
+          >
+            Open dashboard
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 export default function App() {
   const [location, setLocation] = useState<AppLocation>(readLocation);
   const [leadMode, setLeadMode] = useState<LeadDialogMode | null>(null);
@@ -308,15 +353,22 @@ export default function App() {
 
   const navigate = (href: string, replace = false) => {
     const nextUrl = new URL(href, window.location.origin);
-    const nextPathname = isValidRoute(nextUrl.pathname) ? (nextUrl.pathname as CustomerRoute) : '/';
+    const isKnownRoute = isValidRoute(nextUrl.pathname);
+    const nextPathname = isKnownRoute ? (nextUrl.pathname as CustomerRoute) : '/';
+    const nextNotFoundPath = isKnownRoute ? null : nextUrl.pathname;
 
-    if (nextPathname === location.pathname && nextUrl.search === location.search) {
+    if (
+      nextPathname === location.pathname &&
+      nextUrl.search === location.search &&
+      nextNotFoundPath === location.notFoundPath
+    ) {
       return;
     }
 
     const method = replace ? 'replaceState' : 'pushState';
-    window.history[method]({}, '', `${nextPathname}${nextUrl.search}`);
+    window.history[method]({}, '', `${isKnownRoute ? nextPathname : nextUrl.pathname}${nextUrl.search}`);
     setLocation({
+      notFoundPath: nextNotFoundPath,
       pathname: nextPathname,
       search: nextUrl.search,
     });
@@ -333,7 +385,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (loading) {
+    if (loading || location.notFoundPath) {
       return;
     }
 
@@ -357,6 +409,16 @@ export default function App() {
       return;
     }
 
+    if (session.authenticated && currentUser && location.pathname === '/verify-email' && currentUser.emailVerified) {
+      navigate(currentUser.phoneVerified ? '/dashboard' : '/verify-phone?next=dashboard', true);
+      return;
+    }
+
+    if (session.authenticated && currentUser && location.pathname === '/verify-phone' && currentUser.phoneVerified) {
+      navigate('/dashboard', true);
+      return;
+    }
+
     if (session.authenticated && (location.pathname === '/login' || location.pathname === '/signup')) {
       if (!currentUser?.emailVerified) {
         navigate('/verify-email', true);
@@ -370,10 +432,17 @@ export default function App() {
 
       navigate('/dashboard', true);
     }
-  }, [currentUser?.emailVerified, currentUser?.phoneVerified, loading, location.pathname, session.authenticated]);
+  }, [currentUser?.emailVerified, currentUser?.phoneVerified, loading, location.notFoundPath, location.pathname, session.authenticated]);
 
   useEffect(() => {
-    if (loading || location.pathname !== '/' || !session.authenticated || !currentUser?.emailVerified || !currentUser.phoneVerified) {
+    if (
+      loading ||
+      location.notFoundPath ||
+      location.pathname !== '/' ||
+      !session.authenticated ||
+      !currentUser?.emailVerified ||
+      !currentUser.phoneVerified
+    ) {
       return;
     }
 
@@ -401,7 +470,7 @@ export default function App() {
       ...current,
       search: nextSearch,
     }));
-  }, [currentUser?.emailVerified, currentUser?.phoneVerified, loading, location.pathname, location.search, session.authenticated]);
+  }, [currentUser?.emailVerified, currentUser?.phoneVerified, loading, location.notFoundPath, location.pathname, location.search, session.authenticated]);
 
   const planLabels = useMemo(
     () => ({
@@ -493,6 +562,18 @@ export default function App() {
     navigate('/', true);
   };
 
+  if (location.notFoundPath) {
+    return (
+      <>
+        <Header loading={loading} onNavigate={navigate} onLogout={handleLogout} session={session} />
+        <NotFoundPage onNavigate={navigate} path={location.notFoundPath} />
+        <footer className="border-t border-[#d8cbbd] bg-[#f8f3ec] px-5 py-8 text-center text-sm text-[#6a5f57] sm:px-8 lg:px-10">
+          BANGLA SPEECH AI · Page not found
+        </footer>
+      </>
+    );
+  }
+
   if (location.pathname === '/login' || location.pathname === '/signup' || location.pathname === '/forgot-password' || location.pathname === '/reset-password' || location.pathname === '/verify-email' || location.pathname === '/verify-phone') {
     return (
       <CustomerAuthRoutes
@@ -506,7 +587,7 @@ export default function App() {
     );
   }
 
-  if (loading && !currentUser && (location.pathname.startsWith('/dashboard') || location.pathname === '/account' || location.pathname === '/payment/success')) {
+  if (loading && !currentUser && (location.pathname.startsWith('/dashboard') || location.pathname === '/account' || location.pathname === '/payment/success' || location.pathname === '/payment/failed')) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F2EFE7] px-6">
         <div className="rounded-3xl border border-[#ddcfbe] bg-white/85 px-6 py-4 text-sm font-medium text-[#5c5048] shadow-[0_20px_60px_rgba(92,80,72,0.12)]">
@@ -516,12 +597,12 @@ export default function App() {
     );
   }
 
-  if (location.pathname === '/payment/success') {
+  if (location.pathname === '/payment/success' || location.pathname === '/payment/failed') {
     return (
       <CustomerPaymentSuccessPage
         onNavigate={navigate}
         onRefreshSession={refresh}
-        search={location.search}
+        search={location.pathname === '/payment/failed' ? failedPaymentSearch(location.search) : location.search}
       />
     );
   }

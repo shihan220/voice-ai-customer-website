@@ -14,6 +14,7 @@ type VerificationDelivery = {
 };
 
 type SignupPayload = {
+  user: UserResponse['user'];
   verification: {
     email: VerificationDelivery;
     phone: VerificationDelivery;
@@ -228,9 +229,24 @@ async function createFailedTextJobForRetry(userId: number) {
           status,
           processing_stage,
           provider_voice,
+          full_generation_requested_at,
           error_message
         )
-        VALUES ($1, 'text', 'Local TTS retry verifier', $2, 8, 0, 'premium_mp3_wav', 320, 'failed', 'failed', $3, 'Verifier-created failure.')
+        VALUES (
+          $1,
+          'text',
+          'Local TTS retry verifier',
+          $2,
+          8,
+          0,
+          'premium_mp3_wav',
+          320,
+          'failed',
+          'failed',
+          $3,
+          NOW(),
+          'Verifier-created failure.'
+        )
         RETURNING id
       `,
       [
@@ -511,15 +527,25 @@ async function main() {
     method: 'POST',
   });
 
-  await requestJson<UserResponse>('/api/auth/verify-email-otp', {
-    body: JSON.stringify({ otp: requirePreview(signup.verification.email, 'Email') }),
-    method: 'POST',
-  });
-  const verifiedPhone = await requestJson<UserResponse>('/api/auth/verify-phone-otp', {
-    body: JSON.stringify({ otp: requirePreview(signup.verification.phone, 'Phone') }),
-    method: 'POST',
-  });
-  const initialMinuteBalance = verifiedPhone.user.tokenBalance;
+  let verifiedUser = signup.user;
+
+  if (!verifiedUser.emailVerified) {
+    const verifiedEmail = await requestJson<UserResponse>('/api/auth/verify-email-otp', {
+      body: JSON.stringify({ otp: requirePreview(signup.verification.email, 'Email') }),
+      method: 'POST',
+    });
+    verifiedUser = verifiedEmail.user;
+  }
+
+  if (!verifiedUser.phoneVerified) {
+    const verifiedPhone = await requestJson<UserResponse>('/api/auth/verify-phone-otp', {
+      body: JSON.stringify({ otp: requirePreview(signup.verification.phone, 'Phone') }),
+      method: 'POST',
+    });
+    verifiedUser = verifiedPhone.user;
+  }
+
+  const initialMinuteBalance = verifiedUser.tokenBalance;
   const pronunciationCheck = await verifyPronunciationRules();
 
   const previewJobPayload = await requestJson<JobResponse>('/api/tts/jobs/text/preview', {
@@ -565,6 +591,9 @@ async function main() {
     }),
     method: 'POST',
   });
+  if (!textJobPayload.job.fullGenerationRequestedAt) {
+    throw new Error(`Direct full generation job ${textJobPayload.job.id} did not record its request timestamp.`);
+  }
   const textJob = await pollJob(textJobPayload.job.id);
   if (textJob.qualityPreset !== 'premium_mp3_wav' || textJob.mp3BitrateKbps !== 320) {
     throw new Error(`Default quality was not Premium MP3 320 kbps + WAV for text job ${textJob.id}.`);
@@ -574,7 +603,7 @@ async function main() {
   }
   const textDownloads = await verifyDownloads(textJob, 'text', { expectMp3: true });
 
-  const failedRetryJobId = await createFailedTextJobForRetry(verifiedPhone.user.id);
+  const failedRetryJobId = await createFailedTextJobForRetry(verifiedUser.id);
   const retryJobPayload = await requestJson<JobResponse>(`/api/tts/jobs/${failedRetryJobId}/retry`, {
     method: 'POST',
   });
@@ -592,7 +621,7 @@ async function main() {
   }
   const retryDownloads = await verifyDownloads(retriedJob, 'retry', { expectMp3: true });
 
-  const queuedCancelJobId = await createQueuedTextJobForCancel(verifiedPhone.user.id);
+  const queuedCancelJobId = await createQueuedTextJobForCancel(verifiedUser.id);
   const cancelPayload = await requestJson<JobResponse>(`/api/tts/jobs/${queuedCancelJobId}/cancel`, {
     method: 'POST',
   });
@@ -729,14 +758,24 @@ async function main() {
     }),
     method: 'POST',
   });
-  await requestJson<UserResponse>('/api/auth/verify-email-otp', {
-    body: JSON.stringify({ otp: requirePreview(secondSignup.verification.email, 'Second email') }),
-    method: 'POST',
-  });
-  await requestJson<UserResponse>('/api/auth/verify-phone-otp', {
-    body: JSON.stringify({ otp: requirePreview(secondSignup.verification.phone, 'Second phone') }),
-    method: 'POST',
-  });
+  let secondVerifiedUser = secondSignup.user;
+
+  if (!secondVerifiedUser.emailVerified) {
+    const verifiedEmail = await requestJson<UserResponse>('/api/auth/verify-email-otp', {
+      body: JSON.stringify({ otp: requirePreview(secondSignup.verification.email, 'Second email') }),
+      method: 'POST',
+    });
+    secondVerifiedUser = verifiedEmail.user;
+  }
+
+  if (!secondVerifiedUser.phoneVerified) {
+    const verifiedPhone = await requestJson<UserResponse>('/api/auth/verify-phone-otp', {
+      body: JSON.stringify({ otp: requirePreview(secondSignup.verification.phone, 'Second phone') }),
+      method: 'POST',
+    });
+    secondVerifiedUser = verifiedPhone.user;
+  }
+
   let nonOwnerDenied = false;
   try {
     await requestJson<JobResponse>(`/api/tts/jobs/${previewFullJob.id}`);

@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   pool,
   type AdminActionRecord,
@@ -17,6 +18,7 @@ import {
 } from '../db.ts';
 import {
   adminSessionCookieName,
+  createJsonRateLimiter,
   ensureAdminConfigured,
   fetchNextVoiceCardId,
   fetchSampleRequestById,
@@ -24,8 +26,10 @@ import {
   fs,
   getAdminCredentials,
   getBaseUrl,
+  getAdminCredentialFingerprint,
   getSmtpConfig,
   getSmtpStatus,
+  isAdminSessionValid,
   isValidEmail,
   markRequestStatus,
   maxAudioFileSizeBytes,
@@ -39,12 +43,14 @@ import {
   requireText,
   runPublicVoiceUpload,
   serveAdminShell,
+  toPublicApiError,
   toEmailLogResponse,
   toOptionalNumber,
   toSampleRequestResponse,
   toVoiceResponse,
   validDeliveryModes,
   validRequestStatuses,
+  voicePublicDirectory,
 } from '../core.ts';
 import {
   adminAdjustUserTokens,
@@ -62,6 +68,46 @@ import {
   listTtsPronunciationRules,
   updateTtsPronunciationRule,
 } from '../services/tts-jobs.ts';
+
+const adminLoginLimiter = createJsonRateLimiter({
+  maxDevelopment: 30,
+  maxProduction: 5,
+  message: 'Too many admin login attempts. Please try again later.',
+  windowMs: 15 * 60 * 1000,
+});
+
+function resolveStoredPublicVoicePath(audioFile: string) {
+  if (!audioFile.startsWith('voices/public/')) {
+    return null;
+  }
+
+  const absolutePath = path.resolve(mediaRoot, audioFile);
+  const allowedRoot = path.resolve(voicePublicDirectory);
+
+  if (absolutePath !== allowedRoot && !absolutePath.startsWith(`${allowedRoot}${path.sep}`)) {
+    return null;
+  }
+
+  return absolutePath;
+}
+
+function sendAdminRouteError(res: Response, error: unknown, fallback: string) {
+  const publicError = toPublicApiError(error, fallback);
+
+  if (publicError.statusCode >= 500) {
+    console.error(fallback, { error });
+  }
+
+  res.status(publicError.statusCode).json({
+    error: publicError.message,
+  });
+}
+
+function secureValueEqual(left: string, right: string) {
+  const leftDigest = createHash('sha256').update(left).digest();
+  const rightDigest = createHash('sha256').update(right).digest();
+  return timingSafeEqual(leftDigest, rightDigest);
+}
 
 function toAdminUserResponse(row: UserRecord) {
   return {
@@ -308,13 +354,18 @@ export function createAdminRouter() {
   const router = Router();
 
   router.get('/api/admin/session', (req, res) => {
+    const authenticated = isAdminSessionValid(req);
+    if (!authenticated) {
+      req.session.adminUser = undefined;
+    }
+
     res.json({
-      adminEmail: req.session.adminUser?.email ?? null,
-      authenticated: Boolean(req.session.adminUser),
+      adminEmail: authenticated ? req.session.adminUser?.email ?? null : null,
+      authenticated,
     });
   });
 
-  router.post('/api/admin/login', (req, res) => {
+  router.post('/api/admin/login', adminLoginLimiter, (req, res) => {
     if (!ensureAdminConfigured(res)) {
       return;
     }
@@ -328,7 +379,15 @@ export function createAdminRouter() {
       return;
     }
 
-    if (email !== credentials.email || password !== credentials.password) {
+    const emailMatches = secureValueEqual(email, credentials.email);
+    const passwordMatches = secureValueEqual(password, credentials.password);
+
+    if (
+      email.length > 254 ||
+      password.length > 256 ||
+      !emailMatches ||
+      !passwordMatches
+    ) {
       res.status(401).json({ error: 'Invalid admin credentials.' });
       return;
     }
@@ -339,7 +398,17 @@ export function createAdminRouter() {
         return;
       }
 
-      req.session.adminUser = { email: credentials.email };
+      const credentialFingerprint = getAdminCredentialFingerprint();
+
+      if (!credentialFingerprint) {
+        res.status(503).json({ error: 'Admin login is not configured.' });
+        return;
+      }
+
+      req.session.adminUser = {
+        credentialFingerprint,
+        email: credentials.email,
+      };
       req.session.save((saveError) => {
         if (saveError) {
           res.status(500).json({ error: 'Failed to save admin session.' });
@@ -387,9 +456,7 @@ export function createAdminRouter() {
         users: users.map(toAdminUserResponse),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load users.',
-      });
+      sendAdminRouteError(res, error, 'Failed to load users.');
     }
   });
 
@@ -398,12 +465,12 @@ export function createAdminRouter() {
       const userId = Number(req.params.id);
       const tokenDelta = toOptionalNumber(req.body.tokenDelta);
 
-      if (!Number.isFinite(userId)) {
+      if (!Number.isSafeInteger(userId) || userId <= 0) {
         res.status(400).json({ error: 'Invalid user id.' });
         return;
       }
 
-      if (tokenDelta === null || !Number.isFinite(tokenDelta) || tokenDelta === 0) {
+      if (tokenDelta === null || !Number.isSafeInteger(tokenDelta) || tokenDelta === 0) {
         res.status(400).json({ error: 'Provide a non-zero token adjustment.' });
         return;
       }
@@ -421,9 +488,7 @@ export function createAdminRouter() {
         user: toAdminUserResponse(result.user),
       });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to adjust user tokens.',
-      });
+      sendAdminRouteError(res, error, 'Failed to adjust user tokens.');
     }
   });
 
@@ -432,7 +497,7 @@ export function createAdminRouter() {
       const userId = Number(req.params.id);
       const packageCode = normalizeText(req.body.packageCode) as UserPackageType | null;
 
-      if (!Number.isFinite(userId)) {
+      if (!Number.isSafeInteger(userId) || userId <= 0) {
         res.status(400).json({ error: 'Invalid user id.' });
         return;
       }
@@ -456,9 +521,7 @@ export function createAdminRouter() {
         user: toAdminUserResponse(result.user),
       });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to upgrade the user package.',
-      });
+      sendAdminRouteError(res, error, 'Failed to upgrade the user package.');
     }
   });
 
@@ -476,9 +539,7 @@ export function createAdminRouter() {
         tokenTransactions: tokenTransactions.map(toTokenTransactionResponse),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load payments.',
-      });
+      sendAdminRouteError(res, error, 'Failed to load payments.');
     }
   });
 
@@ -490,9 +551,7 @@ export function createAdminRouter() {
         actions: actions.map(toAdminActionResponse),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load admin actions.',
-      });
+      sendAdminRouteError(res, error, 'Failed to load admin actions.');
     }
   });
 
@@ -504,9 +563,7 @@ export function createAdminRouter() {
         rules: rules.map(toTtsPronunciationRuleResponse),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load pronunciation rules.',
-      });
+      sendAdminRouteError(res, error, 'Failed to load pronunciation rules.');
     }
   });
 
@@ -524,13 +581,7 @@ export function createAdminRouter() {
         rule: toTtsPronunciationRuleResponse(rule),
       });
     } catch (error) {
-      const statusCode = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number'
-        ? error.statusCode
-        : 400;
-
-      res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to create pronunciation rule.',
-      });
+      sendAdminRouteError(res, error, 'Failed to create pronunciation rule.');
     }
   });
 
@@ -538,7 +589,7 @@ export function createAdminRouter() {
     try {
       const ruleId = Number(req.params.id);
 
-      if (!Number.isFinite(ruleId)) {
+      if (!Number.isSafeInteger(ruleId) || ruleId <= 0) {
         res.status(400).json({ error: 'Invalid pronunciation rule id.' });
         return;
       }
@@ -555,13 +606,7 @@ export function createAdminRouter() {
         rule: toTtsPronunciationRuleResponse(rule),
       });
     } catch (error) {
-      const statusCode = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number'
-        ? error.statusCode
-        : 400;
-
-      res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to update pronunciation rule.',
-      });
+      sendAdminRouteError(res, error, 'Failed to update pronunciation rule.');
     }
   });
 
@@ -569,7 +614,7 @@ export function createAdminRouter() {
     try {
       const ruleId = Number(req.params.id);
 
-      if (!Number.isFinite(ruleId)) {
+      if (!Number.isSafeInteger(ruleId) || ruleId <= 0) {
         res.status(400).json({ error: 'Invalid pronunciation rule id.' });
         return;
       }
@@ -581,13 +626,7 @@ export function createAdminRouter() {
         message: 'Pronunciation rule deleted.',
       });
     } catch (error) {
-      const statusCode = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number'
-        ? error.statusCode
-        : 400;
-
-      res.status(statusCode).json({
-        error: error instanceof Error ? error.message : 'Failed to delete pronunciation rule.',
-      });
+      sendAdminRouteError(res, error, 'Failed to delete pronunciation rule.');
     }
   });
 
@@ -649,9 +688,7 @@ export function createAdminRouter() {
         },
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load admin dashboard.',
-      });
+      sendAdminRouteError(res, error, 'Failed to load admin dashboard.');
     }
   });
 
@@ -677,13 +714,12 @@ export function createAdminRouter() {
         SELECT *
         FROM sample_requests
         ORDER BY created_at DESC
+        LIMIT 500
       `);
 
       res.json({ requests: result.rows.map(toSampleRequestResponse) });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load sample requests.',
-      });
+      sendAdminRouteError(res, error, 'Failed to load sample requests.');
     }
   });
 
@@ -691,7 +727,7 @@ export function createAdminRouter() {
     try {
       const requestId = Number(req.params.id);
 
-      if (!Number.isFinite(requestId)) {
+      if (!Number.isSafeInteger(requestId) || requestId <= 0) {
         res.status(400).json({ error: 'Invalid request id.' });
         return;
       }
@@ -717,6 +753,7 @@ export function createAdminRouter() {
           LEFT JOIN voice_cards vc ON vc.id = l.voice_card_id
           WHERE l.request_id = $1
           ORDER BY COALESCE(l.sent_at, l.created_at) DESC
+          LIMIT 500
         `,
         [requestId],
       );
@@ -734,6 +771,7 @@ export function createAdminRouter() {
           INNER JOIN users u ON u.id = g.user_id
           WHERE g.sample_request_id = $1
           ORDER BY g.created_at DESC, g.id DESC
+          LIMIT 500
         `,
         [requestId],
       );
@@ -747,9 +785,7 @@ export function createAdminRouter() {
         sampleGenerations: sampleGenerationsResult.rows.map(toSampleGenerationResponse),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load the sample request.',
-      });
+      sendAdminRouteError(res, error, 'Failed to load the sample request.');
     }
   });
 
@@ -757,7 +793,7 @@ export function createAdminRouter() {
     try {
       const requestId = Number(req.params.id);
 
-      if (!Number.isFinite(requestId)) {
+      if (!Number.isSafeInteger(requestId) || requestId <= 0) {
         res.status(400).json({ error: 'Invalid request id.' });
         return;
       }
@@ -829,9 +865,7 @@ export function createAdminRouter() {
 
       res.json({ request: toSampleRequestResponse(result.rows[0]) });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to update the sample request.',
-      });
+      sendAdminRouteError(res, error, 'Failed to update the sample request.');
     }
   });
 
@@ -839,7 +873,7 @@ export function createAdminRouter() {
     try {
       const requestId = Number(req.params.id);
 
-      if (!Number.isFinite(requestId)) {
+      if (!Number.isSafeInteger(requestId) || requestId <= 0) {
         res.status(400).json({ error: 'Invalid request id.' });
         return;
       }
@@ -861,9 +895,7 @@ export function createAdminRouter() {
 
       res.json({ deletedId: requestId, message: 'Sample request deleted successfully.' });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to delete the sample request.',
-      });
+      sendAdminRouteError(res, error, 'Failed to delete the sample request.');
     }
   });
 
@@ -873,15 +905,14 @@ export function createAdminRouter() {
         SELECT id, name, script_text, english_meaning, audio_file, duration, wave_seed, display_order, is_active
         FROM voice_cards
         ORDER BY display_order ASC, id ASC
+        LIMIT 500
       `);
 
       res.json({
         voiceCards: result.rows.map(toVoiceResponse),
       });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to load voice cards.',
-      });
+      sendAdminRouteError(res, error, 'Failed to load voice cards.');
     }
   });
 
@@ -942,9 +973,7 @@ export function createAdminRouter() {
 
       res.status(201).json({ voiceCard: toVoiceResponse(insertResult.rows[0]) });
     } catch (error) {
-      res.status(400).json({
-        error: error instanceof Error ? error.message : 'Failed to create the voice card.',
-      });
+      sendAdminRouteError(res, error, 'Failed to create the voice card.');
     }
   });
 
@@ -952,7 +981,7 @@ export function createAdminRouter() {
     try {
       const voiceCardId = Number(req.params.id);
 
-      if (!Number.isFinite(voiceCardId)) {
+      if (!Number.isSafeInteger(voiceCardId) || voiceCardId <= 0) {
         res.status(400).json({ error: 'Invalid voice card id.' });
         return;
       }
@@ -1024,9 +1053,7 @@ export function createAdminRouter() {
 
       res.json({ voiceCard: toVoiceResponse(result.rows[0]) });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to update the voice card.',
-      });
+      sendAdminRouteError(res, error, 'Failed to update the voice card.');
     }
   });
 
@@ -1034,7 +1061,7 @@ export function createAdminRouter() {
     try {
       const voiceCardId = Number(req.params.id);
 
-      if (!Number.isFinite(voiceCardId)) {
+      if (!Number.isSafeInteger(voiceCardId) || voiceCardId <= 0) {
         res.status(400).json({ error: 'Invalid voice card id.' });
         return;
       }
@@ -1065,9 +1092,9 @@ export function createAdminRouter() {
         [voiceCardId, storedRelativePath],
       );
 
-      if (previousAudioFile && previousAudioFile.startsWith('voices/public/')) {
-        const previousAbsolutePath = path.join(mediaRoot, previousAudioFile);
-        if (previousAbsolutePath !== req.file.path) {
+      if (previousAudioFile) {
+        const previousAbsolutePath = resolveStoredPublicVoicePath(previousAudioFile);
+        if (previousAbsolutePath && previousAbsolutePath !== req.file.path) {
           await removeFileIfPresent(previousAbsolutePath);
         }
       }
@@ -1078,14 +1105,22 @@ export function createAdminRouter() {
         await removeFileIfPresent(req.file.path);
       }
 
-      const message =
-        error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE'
-          ? `File size exceeds ${Math.round(maxAudioFileSizeBytes / (1024 * 1024))}MB.`
-          : error instanceof Error
-            ? error.message
-            : 'Failed to upload public voice audio.';
+      if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+        res.status(413).json({
+          error: `File size exceeds ${Math.round(maxAudioFileSizeBytes / (1024 * 1024))}MB.`,
+        });
+        return;
+      }
 
-      res.status(400).json({ error: message });
+      if (
+        error instanceof Error
+        && error.message === 'Unsupported audio format. Use mp3, wav, m4a, webm, or mp4.'
+      ) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+
+      sendAdminRouteError(res, error, 'Failed to upload public voice audio.');
     }
   });
 
@@ -1093,7 +1128,7 @@ export function createAdminRouter() {
     try {
       const voiceCardId = Number(req.params.id);
 
-      if (!Number.isFinite(voiceCardId)) {
+      if (!Number.isSafeInteger(voiceCardId) || voiceCardId <= 0) {
         res.status(400).json({ error: 'Invalid voice card id.' });
         return;
       }
@@ -1113,7 +1148,11 @@ export function createAdminRouter() {
         [voiceCardId],
       );
 
-      if (existing.audio_file && existing.audio_file.startsWith('voices/public/')) {
+      const existingAudioPath = existing.audio_file
+        ? resolveStoredPublicVoicePath(existing.audio_file)
+        : null;
+
+      if (existing.audio_file && existingAudioPath) {
         const duplicateAudioResult = await pool.query<{ count: string }>(
           `
             SELECT COUNT(*)::text AS count
@@ -1124,20 +1163,18 @@ export function createAdminRouter() {
         );
 
         if (Number(duplicateAudioResult.rows[0]?.count ?? 0) === 0) {
-          await removeFileIfPresent(path.join(mediaRoot, existing.audio_file));
+          await removeFileIfPresent(existingAudioPath);
         }
       }
 
       res.json({ deletedId: voiceCardId, message: 'Voice card deleted successfully.' });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to delete the voice card.',
-      });
+      sendAdminRouteError(res, error, 'Failed to delete the voice card.');
     }
   });
 
   router.get('/admin', (req, res) => {
-    res.redirect(req.session.adminUser ? '/admin/dashboard' : '/admin/login');
+    res.redirect(isAdminSessionValid(req) ? '/admin/dashboard' : '/admin/login');
   });
 
   router.get('/admin/login', async (req, res) => {
@@ -1145,7 +1182,7 @@ export function createAdminRouter() {
   });
 
   router.get('/admin/send-sample', (req, res) => {
-    res.redirect(req.session.adminUser ? '/admin/dashboard' : '/admin/login');
+    res.redirect(isAdminSessionValid(req) ? '/admin/dashboard' : '/admin/login');
   });
 
   router.get('/admin/voice-samples', (_req, res) => {
@@ -1163,7 +1200,8 @@ export function createAdminRouter() {
       '/admin/pronunciation',
     ],
     async (req, res) => {
-    if (!req.session.adminUser) {
+    if (!isAdminSessionValid(req)) {
+      req.session.adminUser = undefined;
       res.redirect('/admin/login');
       return;
     }

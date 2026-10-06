@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Pause, Play } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, Play } from 'lucide-react';
 import { DecorativeBanglaLetters, type DecorativeBanglaLetter } from './DecorativeBanglaLetters';
 
 type VoiceCard = {
@@ -35,7 +35,7 @@ const fallbackVoices: VoiceCard[] = [
     name: 'AI Self Service Agent',
     scriptText: 'আমি আপনার এআই সেলফ-সার্ভিস এজেন্ট, কীভাবে সাহায্য করতে পারি?',
     englishMeaning: 'An AI self-service agent for handling routine customer requests.',
-    audioUrl: null,
+    audioUrl: '/media/voices/public/ai-self-service-agent.wav',
     duration: 9.72,
     waveSeed: 42,
     order: 0,
@@ -45,7 +45,7 @@ const fallbackVoices: VoiceCard[] = [
     name: 'Business Consultant',
     scriptText: 'আমি আপনার ব্যবসার প্রয়োজন বুঝে সঠিক সমাধান সাজিয়ে দিতে পারি।',
     englishMeaning: 'A consultant voice for business guidance and solution discovery.',
-    audioUrl: null,
+    audioUrl: '/media/voices/public/business-consultant.wav',
     duration: 10.07,
     waveSeed: 43,
     order: 1,
@@ -55,7 +55,7 @@ const fallbackVoices: VoiceCard[] = [
     name: 'Office Receptionist',
     scriptText: 'অফিস রিসেপশনে স্বাগতম, আপনার কলটি সঠিক বিভাগে যুক্ত করছি।',
     englishMeaning: 'A front-desk style voice for greeting and call routing.',
-    audioUrl: null,
+    audioUrl: '/media/voices/public/office-receptionist.wav',
     duration: 8.16,
     waveSeed: 44,
     order: 2,
@@ -65,7 +65,7 @@ const fallbackVoices: VoiceCard[] = [
     name: 'Appointment Taker',
     scriptText: 'আপনার সুবিধামতো সময় অনুযায়ী আমি অ্যাপয়েন্টমেন্ট বুক করে দিতে পারি।',
     englishMeaning: 'A scheduling voice for collecting availability and booking appointments.',
-    audioUrl: null,
+    audioUrl: '/media/voices/public/appointment-taker.wav',
     duration: 9.56,
     waveSeed: 45,
     order: 3,
@@ -75,7 +75,7 @@ const fallbackVoices: VoiceCard[] = [
     name: 'Healthcare Assistant',
     scriptText: 'স্বাস্থ্যসেবা সংক্রান্ত তথ্য, সময়সূচি ও সহায়তায় আমি আপনার পাশে আছি।',
     englishMeaning: 'A care-support voice for patient information and appointment guidance.',
-    audioUrl: null,
+    audioUrl: '/media/voices/public/healthcare-assistant.wav',
     duration: 9.12,
     waveSeed: 46,
     order: 4,
@@ -85,7 +85,7 @@ const fallbackVoices: VoiceCard[] = [
     name: 'Ecommerce Support',
     scriptText: 'অর্ডার, ডেলিভারি ও রিটার্ন সংক্রান্ত সহায়তা আমি এখনই দিতে পারি।',
     englishMeaning: 'A support voice for ecommerce order, delivery, and return workflows.',
-    audioUrl: null,
+    audioUrl: '/media/voices/public/ecommerce-support.wav',
     duration: 8.67,
     waveSeed: 47,
     order: 5,
@@ -95,7 +95,7 @@ const fallbackVoices: VoiceCard[] = [
     name: 'Banking Fintech Support',
     scriptText: 'ব্যাংকিং ও ফিনটেক সেবার আপডেট এবং সহায়তা দ্রুত জানাতে পারি।',
     englishMeaning: 'A financial-support voice for banking and fintech service communication.',
-    audioUrl: null,
+    audioUrl: '/media/voices/public/banking-fintech-support.wav',
     duration: 8.88,
     waveSeed: 48,
     order: 6,
@@ -105,7 +105,7 @@ const fallbackVoices: VoiceCard[] = [
     name: 'Real Estate Lead Qualifier',
     scriptText: 'প্রপার্টি আগ্রহ, বাজেট ও লোকেশন বুঝে আমি লিড কোয়ালিফাই করি।',
     englishMeaning: 'A lead-qualification voice for real estate inquiry screening.',
-    audioUrl: null,
+    audioUrl: '/media/voices/public/real-estate-lead-qualifier.wav',
     duration: 8.22,
     waveSeed: 49,
     order: 7,
@@ -115,7 +115,7 @@ const fallbackVoices: VoiceCard[] = [
     name: 'Education Admission Counsellor',
     scriptText: 'ভর্তি, কোর্স ও আবেদন প্রক্রিয়া নিয়ে আমি পরিষ্কার দিকনির্দেশনা দিতে পারি।',
     englishMeaning: 'A counsellor voice for admissions, courses, and application support.',
-    audioUrl: null,
+    audioUrl: '/media/voices/public/education-admission-counsellor.wav',
     duration: 9.32,
     waveSeed: 50,
     order: 8,
@@ -125,7 +125,7 @@ const fallbackVoices: VoiceCard[] = [
     name: 'Restaurant Hospitality Reservation',
     scriptText: 'রেস্টুরেন্ট ও হসপিটালিটি রিজার্ভেশন দ্রুত নিশ্চিত করতে আমি সাহায্য করি।',
     englishMeaning: 'A reservation voice for restaurant and hospitality booking flows.',
-    audioUrl: null,
+    audioUrl: '/media/voices/public/restaurant-hospitality-reservation.wav',
     duration: 8.79,
     waveSeed: 51,
     order: 9,
@@ -195,9 +195,10 @@ export function Frame02ViralProof() {
   const [voices, setVoices] = useState<VoiceCard[]>(fallbackVoices);
   const [voiceSource, setVoiceSource] = useState<'api' | 'fallback'>('fallback');
   const [activeVoiceId, setActiveVoiceId] = useState<number | null>(null);
+  const [playbackErrorVoiceId, setPlaybackErrorVoiceId] = useState<number | null>(null);
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [isCarouselPaused, setIsCarouselPaused] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioElementsRef = useRef<Map<number, HTMLAudioElement>>(new Map());
   const carouselRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -235,16 +236,12 @@ export function Frame02ViralProof() {
 
   useEffect(() => {
     return () => {
-      audioRef.current?.pause();
-      audioRef.current = null;
+      audioElementsRef.current.forEach((audio) => audio.pause());
+      audioElementsRef.current.clear();
     };
   }, []);
 
   const visibleVoices = useMemo(() => voices, [voices]);
-  const apiAudioReadyCount = useMemo(
-    () => visibleVoices.filter((voice) => Boolean(voice.audioUrl)).length,
-    [visibleVoices],
-  );
 
   const goToSlide = useCallback((targetIndex: number, behavior: ScrollBehavior = 'smooth') => {
     if (!visibleVoices.length) return;
@@ -281,51 +278,6 @@ export function Frame02ViralProof() {
     window.addEventListener('resize', syncCarouselPosition);
     return () => window.removeEventListener('resize', syncCarouselPosition);
   }, [carouselIndex, goToSlide]);
-
-  const toggleVoice = (voice: VoiceCard) => {
-    if (!voice.audioUrl) return;
-
-    if (activeVoiceId === voice.id && audioRef.current) {
-      if (audioRef.current.paused) {
-        const audio = audioRef.current;
-        void audio.play().catch(() => {
-          if (audioRef.current === audio) {
-            setActiveVoiceId(null);
-          }
-        });
-        setActiveVoiceId(voice.id);
-      } else {
-        audioRef.current.pause();
-        setActiveVoiceId(null);
-      }
-      return;
-    }
-
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-    }
-
-    const audio = new Audio(voice.audioUrl);
-    audioRef.current = audio;
-    audio.onended = () => {
-      if (audioRef.current === audio) {
-        setActiveVoiceId(null);
-      }
-    };
-    audio.onerror = () => {
-      if (audioRef.current === audio) {
-        setActiveVoiceId(null);
-      }
-    };
-    setActiveVoiceId(voice.id);
-    void audio.play().catch(() => {
-      if (audioRef.current === audio) {
-        setActiveVoiceId(null);
-        audioRef.current = null;
-      }
-    });
-  };
 
   return (
     <div className="relative w-full overflow-hidden px-4 py-16 sm:px-8 sm:py-20 lg:px-10 lg:py-28" style={{ backgroundColor: '#EEEBE4' }}>
@@ -430,15 +382,9 @@ export function Frame02ViralProof() {
                   color: voiceSource === 'api' ? '#AE6C4A' : '#373A40',
                 }}
               >
-                <span>{voiceSource === 'api' ? 'Live API feed' : 'Fallback samples'}</span>
+                <span>Voice samples</span>
                 <span style={{ opacity: 0.45 }}>•</span>
-                <span>{visibleVoices.length} cards</span>
-                {voiceSource === 'api' ? (
-                  <>
-                    <span style={{ opacity: 0.45 }}>•</span>
-                    <span>{apiAudioReadyCount} audio ready</span>
-                  </>
-                ) : null}
+                <span>{visibleVoices.length} clips</span>
               </div>
 
               <div className="flex justify-end gap-2 self-end sm:self-auto">
@@ -522,24 +468,92 @@ export function Frame02ViralProof() {
                           </h3>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => toggleVoice(voice)}
-                          disabled={!voice.audioUrl}
-                          aria-label={isActive ? `Pause ${voice.name}` : `Play ${voice.name}`}
-                          className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full transition-all enabled:hover:scale-105 disabled:cursor-not-allowed disabled:opacity-45 lg:h-14 lg:w-14"
-                          style={{ 
-                            backgroundColor: isActive ? '#AE6C4A' : '#C39680',
-                            boxShadow: '0 14px 28px rgba(174, 108, 74, 0.22)',
-                          }}
-                        >
-                          {isActive ? (
-                            <Pause className="h-5 w-5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
-                          ) : (
+                        {voice.audioUrl ? (
+                          <a
+                            href={voice.audioUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={() => setPlaybackErrorVoiceId(null)}
+                            aria-label={`Open ${voice.name} sample audio`}
+                            className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full transition-all hover:scale-105 lg:h-14 lg:w-14"
+                            style={{
+                              backgroundColor: isActive ? '#AE6C4A' : '#C39680',
+                              boxShadow: '0 14px 28px rgba(174, 108, 74, 0.22)',
+                            }}
+                          >
                             <Play className="h-5 w-5 translate-x-0.5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
-                          )}
-                        </button>
+                          </a>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled
+                            aria-label={`${voice.name} sample audio unavailable`}
+                            className="flex h-12 w-12 flex-shrink-0 cursor-not-allowed items-center justify-center rounded-full opacity-45 lg:h-14 lg:w-14"
+                            style={{ backgroundColor: '#C39680' }}
+                          >
+                            <Play className="h-5 w-5 translate-x-0.5" style={{ color: '#EEEBE4' }} fill="#EEEBE4" />
+                          </button>
+                        )}
                       </div>
+
+                      {voice.audioUrl ? (
+                        <div className="relative z-10 mb-5 rounded-2xl border border-[#D2CCBE] bg-white/45 p-3">
+                          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#AE6C4A]">
+                              Press play to hear sample
+                            </span>
+                            <a
+                              className="inline-flex items-center gap-1.5 rounded-full border border-[#D2CCBE] bg-[#F6F2EA] px-3 py-1 text-xs font-semibold text-[#373A40] transition hover:border-[#AE6C4A] hover:text-[#AE6C4A]"
+                              href={voice.audioUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open sample
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
+                          </div>
+                          <audio
+                            ref={(node) => {
+                              if (node) {
+                                audioElementsRef.current.set(voice.id, node);
+                              } else {
+                                audioElementsRef.current.delete(voice.id);
+                              }
+                            }}
+                            className="h-10 w-full"
+                            controls
+                            data-sample-audio-id={voice.id}
+                            preload="auto"
+                            src={voice.audioUrl}
+                            onCanPlay={() => {
+                              setPlaybackErrorVoiceId((current) => (current === voice.id ? null : current));
+                            }}
+                            onPlay={() => {
+                              audioElementsRef.current.forEach((otherAudio, otherVoiceId) => {
+                                if (otherVoiceId !== voice.id) {
+                                  otherAudio.pause();
+                                  otherAudio.currentTime = 0;
+                                }
+                              });
+                              setPlaybackErrorVoiceId(null);
+                              setActiveVoiceId(voice.id);
+                            }}
+                            onPause={(event) => {
+                              if (event.currentTarget.ended) return;
+                              setActiveVoiceId((current) => (current === voice.id ? null : current));
+                            }}
+                            onEnded={() => {
+                              setActiveVoiceId((current) => (current === voice.id ? null : current));
+                            }}
+                            onError={() => {
+                              setActiveVoiceId((current) => (current === voice.id ? null : current));
+                              setPlaybackErrorVoiceId(voice.id);
+                            }}
+                          >
+                            Your browser does not support audio playback.
+                          </audio>
+                        </div>
+                      ) : null}
 
                       <div className="relative z-10 mb-5 grid gap-3">
                         <div className="rounded-2xl bg-[#EEEBE4] p-4">
@@ -566,18 +580,26 @@ export function Frame02ViralProof() {
                         </div>
                       </div>
 
-                      <div className="relative z-10 flex h-16 items-end gap-1.5 rounded-2xl bg-[#E3DFD4]/55 px-4 py-3 lg:h-20" aria-hidden="true">
-                        {buildWaveform(voice.waveSeed, clipIndex).map((height, idx) => (
-                          <div
-                            key={idx}
-                            className="flex-1 rounded-full transition-all"
-                            style={{
-                              backgroundColor: isActive ? '#AE6C4A' : '#DF9E64',
-                              height: `${height}%`,
-                              opacity: isActive ? 0.86 : 0.52
-                            }}
-                          />
-                        ))}
+                      <div className="relative z-10 rounded-2xl bg-[#E3DFD4]/55 px-4 py-3">
+                        <div className="flex h-10 items-end gap-1.5 lg:h-12" aria-hidden="true">
+                          {buildWaveform(voice.waveSeed, clipIndex).map((height, idx) => (
+                            <div
+                              key={idx}
+                              className="flex-1 rounded-full transition-all"
+                              style={{
+                                backgroundColor: isActive ? '#AE6C4A' : '#DF9E64',
+                                height: `${height}%`,
+                                opacity: isActive ? 0.86 : 0.52
+                              }}
+                            />
+                          ))}
+                        </div>
+
+                        {voice.audioUrl && playbackErrorVoiceId === voice.id ? (
+                          <p className="mt-2 text-sm leading-5 text-[#9b4f35]">
+                            This clip could not play inline in this browser. Use the audio player above or open it directly: <a className="font-semibold underline" href={voice.audioUrl} target="_blank" rel="noreferrer">sample WAV</a>.
+                          </p>
+                        ) : null}
                       </div>
                     </article>
                   </div>

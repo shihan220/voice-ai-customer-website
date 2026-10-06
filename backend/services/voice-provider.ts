@@ -48,7 +48,12 @@ function getVoiceProviderConfig(): VoiceProviderConfig {
 }
 
 async function assertMediaExists(audioFile: string) {
-  const absolutePath = path.join(mediaRoot, audioFile);
+  const absolutePath = path.resolve(mediaRoot, audioFile);
+  const allowedRoot = path.resolve(mediaRoot, 'voices');
+
+  if (absolutePath !== allowedRoot && !absolutePath.startsWith(`${allowedRoot}${path.sep}`)) {
+    throw withStatus('Preview audio path is invalid.', 500);
+  }
 
   try {
     await fs.access(absolutePath);
