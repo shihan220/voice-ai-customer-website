@@ -3308,6 +3308,8 @@ function extractPdfTextInWorker(workerData: { data?: Buffer; filePath?: string }
     const worker = new Worker(
       new URL('../workers/pdf-text-worker.mjs', import.meta.url),
       {
+        // This plain ESM worker does not need the parent's TypeScript loader hooks.
+        execArgv: [],
         resourceLimits: {
           maxOldGenerationSizeMb: 128,
           maxYoungGenerationSizeMb: 32,
